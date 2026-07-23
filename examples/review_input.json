@@ -1,0 +1,49 @@
+{
+  "paper_id": "demo-review-001",
+  "title": "面向论文评审的证据驱动多智能体方法",
+  "abstract": "本文提出一种由多个全文视角评审 Agent 与 Review Chair 协作的论文评审方法。",
+  "keywords": ["论文评审", "Multi-Agent", "Debate"],
+  "full_text": "论文依次介绍研究问题、方法设计、实验验证和研究结论。方法部分给出多智能体评审流程，实验部分报告基础对比结果。",
+  "paper_type": "方法创新",
+  "chapters": [
+    {
+      "chapter_id": "C1",
+      "chapter_name": "第一章 绪论",
+      "stage": "引言/绪论",
+      "content": "本章说明论文评审质量不稳定的问题，并提出使用多智能体协作进行改进。",
+      "section_titles": ["研究背景", "研究内容"]
+    },
+    {
+      "chapter_id": "C2",
+      "chapter_name": "第二章 方法设计",
+      "stage": "方法构建",
+      "content": "本章设计三个专业评审 Agent 与 Review Chair，并规定独立评审和定向质疑过程。",
+      "section_titles": ["总体架构", "协作机制"]
+    },
+    {
+      "chapter_id": "C3",
+      "chapter_name": "第三章 实验验证",
+      "stage": "实验验证",
+      "content": "本章报告基础对比实验，但尚未覆盖全部强 Baseline 和完整消融设置。",
+      "section_titles": ["实验设置", "结果分析"]
+    },
+    {
+      "chapter_id": "C4",
+      "chapter_name": "第四章 结论与展望",
+      "stage": "结论展望",
+      "content": "本章总结多智能体评审方法的主要贡献，并讨论进一步扩展真实文献检索的方向。",
+      "section_titles": ["研究结论", "未来工作"]
+    }
+  ],
+  "step3_advice": [
+    {
+      "chapter_id": "C3",
+      "stage": "实验验证",
+      "suggestions": ["检查 Baseline 完整性", "检查消融实验覆盖"]
+    }
+  ],
+  "references": [],
+  "metadata": {
+    "language": "zh-CN"
+  }
+}

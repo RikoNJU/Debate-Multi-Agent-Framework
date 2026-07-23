@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3400" height="1400" viewBox="0 0 3400 1400">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .title { font: 700 48px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 24px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #64748b; }
+      .step { font: 700 24px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #0f172a; text-anchor: middle; }
+      .small { font: 500 18px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #475569; text-anchor: middle; }
+      .module-title { font: 700 30px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #7c2d12; text-anchor: middle; }
+      .module-note { font: 500 19px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #9a3412; text-anchor: middle; }
+      .line { fill: none; stroke: #334155; stroke-width: 4; stroke-linecap: square; stroke-linejoin: miter; marker-end: url(#arrow); }
+      .link { fill: none; stroke: #334155; stroke-width: 4; stroke-linecap: square; stroke-linejoin: miter; }
+      .divider { fill: none; stroke: #cbd5e1; stroke-width: 4; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="3400" height="1400" fill="#f8fafc"/>
+
+  <text class="title" x="70" y="82">Evidence-Grounded Debate Review Pipeline</text>
+  <text class="subtitle" x="72" y="124">全文理解 · 多视角独立评审 · Chair 定向回调 · 按需证据检索 · 后置评分校准</text>
+  <path class="divider" d="M70 160 H3330"/>
+
+  <rect x="60" y="470" width="230" height="110" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="4"/>
+  <text class="step" x="175" y="515">Step 1</text>
+  <text class="small" x="175" y="548">Paper Classification</text>
+
+  <rect x="340" y="470" width="230" height="110" rx="8" fill="#e0f2fe" stroke="#0284c7" stroke-width="4"/>
+  <text class="step" x="455" y="515">Step 2</text>
+  <text class="small" x="455" y="548">Semantic Grouping</text>
+
+  <rect x="620" y="470" width="230" height="110" rx="8" fill="#ccfbf1" stroke="#0f766e" stroke-width="4"/>
+  <text class="step" x="735" y="515">Context Planner</text>
+  <text class="small" x="735" y="548">Full Paper / Content Packets</text>
+
+  <path class="line" d="M290 525 H340"/>
+  <path class="line" d="M570 525 H620"/>
+
+  <rect x="900" y="205" width="1200" height="800" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="4"/>
+  <text class="module-title" x="1500" y="260">Debate Module</text>
+  <text class="module-note" x="1500" y="294">Independent review → AC coordination → targeted re-review → final synthesis</text>
+
+  <rect x="1020" y="315" width="310" height="105" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="4"/>
+  <text class="step" x="1175" y="357">Specialist 1</text>
+  <text class="small" x="1175" y="390">Theory · Method · Derivation</text>
+
+  <rect x="1020" y="475" width="310" height="105" rx="8" fill="#d1fae5" stroke="#059669" stroke-width="4"/>
+  <text class="step" x="1175" y="517">Specialist 2</text>
+  <text class="small" x="1175" y="550">Experiment · Baseline · Results</text>
+
+  <rect x="1020" y="635" width="310" height="105" rx="8" fill="#ecfccb" stroke="#65a30d" stroke-width="4"/>
+  <text class="step" x="1175" y="677">Specialist 3</text>
+  <text class="small" x="1175" y="710">Structure · Workload · Clarity</text>
+
+  <path class="link" d="M850 525 H970 M970 367 V687"/>
+  <path class="line" d="M970 367 H1020"/>
+  <path class="line" d="M970 527 H1020"/>
+  <path class="line" d="M970 687 H1020"/>
+
+  <path class="link" d="M1330 367 H1415 M1330 527 H1415 M1330 687 H1415 M1415 367 V687"/>
+  <path class="line" d="M1415 527 H1630"/>
+
+  <rect x="1630" y="470" width="300" height="115" rx="8" fill="#ffedd5" stroke="#c2410c" stroke-width="4"/>
+  <text class="step" x="1780" y="516">Review Chair / AC</text>
+  <text class="small" x="1780" y="550">Issues · Routing · Final Synthesis</text>
+
+  <path class="line" d="M1780 585 V820 H970 V687"/>
+  <text class="module-note" x="1420" y="808">AC routes feedback &amp; triggers targeted re-review</text>
+
+  <rect x="1085" y="865" width="270" height="100" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="4"/>
+  <text class="step" x="1220" y="905">Evidence RAG</text>
+  <text class="small" x="1220" y="938">On-Demand External Evidence</text>
+  <path class="line" d="M1220 865 V820"/>
+
+  <rect x="2180" y="470" width="230" height="110" rx="8" fill="#fce7f3" stroke="#db2777" stroke-width="4"/>
+  <text class="step" x="2295" y="515">Step 6</text>
+  <text class="small" x="2295" y="548">Summary Advice</text>
+
+  <rect x="2470" y="470" width="230" height="110" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="4"/>
+  <text class="step" x="2585" y="515">Step 7</text>
+  <text class="small" x="2585" y="548">Comprehensive Scoring</text>
+
+  <rect x="2470" y="690" width="230" height="100" rx="8" fill="#e2e8f0" stroke="#475569" stroke-width="4"/>
+  <text class="step" x="2585" y="730">Score RAG</text>
+  <text class="small" x="2585" y="763">Historical Calibration</text>
+
+  <rect x="2780" y="395" width="260" height="260" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="4"/>
+  <text class="step" x="2910" y="445">Review Outputs</text>
+  <path class="divider" d="M2820 470 H3000"/>
+  <text class="small" x="2910" y="515">Global Review</text>
+  <text class="small" x="2910" y="555">Chapter Evaluation</text>
+  <text class="small" x="2910" y="595">Workload Evaluation</text>
+  <text class="small" x="2910" y="635">Final Score</text>
+
+  <path class="line" d="M1930 527 H2180"/>
+  <path class="line" d="M2410 525 H2470"/>
+  <path class="line" d="M2585 690 V580"/>
+  <path class="line" d="M2700 525 H2780"/>
+
+  <text class="subtitle" x="70" y="1285">Design principle: reviewers retain a global view; Review Chair coordinates re-review; RAG supplies evidence only when needed.</text>
+</svg>

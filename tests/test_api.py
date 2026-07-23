@@ -1,0 +1,41 @@
+"""Debate 框架可选 API 的任务生命周期测试。"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from app.backend.main import create_app
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_example() -> dict:
+    return json.loads(
+        (ROOT / "examples" / "review_input.json").read_text(encoding="utf-8")
+    )
+
+
+def test_debate_health_and_run_lifecycle() -> None:
+    with TestClient(create_app()) as client:
+        health = client.get("/api/debate/health")
+        assert health.status_code == 200
+        assert health.json()["workflow"] == "debate"
+
+        created = client.post("/api/debate/runs", json=load_example())
+        assert created.status_code == 202
+        task_id = created.json()["task_id"]
+
+        result = client.get(f"/api/debate/runs/{task_id}")
+        assert result.status_code == 200
+        assert result.json()["status"] == "succeeded"
+        assert result.json()["result"]["final_score"]["total_score"] > 0
+
+
+def test_api_validates_input_and_returns_not_found() -> None:
+    with TestClient(create_app()) as client:
+        invalid = client.post("/api/debate/runs", json={"title": "缺少字段"})
+        assert invalid.status_code == 422
+        assert client.get("/api/debate/runs/not-found").status_code == 404
