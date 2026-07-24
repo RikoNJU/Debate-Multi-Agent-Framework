@@ -52,29 +52,101 @@ backend/src/debate_agent_framework/
 
 ### 3.1 目录内容说明
 
-`agents/` 存放具体 Agent 或工具的实现。当前包含 Demo Context Planner、Demo Specialist、Demo Review Chair、Demo Evidence Retriever、Demo Historical Score Retriever 和 Demo Original Pipeline Adapter。未来接入真实模型时，专业评审 Agent、裁决 Agent、证据检索实现和原流程包装实现都可以放在这里。
+#### `agents/`
 
-`adapters/` 存放系统装配和外部能力接入代码。当前通过 `workflow_factory.py` 把 Demo Agent、RAG 和原流程适配器组装成 Debate 工作流。未来替换真实 LLM、Evidence RAG、历史评分 RAG 或睿文智评原 Step 6/7 函数时，应优先修改这里。
+该目录存放具体 Agent、工具模拟器和可替换智能能力实现。当前 `demo.py` 中包含 Demo Context Planner、Demo Specialist、Demo Review Chair、Demo Evidence Retriever、Demo Historical Score Retriever 和 Demo Original Pipeline Adapter。
 
-`config/` 存放后端运行配置。当前包括环境变量读取逻辑和示例配置。端口、API 前缀、CORS、模型服务地址、RAG 服务地址、原系统接口地址等运行参数都应放在这里。
+未来真实系统中，科学性评审 Agent、实验证据评审 Agent、全文质量评审 Agent、争议裁决 Agent、证据检索实现、历史评分检索实现、原流程包装实现，都可以放在这里。它们负责完成具体专业判断或工具能力。
 
-`core/` 存放框架级公共能力。当前只包含工作流异常类型。未来如果出现跨目录复用的基础错误、日志上下文、运行标识或通用常量，可以放在这里，但不应放具体评审逻辑。
+该目录不应该处理 HTTP 请求，不应该管理任务状态，也不应该决定整个流程的节点顺序。它只回答“某类 Agent 如何完成自己的任务”。
 
-`data/` 是后端运行数据占位目录。它适合存放本地缓存、临时索引、调试数据或小规模 demo 数据。生产环境中的数据库文件、向量索引和运行输出一般不应直接提交到 Git。
+#### `adapters/`
 
-`models/` 存放数据结构和数据校验规则。评审输入、章节信息、独立评审、争议计划、证据、回应、综合评审、Step 4/5 兼容输出和 Step 7 评分结果都在这里定义。该目录决定系统输出是否稳定、是否能继续被原流程消费。
+该目录存放“把外部能力接入框架”的装配代码。当前 `workflow_factory.py` 负责创建 `DebateWorkflow`，并把 Demo Agent、Demo RAG 和 Demo 原流程适配器注入工作流。
 
-`ports/` 存放能力接口，而不是能力实现。它规定系统需要哪些能力，例如 Context Planner、Specialist Agent、Review Chair、Evidence Retriever、Historical Score Retriever 和 Original Pipeline Adapter。Workflow 只依赖这些接口，因此可以替换具体实现。
+未来替换真实能力时，OpenAI 或其他模型 SDK、Evidence RAG、历史评分 RAG、睿文智评原 Step 6/7 函数、数据库连接、任务队列客户端等，都应通过 Adapter 层接入。
 
-`prompts/` 存放 Prompt 模板和 Prompt 管理说明。真实 Context Planner、三个 Specialist 和 Review Chair 的提示词都应集中放在这里，便于版本管理、评审和迭代。不要把长 Prompt 直接写进路由或工作流节点。
+该目录的重点是“装配和替换”，不是“实现完整业务流程”。它不应定义复杂评审逻辑，也不应直接修改 `models/` 的数据契约。
 
-`routers/` 存放 API 路由。它只负责接收请求、调用 Service、返回响应。该目录不应该直接写 Debate 调度逻辑，也不应该直接操作 Agent、RAG 或任务状态细节。
+#### `config/`
 
-`services/` 存放应用服务和任务状态管理。它连接 API 层和 Workflow 层，负责创建任务、执行任务、记录成功或失败结果。当前使用内存任务存储，后续可替换为 Redis、数据库或任务队列。
+该目录存放后端运行配置。当前 `settings.py` 从环境变量读取应用名、host、port、API 前缀和 CORS；`settings.example.json` 提供示例配置。
 
-`web/` 当前只作为 Web 相关兼容出口，帮助旧导入路径过渡。随着结构稳定，新的 Web 任务状态逻辑应优先放到 `services/`，不要继续扩大 `web/` 的职责。
+未来模型服务地址、RAG 服务地址、原系统接口地址、数据库连接信息、日志级别、超时参数、最大并发数等运行参数，都应优先放在配置层。
 
-`workflows/` 存放 Multi-Agent 协作流程。这里定义 LangGraph 节点、节点之间的边、并行初审、争议路由、证据检索、定向回应、兼容性校验和 Step 6/7 调用。该目录是“Agent 如何协作”的核心，但不直接实现具体模型能力。
+该目录不应该保存真实密钥。API Key、数据库密码、Token 等敏感信息应通过环境变量或安全配置系统注入，不能写入仓库。
+
+#### `core/`
+
+该目录存放框架级公共能力。当前只有 `WorkflowExecutionError`，用于表示 Debate 工作流执行过程中的框架级失败。
+
+未来如果出现多个目录都要复用的异常类型、日志上下文、运行 ID、通用枚举、基础工具函数，可以放在这里。但只有“跨模块、非具体业务”的基础能力适合进入 `core/`。
+
+具体评审逻辑不应放入 `core/`。例如 Specialist 的评审策略应放在 `agents/`，节点调度应放在 `workflows/`，任务状态应放在 `services/`。
+
+#### `data/`
+
+该目录是后端运行数据的占位目录。当前只保留 `.gitignore`，表示目录存在，但默认不提交运行时数据。
+
+未来可临时存放本地缓存、小规模 demo 数据、调试索引、历史评分样例、临时检索结果等。生产环境中的向量索引、数据库文件、批量运行结果一般不应提交到 Git。
+
+该目录不应存放源码、Prompt 或正式配置。它主要服务于运行时、调试和本地实验。
+
+#### `models/`
+
+该目录存放系统最重要的数据结构和校验规则。当前 `schemas.py` 定义评审输入、章节信息、历史建议、论文证据、外部证据、独立评审、争议计划、定向回应、最终综合评审、Step 4/5 兼容输出和 Step 7 评分结果；`api.py` 定义健康检查响应；`__init__.py` 统一导出常用模型。
+
+Agent 之间传递的数据必须优先在这里建模。例如新增“引用查证结果”“低置信度段落”“人工复核请求”“多轮 Debate 记录”，都应先定义 Pydantic 模型，再进入 Workflow 或 Agent。
+
+该目录不应该调用模型接口、数据库或外部服务。它只定义“数据长什么样、哪些字段必须存在、哪些字段不允许乱填”，是保持原 Step 4/5/6/7 兼容性的关键。
+
+#### `ports/`
+
+该目录存放能力接口协议。当前 `interfaces.py` 定义了 `ContextPlanner`、`SpecialistAgent`、`ReviewChair`、`EvidenceRetriever`、`HistoricalScoreRetriever` 和 `OriginalPipelineAdapter`。
+
+Port 的作用是让 Workflow 只依赖抽象能力，不依赖具体实现。比如 Workflow 只知道需要一个 `EvidenceRetriever.retrieve()`，但不关心背后是向量数据库、学术搜索 API、本地索引还是人工标注库。
+
+该目录不应该写真实 API 调用代码，也不应该写 Prompt。真实实现应放在 `agents/` 或 `adapters/`，并遵守这里定义的输入输出协议。
+
+#### `prompts/`
+
+该目录存放 Prompt 模板和 Prompt 管理说明。当前按照 `context/`、`specialists/`、`chair/` 拆分，分别对应上下文构造、专业评审和争议裁决。
+
+未来真实 Agent 的系统提示词、任务提示词、输出 JSON 约束、争议追问模板、证据不足时的降级提示、Step 4/5 兼容输出提示，都应集中放在这里，便于版本管理、评审和调参。
+
+该目录不应该保存运行结果，也不应该把 Prompt 分散写进 `routers/` 或 `workflows/`。这样可以更清楚地追踪“某次评审变化到底来自代码、模型还是 Prompt”。
+
+#### `routers/`
+
+该目录存放 FastAPI 路由。当前 `health.py` 提供健康检查接口，`runs.py` 提供 Debate 任务提交和查询接口。
+
+Router 的职责是处理 HTTP 层问题，例如请求体校验、依赖注入、状态码、错误响应和返回模型。它把外部请求转交给 `services/`，不直接调 Specialist、Chair 或 RAG。
+
+该目录不应该写 Debate 调度逻辑，不应该直接访问模型 SDK，也不应该直接操作底层存储。否则 API 层会和评审流程耦合。
+
+#### `services/`
+
+该目录存放应用服务和任务生命周期管理。当前 `workflow_service.py` 负责创建任务、调用 Debate Workflow、记录成功或失败；`jobs.py` 提供进程内任务状态存储。
+
+Service 是 Router 和 Workflow 之间的中间层。它知道“某个请求对应哪个任务、任务现在是什么状态、结果在哪里”，但不关心每个 Specialist 如何评价、Chair 如何裁决。
+
+当前 `InMemoryRunStore` 只适合 demo 和单进程开发。未来如果系统上线，应在该层替换为 Redis、数据库、消息队列或后台任务系统。
+
+#### `web/`
+
+该目录当前只保留 Web 相关兼容出口，用于导出任务状态相关类，减少旧代码迁移时的导入断裂。
+
+随着框架稳定，新的 Web 任务管理逻辑应优先放入 `services/` 和 `routers/`。`web/` 不应继续膨胀成另一个业务层。
+
+如果未来确认没有兼容需求，可以逐步移除该目录，或只保留非常薄的对外导出。
+
+#### `workflows/`
+
+该目录存放 Multi-Agent 协作流程。当前 `debate.py` 定义 LangGraph 节点和路由，`state.py` 定义共享状态、配置和依赖容器。
+
+Workflow 负责回答“Agent 之间如何协作”：如何构造上下文，如何并行调用三个 Specialist，如何由 Chair 识别争议，何时调用 Evidence RAG，如何定向追问，如何综合裁决，以及如何进入原 Step 6/7。
+
+该目录不应该直接写具体模型调用、数据库查询或长 Prompt。它应依赖 `ports/` 中的抽象接口，并使用 `models/` 中的数据结构来保证原流程兼容和测试稳定。
 
 ## 4. Python 文件功能、输入输出与系统作用
 
