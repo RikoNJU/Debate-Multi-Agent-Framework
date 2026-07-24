@@ -1,6 +1,6 @@
 """将具体 Specialist、Chair、RAG 和原流程装配为 Debate 工作流。"""
 
-from debate_agent_framework.demo import (
+from debate_agent_framework.agents import (
     DemoContextPlanner,
     DemoEvidenceRetriever,
     DemoHistoricalScoreRetriever,
@@ -8,9 +8,8 @@ from debate_agent_framework.demo import (
     DemoReviewChair,
     DemoSpecialist,
 )
-from debate_agent_framework.schemas import SpecialistRole
-from debate_agent_framework.state import DebateWorkflowServices
-from debate_agent_framework.workflow import DebateWorkflow
+from debate_agent_framework.models import SpecialistRole
+from debate_agent_framework.workflows import DebateWorkflow, DebateWorkflowServices
 
 
 def build_debate_workflow() -> DebateWorkflow:

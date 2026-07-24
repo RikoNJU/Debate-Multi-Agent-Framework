@@ -6,15 +6,7 @@ from dataclasses import dataclass
 from operator import add
 from typing import Annotated, TypedDict
 
-from .ports import (
-    ContextPlanner,
-    EvidenceRetriever,
-    HistoricalScoreRetriever,
-    OriginalPipelineAdapter,
-    ReviewChair,
-    SpecialistRegistry,
-)
-from .schemas import (
+from ..models import (
     ComprehensiveScoreResult,
     DebatePlan,
     DebateResponse,
@@ -26,6 +18,14 @@ from .schemas import (
     ReviewEvidence,
     ReviewSynthesis,
     SummaryAdviceResult,
+)
+from ..ports import (
+    ContextPlanner,
+    EvidenceRetriever,
+    HistoricalScoreRetriever,
+    OriginalPipelineAdapter,
+    ReviewChair,
+    SpecialistRegistry,
 )
 
 

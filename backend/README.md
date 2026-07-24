@@ -1,12 +1,12 @@
 # Debate 论文评审框架扩展层
 
-该目录参考睿文智评对 Prompt、配置、适配器和接口资源进行分类。Multi-Agent 核心位于 `src/debate_agent_framework/`，这里提供可选的 FastAPI 调用方式。
+该目录参考睿文智评对后端资源进行分类。Multi-Agent 核心位于 `backend/src/debate_agent_framework/`，并在包内继续拆分 Agent、模型、工作流、接口和适配器。
 
 ```powershell
 conda activate langgraph
 cd D:\debate-multi-agent-framework
 pip install -e ".[web]"
-python -m app.backend.main
+python -m debate_agent_framework.main
 ```
 
 - API 文档：`http://localhost:8020/docs`

@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from debate_agent_framework.core.errors import WorkflowExecutionError
-from debate_agent_framework.demo import (
+from debate_agent_framework.agents import (
     DemoContextPlanner,
     DemoEvidenceRetriever,
     DemoHistoricalScoreRetriever,
@@ -17,7 +17,7 @@ from debate_agent_framework.demo import (
     DemoReviewChair,
     DemoSpecialist,
 )
-from debate_agent_framework.schemas import (
+from debate_agent_framework.models import (
     ChapterInput,
     DebatePlan,
     DebateReviewInput,
@@ -29,11 +29,11 @@ from debate_agent_framework.schemas import (
     ReviewSynthesis,
     SpecialistRole,
 )
-from debate_agent_framework.state import (
+from debate_agent_framework.workflows import (
+    DebateWorkflow,
     DebateWorkflowConfig,
     DebateWorkflowServices,
 )
-from debate_agent_framework.workflow import DebateWorkflow
 
 
 def make_input() -> DebateReviewInput:

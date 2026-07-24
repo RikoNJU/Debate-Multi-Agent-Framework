@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 
-from .schemas import (
+from ..models import (
     ChapterAdvice,
     CompatibleChapterData,
     CompatibleChapterEnvelope,

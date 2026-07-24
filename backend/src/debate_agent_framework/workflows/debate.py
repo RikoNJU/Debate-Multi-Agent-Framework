@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from debate_agent_framework.core.errors import WorkflowExecutionError
 
-from .schemas import (
+from ..models import (
     ComprehensiveScoreResult,
     DebatePlan,
     DebateResponse,

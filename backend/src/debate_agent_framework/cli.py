@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 from typing import Sequence
 
-from .demo import (
+from .agents import (
     DemoContextPlanner,
     DemoEvidenceRetriever,
     DemoHistoricalScoreRetriever,
@@ -14,9 +14,8 @@ from .demo import (
     DemoReviewChair,
     DemoSpecialist,
 )
-from .schemas import DebateReviewInput, SpecialistRole
-from .state import DebateWorkflowServices
-from .workflow import DebateWorkflow
+from .models import DebateReviewInput, SpecialistRole
+from .workflows import DebateWorkflow, DebateWorkflowServices
 
 
 def build_parser() -> argparse.ArgumentParser:

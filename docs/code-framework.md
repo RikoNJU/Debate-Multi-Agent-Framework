@@ -6,7 +6,7 @@
 
 原 Step 1-3、Step 6 和 Step 7 通过输入及适配接口复用，不要求重构整个系统。
 
-`app/` 用于分类存放 Prompt、配置、适配器和可选接口，不属于当前 Debate 算法核心。
+当前后端代码统一放在 `backend/src/debate_agent_framework/`，并在包内按职责拆分目录，避免核心逻辑堆在少数单文件里。
 
 ## 2. 运行流程
 
@@ -38,12 +38,15 @@
 
 ## 4. 核心模块
 
-| 文件 | 职责 |
+| 目录 | 职责 |
 |---|---|
-| `schemas.py` | 定义上下文、独立评审、争议、回应、全文评审和兼容输出 |
-| `ports.py` | 定义 Specialist、Chair、RAG 与原流程适配接口 |
-| `workflow.py` | 编排独立初审、证据检索、定向 Debate 和 Step 6/7 |
-| `demo.py` | 演示一次理论判断与实验证据之间的完整 Debate |
+| `models/` | 定义上下文、独立评审、争议、回应、全文评审和兼容输出 |
+| `ports/` | 定义 Specialist、Chair、RAG 与原流程适配接口 |
+| `agents/` | 放置 Demo Specialist、Chair 和工具实现，后续替换真实模型 |
+| `workflows/` | 编排独立初审、证据检索、定向 Debate 和 Step 6/7 |
+| `adapters/` | 装配具体 Agent、RAG 和原流程适配器 |
+| `routers/` | 提供可选 API 入口 |
+| `services/` | 管理任务生命周期和运行状态 |
 
 ## 5. 兼容原流程
 
@@ -63,7 +66,7 @@ Evidence RAG 只为关键争议补充外部依据；历史评分 RAG 只校准�
 ```powershell
 conda activate langgraph
 cd D:\debate-multi-agent-framework
-pip install -e . --no-deps
+pip install -e ".[dev,web]"
 debate-demo --input examples\review_input.json --output output\result.json
 ```
 

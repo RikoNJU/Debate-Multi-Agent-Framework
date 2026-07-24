@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.backend.main import create_app
+from debate_agent_framework.main import create_app
 
 ROOT = Path(__file__).resolve().parents[1]
 

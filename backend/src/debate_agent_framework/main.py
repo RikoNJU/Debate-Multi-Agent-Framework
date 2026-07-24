@@ -37,7 +37,7 @@ def run() -> None:
 
     settings = DebateWebSettings.from_env()
     uvicorn.run(
-        "app.backend.main:app",
+        "debate_agent_framework.main:app",
         host=settings.host,
         port=settings.port,
         reload=False,
