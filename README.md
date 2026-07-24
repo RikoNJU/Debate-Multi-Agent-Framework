@@ -33,8 +33,7 @@ backend/src/debate_agent_framework/
 - `models/` 定义评审输入、争议、证据、回应和兼容输出结构；
 - `ports/` 定义 Specialist、Chair、RAG 和原流程适配接口；
 - `agents/` 放具体 Agent 或 Demo 实现；
-- `workflows/` 编排独立初审、证据检索、定向 Debate 和 Step 6/7；
-- `adapters/` 装配真实模型、RAG、原系统函数或 Demo 实现；
+- `workflows/` 编排独立初审、证据检索、定向 Debate 和 Step 6/7，并提供默认工作流装配入口；
 - `services/` 管理任务生命周期；
 - `routers/` 提供 API 入口。
 

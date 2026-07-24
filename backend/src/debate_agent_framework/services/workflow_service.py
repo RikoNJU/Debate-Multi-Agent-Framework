@@ -8,7 +8,7 @@ from debate_agent_framework.models import DebateReviewInput
 from debate_agent_framework.services.jobs import InMemoryRunStore, RunSnapshot
 from debate_agent_framework.workflows import DebateWorkflow
 
-from ..adapters import build_debate_workflow
+from ..workflows import build_debate_workflow
 
 
 class DebateWorkflowService:

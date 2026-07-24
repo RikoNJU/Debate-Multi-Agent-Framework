@@ -38,7 +38,6 @@ backend/src/debate_agent_framework/
 | 目录 | 存放文件 | 作用 |
 |---|---|---|
 | `agents/` | `demo.py` | 存放 Demo Specialist、Review Chair、RAG 和原流程适配器 |
-| `adapters/` | `workflow_factory.py` | 装配 Agent、RAG、原流程适配器和 Workflow |
 | `config/` | `settings.py`、`settings.example.json` | 管理 API 前缀、端口、CORS 等配置 |
 | `core/` | `errors.py` | 存放核心异常和基础公共能力 |
 | `data/` | `.gitignore` | 后端运行数据目录占位 |
@@ -48,7 +47,7 @@ backend/src/debate_agent_framework/
 | `routers/` | `health.py`、`runs.py` | FastAPI 路由入口 |
 | `services/` | `workflow_service.py`、`jobs.py` | 管理任务生命周期和运行状态 |
 | `web/` | `__init__.py` | Web 相关兼容出口 |
-| `workflows/` | `debate.py`、`state.py` | 定义 LangGraph 工作流和共享状态 |
+| `workflows/` | `debate.py`、`state.py`、`workflow_factory.py` | 定义 LangGraph 工作流、共享状态和默认工作流装配 |
 
 ### 3.1 目录内容说明
 
@@ -59,14 +58,6 @@ backend/src/debate_agent_framework/
 未来真实系统中，科学性评审 Agent、实验证据评审 Agent、全文质量评审 Agent、争议裁决 Agent、证据检索实现、历史评分检索实现、原流程包装实现，都可以放在这里。它们负责完成具体专业判断或工具能力。
 
 该目录不应该处理 HTTP 请求，不应该管理任务状态，也不应该决定整个流程的节点顺序。它只回答“某类 Agent 如何完成自己的任务”。
-
-#### `adapters/`
-
-该目录存放“把外部能力接入框架”的装配代码。当前 `workflow_factory.py` 负责创建 `DebateWorkflow`，并把 Demo Agent、Demo RAG 和 Demo 原流程适配器注入工作流。
-
-未来替换真实能力时，OpenAI 或其他模型 SDK、Evidence RAG、历史评分 RAG、睿文智评原 Step 6/7 函数、数据库连接、任务队列客户端等，都应通过 Adapter 层接入。
-
-该目录的重点是“装配和替换”，不是“实现完整业务流程”。它不应定义复杂评审逻辑，也不应直接修改 `models/` 的数据契约。
 
 #### `config/`
 
@@ -106,7 +97,7 @@ Agent 之间传递的数据必须优先在这里建模。例如新增“引用�
 
 Port 的作用是让 Workflow 只依赖抽象能力，不依赖具体实现。比如 Workflow 只知道需要一个 `EvidenceRetriever.retrieve()`，但不关心背后是向量数据库、学术搜索 API、本地索引还是人工标注库。
 
-该目录不应该写真实 API 调用代码，也不应该写 Prompt。真实实现应放在 `agents/` 或 `adapters/`，并遵守这里定义的输入输出协议。
+该目录不应该写真实 API 调用代码，也不应该写 Prompt。真实实现应放在 `agents/`，默认工作流装配应放在 `workflows/workflow_factory.py`，并遵守这里定义的输入输出协议。
 
 #### `prompts/`
 
@@ -142,7 +133,7 @@ Service 是 Router 和 Workflow 之间的中间层。它知道“某个请求对
 
 #### `workflows/`
 
-该目录存放 Multi-Agent 协作流程。当前 `debate.py` 定义 LangGraph 节点和路由，`state.py` 定义共享状态、配置和依赖容器。
+该目录存放 Multi-Agent 协作流程。当前 `debate.py` 定义 LangGraph 节点和路由，`state.py` 定义共享状态、配置和依赖容器，`workflow_factory.py` 定义默认工作流装配方式。
 
 Workflow 负责回答“Agent 之间如何协作”：如何构造上下文，如何并行调用三个 Specialist，如何由 Chair 识别争议，何时调用 Evidence RAG，如何定向追问，如何综合裁决，以及如何进入原 Step 6/7。
 
@@ -270,14 +261,13 @@ build_context
 | `_retrieve_score_cases` | 综合评审严重问题和维度摘要 | `HistoricalScoreCase` 列表 | 为评分尺度校准提供案例 |
 | `_step7_scoring` | 综合评审、建议汇总、历史案例 | `ComprehensiveScoreResult` | 调用原 Step 7 适配器 |
 
-### 4.6 `adapters/`
+### 4.6 `workflows/workflow_factory.py`
 
 | 文件 | 功能 | 输入 | 输出 | 系统作用 |
 |---|---|---|---|---|
-| `adapters/workflow_factory.py` | 装配 Debate 工作流依赖 | 无直接业务输入 | `DebateWorkflow` | 决定当前使用 Demo 实现还是真实实现 |
-| `adapters/__init__.py` | 导出 factory | 无直接输入 | `build_debate_workflow` | 给 service 层提供统一构造入口 |
+| `workflows/workflow_factory.py` | 装配默认 Debate 工作流依赖 | 无直接业务输入 | `DebateWorkflow` | 指定当前固定使用的 Agent、RAG 和原流程适配器，并给 service 层提供统一构造入口 |
 
-当前 `build_debate_workflow` 装配的是 Demo Context Planner、三个 Demo Specialist、Demo Review Chair、Demo Evidence RAG、Demo Historical Score RAG 和 Demo Original Pipeline Adapter。生产环境应主要修改这里。
+当前 `build_debate_workflow` 装配的是 Demo Context Planner、三个 Demo Specialist、Demo Review Chair、Demo Evidence RAG、Demo Historical Score RAG 和 Demo Original Pipeline Adapter。因为本项目假设 Agent 组合相对固定，所以默认装配逻辑并入 `workflows/`，不再单独保留 `adapters/` 目录。
 
 ### 4.7 `services/`
 
@@ -337,7 +327,7 @@ GET  /api/debate/runs/{task_id}
 HTTP 请求
 → routers/runs.py
 → services/workflow_service.py
-→ adapters/workflow_factory.py
+→ workflows/workflow_factory.py
 → workflows/debate.py
 → agents/demo.py 或真实 Agent
 → ports/interfaces.py 约束外部能力
@@ -357,12 +347,12 @@ examples/review_input.json
 ## 6. 开发规范
 
 1. 新业务数据结构必须先写入 `models/`，不要在 Agent 或路由里临时拼 dict。
-2. 新外部能力必须先在 `ports/` 定义接口，再在 `adapters/` 或 `agents/` 中实现。
+2. 新外部能力必须先在 `ports/` 定义接口，再在 `agents/` 中实现，并在 `workflows/workflow_factory.py` 中装配。
 3. `workflows/` 只负责流程编排，不直接写具体模型 SDK、数据库连接或复杂 Prompt。
 4. `agents/` 负责专业判断和结构化输出，不处理 HTTP 请求和任务状态。
 5. `routers/` 只做请求校验、依赖注入和响应返回，不写业务流程。
 6. `services/` 负责任务生命周期，不直接实现 Debate 评审逻辑。
-7. `adapters/` 负责装配真实能力，是替换 Demo 实现的主要入口。
+7. `workflows/workflow_factory.py` 负责装配固定 Agent 组合，是调整默认运行能力的主要入口。
 8. Prompt 放在 `prompts/`，需要版本化、可追踪，不要散落到多个 Python 文件中。
 9. 所有 Agent 输出必须经过 Pydantic 模型校验，不能让自由文本直接进入后续流程。
 10. 高严重度评审结论必须有证据；证据不足时要降低置信度或转人工复核。
@@ -377,7 +367,7 @@ examples/review_input.json
 优先替换以下位置：
 
 ```text
-adapters/workflow_factory.py
+workflows/workflow_factory.py
 ```
 
 把当前 Demo 实现替换为：

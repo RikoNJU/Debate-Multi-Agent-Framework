@@ -9,7 +9,9 @@ from debate_agent_framework.agents import (
     DemoSpecialist,
 )
 from debate_agent_framework.models import SpecialistRole
-from debate_agent_framework.workflows import DebateWorkflow, DebateWorkflowServices
+
+from .debate import DebateWorkflow
+from .state import DebateWorkflowServices
 
 
 def build_debate_workflow() -> DebateWorkflow:
