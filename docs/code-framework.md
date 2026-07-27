@@ -42,7 +42,8 @@
 |---|---|
 | `models/` | 定义上下文、独立评审、争议、回应、全文评审和兼容输出 |
 | `ports/` | 定义 Specialist、Chair、RAG 与原流程适配接口 |
-| `agents/` | 放置 Demo Specialist、Chair 和工具实现，后续替换真实模型 |
+| `agents/` | 放置 Context Planner、三个 Specialist、Review Chair 和 Demo 实现 |
+| `backend/env/` | 统一模型配置、消息格式和调用入口，避免不同 Agent 各自实现模型请求 |
 | `workflows/` | 编排独立初审、证据检索、定向 Debate 和 Step 6/7，并装配默认工作流 |
 | `routers/` | 提供可选 API 入口 |
 | `services/` | 管理任务生命周期和运行状态 |

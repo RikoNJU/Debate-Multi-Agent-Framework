@@ -28,11 +28,12 @@ Original Pipeline Adapter 负责复用原 Step 6/7
 backend/src/debate_agent_framework/
 ```
 
-包内按职责拆分为 Agent、Workflow、Model、Port、Adapter、Service、Router 等目录。核心思想是：
+包内按职责拆分为 Agent、Workflow、Model、Port、Service、Router 等目录。核心思想是：
 
 - `models/` 定义评审输入、争议、证据、回应和兼容输出结构；
 - `ports/` 定义 Specialist、Chair、RAG 和原流程适配接口；
 - `agents/` 放具体 Agent 或 Demo 实现；
+- `backend/env/` 统一模型配置、消息格式和调用入口；
 - `workflows/` 编排独立初审、证据检索、定向 Debate 和 Step 6/7，并提供默认工作流装配入口；
 - `services/` 管理任务生命周期；
 - `routers/` 提供 API 入口。
@@ -42,7 +43,7 @@ backend/src/debate_agent_framework/
 ## 项目结构
 
 ```text
-backend/src/debate_agent_framework/    后端源码，按职责拆分 Agent、模型、工作流、接口和适配器
+backend/src/debate_agent_framework/    后端源码，按职责拆分 Agent、模型、工作流、接口和服务
 frontend/                              预留前端资源
 examples/                      示例评审输入
 tests/                         工作流与接口测试
@@ -70,4 +71,4 @@ python -m debate_agent_framework.main
 - [代码框架详细说明](docs/code-framework-detailed.md)
 - [V0 设计方案](docs/design-v0.md)
 
-当前 Adapter 装配确定性的 Demo Agent，只用于验证框架闭环和原 Step 4/5 兼容输出。
+当前默认工作流装配确定性的 Demo Agent，只用于验证框架闭环和原 Step 4/5 兼容输出。

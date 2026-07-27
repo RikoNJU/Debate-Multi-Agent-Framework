@@ -17,6 +17,7 @@
 | 目录或文件 | 存放内容 | 作用 |
 |---|---|---|
 | `backend/` | 后端工程主体 | 存放正式源码、配置、Prompt 和后端说明 |
+| `backend/env/` | 模型调用约定说明 | 约束多人开发时统一模型配置和调用方式 |
 | `backend/src/debate_agent_framework/` | Python 包源码 | Debate Multi-Agent 框架核心代码 |
 | `frontend/` | 前端预留目录 | 后续扩展 Web 界面时使用 |
 | `docs/` | 设计文档和代码说明 | 用于汇报、交接和开发参考 |
@@ -37,7 +38,7 @@ backend/src/debate_agent_framework/
 
 | 目录 | 存放文件 | 作用 |
 |---|---|---|
-| `agents/` | `demo.py` | 存放 Demo Specialist、Review Chair、RAG 和原流程适配器 |
+| `agents/` | `context_planner.py`、`specialists.py`、`review_chair.py`、`demo.py` | 存放真实 Agent 骨架和 Demo 实现 |
 | `config/` | `settings.py`、`settings.example.json` | 管理 API 前缀、端口、CORS 等配置 |
 | `core/` | `errors.py` | 存放核心异常和基础公共能力 |
 | `data/` | `.gitignore` | 后端运行数据目录占位 |
@@ -53,7 +54,7 @@ backend/src/debate_agent_framework/
 
 #### `agents/`
 
-该目录存放具体 Agent、工具模拟器和可替换智能能力实现。当前 `demo.py` 中包含 Demo Context Planner、Demo Specialist、Demo Review Chair、Demo Evidence Retriever、Demo Historical Score Retriever 和 Demo Original Pipeline Adapter。
+该目录存放具体 Agent 和可替换智能能力实现。当前既包含真实 Agent 骨架，也保留 `demo.py` 中的确定性 Demo Context Planner、Demo Specialist、Demo Review Chair、Demo Evidence Retriever、Demo Historical Score Retriever 和 Demo Original Pipeline Adapter，用于跑通框架闭环。
 
 未来真实系统中，科学性评审 Agent、实验证据评审 Agent、全文质量评审 Agent、争议裁决 Agent、证据检索实现、历史评分检索实现、原流程包装实现，都可以放在这里。它们负责完成具体专业判断或工具能力。
 
@@ -98,6 +99,14 @@ Agent 之间传递的数据必须优先在这里建模。例如新增“引用�
 Port 的作用是让 Workflow 只依赖抽象能力，不依赖具体实现。比如 Workflow 只知道需要一个 `EvidenceRetriever.retrieve()`，但不关心背后是向量数据库、学术搜索 API、本地索引还是人工标注库。
 
 该目录不应该写真实 API 调用代码，也不应该写 Prompt。真实实现应放在 `agents/`，固定 Agent 装配应放在 `workflows/debate.py` 的默认构造函数中，并遵守这里定义的输入输出协议。
+
+#### `backend/env/`
+
+该目录位于 `backend/env/`，不放在 `backend/src/debate_agent_framework/` 内部。当前 `model_client.py` 定义 `ModelRuntimeConfig`、`ChatMessage`、`ModelCallOptions`、`ModelResponse` 和 `OpenAICompatibleChatClient`，用于规范真实 Agent 调用大模型时的配置读取、消息格式、超时参数和响应结构。
+
+多人开发时，Agent 不应各自读取 API Key、拼接 HTTP 请求或自定义返回结构，而应优先通过 `build_model_client()` 获取模型客户端。这样可以保证同一项目内不同 Agent 使用一致的模型供应商、模型名、base_url、温度和超时规则。
+
+该目录不应该放 Prompt、不应该写论文评审业务判断，也不应该保存真实密钥。业务 Prompt 仍放在 `prompts/`，专业判断仍放在 `agents/`，密钥通过环境变量或安全配置注入。
 
 #### `prompts/`
 
@@ -207,8 +216,13 @@ DebateReviewInput
 
 | 文件 | 功能 | 输入 | 输出 | 系统作用 |
 |---|---|---|---|---|
+| `agents/context_planner.py` | Context Planner 骨架 | `DebateReviewInput` | `ReviewContext` | 后续实现全文上下文或语义内容包构造 |
+| `agents/specialists.py` | 三个 Specialist 骨架 | `ReviewContext`、争议问题、同伴意见、外部证据 | `IndependentReview`、`DebateResponse` | 后续实现科学性、实验证据、全文质量三个评审视角 |
+| `agents/review_chair.py` | Review Chair 主 Agent | 上下文、独立评审、回应、外部证据 | `DebatePlan`、`ReviewSynthesis` | 组织争议识别、定向路由、模型 JSON 调用、最终裁决和兼容输出校验 |
 | `agents/demo.py` | 提供确定性 Demo 实现 | `DebateReviewInput`、`ReviewContext`、`DebatePlan`、证据和评分 query | 上下文、独立评审、争议计划、回应、综合结果、评分 | 在没有真实模型和原系统时跑通完整链路 |
-| `agents/__init__.py` | 聚合导出 Demo 实现 | 无直接输入 | Demo Agent、RAG、Adapter 类 | 统一 Agent 导入路径 |
+| `agents/__init__.py` | 聚合导出 Agent | 无直接输入 | 真实 Agent 骨架和 Demo Agent 类 | 统一 Agent 导入路径 |
+
+`DebateReviewChairAgent` 是后续接真实模型时的主 Agent 入口。它已经预留 `plan_debate` 和 `synthesize` 两个核心方法，并统一通过 `backend/env/model_client.py` 调用模型。它只负责协作控制和最终裁决，不替代三个 Specialist 完成专业初审。
 
 Demo 类职责：
 
@@ -221,7 +235,16 @@ Demo 类职责：
 | `DemoHistoricalScoreRetriever` | 评分校准 query | `HistoricalScoreCase` | 模拟历史评分 RAG |
 | `DemoOriginalPipelineAdapter` | 综合评审、历史案例 | `SummaryAdviceResult`、`ComprehensiveScoreResult` | 模拟原 Step 6/7 |
 
-### 4.5 `workflows/`
+### 4.5 `backend/env/`
+
+| 文件 | 功能 | 输入 | 输出 | 系统作用 |
+|---|---|---|---|---|
+| `backend/env/model_client.py` | 统一模型调用协议和 OpenAI-compatible 客户端 | 环境变量、`ChatMessage` 列表、调用参数 | `ModelResponse` | 让不同 Agent 使用一致的模型配置和调用方式 |
+| `backend/env/__init__.py` | 聚合导出模型调用对象 | 无直接输入 | `ModelRuntimeConfig`、`build_model_client` 等 | 给真实 Agent 提供统一导入路径 |
+
+模型配置优先读取 `DEBATE_*`，并回退到通用 `LLM_*`。例如 `DEBATE_MODEL`、`DEBATE_BASE_URL`、`DEBATE_API_KEY`、`DEBATE_TEMPERATURE` 和 `DEBATE_TIMEOUT_SECONDS`。
+
+### 4.6 `workflows/`
 
 | 文件 | 功能 | 输入 | 输出 | 系统作用 |
 |---|---|---|---|---|
@@ -261,7 +284,7 @@ build_context
 | `_retrieve_score_cases` | 综合评审严重问题和维度摘要 | `HistoricalScoreCase` 列表 | 为评分尺度校准提供案例 |
 | `_step7_scoring` | 综合评审、建议汇总、历史案例 | `ComprehensiveScoreResult` | 调用原 Step 7 适配器 |
 
-### 4.6 `workflows/debate.py` 中的默认装配
+### 4.7 `workflows/debate.py` 中的默认装配
 
 | 文件 | 功能 | 输入 | 输出 | 系统作用 |
 |---|---|---|---|---|
@@ -269,7 +292,7 @@ build_context
 
 当前 `DebateWorkflow.default()` 位于 `debate.py`，装配的是 Demo Context Planner、三个 Demo Specialist、Demo Review Chair、Demo Evidence RAG、Demo Historical Score RAG 和 Demo Original Pipeline Adapter。因为本项目假设 Agent 组合相对固定，所以默认装配逻辑直接并入主工作流类，不再单独保留独立装配文件。
 
-### 4.7 `services/`
+### 4.8 `services/`
 
 | 文件 | 功能 | 输入 | 输出 | 系统作用 |
 |---|---|---|---|---|
@@ -285,7 +308,7 @@ queued → running → succeeded / failed
 
 当前使用 `InMemoryRunStore`，只适合开发和 demo。生产环境应替换为 Redis、数据库或任务队列。
 
-### 4.8 `routers/`
+### 4.9 `routers/`
 
 | 文件 | 功能 | 输入 | 输出 | 系统作用 |
 |---|---|---|---|---|
@@ -301,7 +324,7 @@ POST /api/debate/runs
 GET  /api/debate/runs/{task_id}
 ```
 
-### 4.9 `config/`
+### 4.10 `config/`
 
 | 文件 | 功能 | 输入 | 输出 | 系统作用 |
 |---|---|---|---|---|
@@ -309,7 +332,7 @@ GET  /api/debate/runs/{task_id}
 | `config/settings.example.json` | 示例配置 | 无 | JSON 示例 | 给部署和联调提供参考 |
 | `config/__init__.py` | 聚合导出配置 | 无直接输入 | `DebateWebSettings` | 统一配置导入路径 |
 
-### 4.10 `core/`、`web/`、`prompts/`、`data/`
+### 4.11 `core/`、`web/`、`prompts/`、`data/`
 
 | 目录或文件 | 功能 | 输入 | 输出 | 系统作用 |
 |---|---|---|---|---|
@@ -329,6 +352,7 @@ HTTP 请求
 → services/workflow_service.py
 → workflows/debate.py
 → agents/demo.py 或真实 Agent
+→ backend/env/model_client.py 统一真实模型调用
 → ports/interfaces.py 约束外部能力
 → models/schemas.py 约束输入输出
 ```
@@ -346,20 +370,21 @@ examples/review_input.json
 ## 6. 开发规范
 
 1. 新业务数据结构必须先写入 `models/`，不要在 Agent 或路由里临时拼 dict。
-2. 新外部能力必须先在 `ports/` 定义接口，再在 `agents/` 中实现，并在 `workflows/debate.py` 中装配。
+2. 新 Agent 能力必须先在 `ports/` 定义接口，再在 `agents/` 中实现，并在 `workflows/debate.py` 中装配。
 3. `workflows/` 只负责流程编排，不直接写具体模型 SDK、数据库连接或复杂 Prompt。
 4. `agents/` 负责专业判断和结构化输出，不处理 HTTP 请求和任务状态。
 5. `routers/` 只做请求校验、依赖注入和响应返回，不写业务流程。
 6. `services/` 负责任务生命周期，不直接实现 Debate 评审逻辑。
 7. `workflows/debate.py` 同时负责固定 Agent 组合装配和流程编排，调整默认运行能力时应修改其中的 `DebateWorkflow.default()`。
 8. Prompt 放在 `prompts/`，需要版本化、可追踪，不要散落到多个 Python 文件中。
-9. 所有 Agent 输出必须经过 Pydantic 模型校验，不能让自由文本直接进入后续流程。
-10. 高严重度评审结论必须有证据；证据不足时要降低置信度或转人工复核。
-11. 原 Step 4/5/6/7 兼容字段不能随意改名，修改前必须同步更新兼容测试。
-12. 本地运行输出、缓存、索引和 `.egg-info` 不提交到 Git。
-13. 中文文档和源码统一使用 UTF-8 编码。
-14. 新增功能要补充最小测试，至少覆盖正常路径、冲突路径和一个失败/降级路径。
-15. 生产环境密钥必须通过环境变量或安全配置注入，禁止写入仓库。
+9. 真实 Agent 调用模型时统一使用 `backend/env/model_client.py`，不要在 Agent 内部重复拼接模型 HTTP 请求。
+10. 所有 Agent 输出必须经过 Pydantic 模型校验，不能让自由文本直接进入后续流程。
+11. 高严重度评审结论必须有证据；证据不足时要降低置信度或转人工复核。
+12. 原 Step 4/5/6/7 兼容字段不能随意改名，修改前必须同步更新兼容测试。
+13. 本地运行输出、缓存、索引和 `.egg-info` 不提交到 Git。
+14. 中文文档和源码统一使用 UTF-8 编码。
+15. 新增功能要补充最小测试，至少覆盖正常路径、冲突路径和一个失败/降级路径。
+16. 生产环境密钥必须通过环境变量或安全配置注入，禁止写入仓库。
 
 ## 7. 后续扩展建议
 
@@ -377,9 +402,9 @@ workflows/debate.py
 真实 Empirical Evidence Specialist
 真实 Global Quality Specialist
 真实 Review Chair
-真实 Evidence Retriever
-真实 Historical Score Retriever
-真实 Original Pipeline Adapter
+真实 Evidence Retriever 或外部证据工具
+真实 Historical Score Retriever 或评分检索工具
+真实 Original Pipeline Adapter 或原系统函数包装
 生产级任务存储
 ```
 
