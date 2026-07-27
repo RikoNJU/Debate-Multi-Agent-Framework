@@ -2,15 +2,14 @@ from backend.env import ModelResponse
 from debate_agent_framework.agents import (
     DebateContextPlannerAgent,
     DebateReviewChairAgent,
-    EmpiricalEvidenceSpecialistAgent,
-    GlobalQualitySpecialistAgent,
-    ScientificSoundnessSpecialistAgent,
+    DebateSpecialistAgent,
 )
 from debate_agent_framework.schemas import (
     ChapterInput,
     DebateReviewInput,
     PaperType,
     ReviewContext,
+    SpecialistRole,
 )
 
 
@@ -21,9 +20,13 @@ class FakeModelClient:
 
 def test_agent_skeletons_are_importable():
     assert DebateContextPlannerAgent().__class__.__name__ == "DebateContextPlannerAgent"
-    assert ScientificSoundnessSpecialistAgent().role.value == "scientific_soundness"
-    assert EmpiricalEvidenceSpecialistAgent().role.value == "empirical_evidence"
-    assert GlobalQualitySpecialistAgent().role.value == "global_quality"
+    specialist_roles = [
+        SpecialistRole.SCIENTIFIC_SOUNDNESS,
+        SpecialistRole.EMPIRICAL_EVIDENCE,
+        SpecialistRole.GLOBAL_QUALITY,
+    ]
+    specialists = [DebateSpecialistAgent(role) for role in specialist_roles]
+    assert [specialist.role for specialist in specialists] == specialist_roles
     assert DebateReviewChairAgent().__class__.__name__ == "DebateReviewChairAgent"
 
 

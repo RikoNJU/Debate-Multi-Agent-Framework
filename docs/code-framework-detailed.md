@@ -144,7 +144,7 @@ Service 是 Router 和 Workflow 之间的中间层。它知道“某个请求对
 
 该目录存放 Multi-Agent 协作流程。当前 `debate.py` 定义 LangGraph 节点、路由和默认 Agent 装配方式，`state.py` 定义共享状态、配置和依赖容器。
 
-Workflow 负责回答“Agent 之间如何协作”：如何构造上下文，如何并行调用三个 Specialist，如何由 Chair 识别争议，何时调用 Evidence RAG，如何定向追问，如何综合裁决，以及如何进入原 Step 6/7。
+Workflow 负责回答“Agent 之间如何协作”：如何构造上下文，如何并行调用多个 Specialist，如何由 Chair 识别争议，何时调用 Evidence RAG，如何定向追问，如何综合裁决，以及如何进入原 Step 6/7。
 
 该目录不应该直接写具体模型调用、数据库查询或长 Prompt。它应依赖 `ports/` 中的抽象接口，并使用 `schemas/` 中的数据结构来保证原流程兼容和测试稳定。
 
@@ -217,19 +217,19 @@ DebateReviewInput
 | 文件 | 功能 | 输入 | 输出 | 系统作用 |
 |---|---|---|---|---|
 | `agents/context_planner.py` | Context Planner 骨架 | `DebateReviewInput` | `ReviewContext` | 后续实现全文上下文或语义内容包构造 |
-| `agents/specialists.py` | 三个 Specialist 骨架 | `ReviewContext`、争议问题、同伴意见、外部证据 | `IndependentReview`、`DebateResponse` | 后续实现科学性、实验证据、全文质量三个评审视角 |
+| `agents/specialists.py` | 通用 Specialist 骨架 | `ReviewContext`、争议问题、同伴意见、外部证据 | `IndependentReview`、`DebateResponse` | 后续按角色配置多个专业评审实例 |
 | `agents/review_chair.py` | Review Chair 主 Agent | 上下文、独立评审、回应、外部证据 | `DebatePlan`、`ReviewSynthesis` | 组织争议识别、定向路由、模型 JSON 调用、最终裁决和兼容输出校验 |
 | `agents/demo.py` | 提供确定性 Demo 实现 | `DebateReviewInput`、`ReviewContext`、`DebatePlan`、证据和评分 query | 上下文、独立评审、争议计划、回应、综合结果、评分 | 在没有真实模型和原系统时跑通完整链路 |
 | `agents/__init__.py` | 聚合导出 Agent | 无直接输入 | 真实 Agent 骨架和 Demo Agent 类 | 统一 Agent 导入路径 |
 
-`DebateReviewChairAgent` 是后续接真实模型时的主 Agent 入口。它已经预留 `plan_debate` 和 `synthesize` 两个核心方法，并统一通过 `backend/env/model_client.py` 调用模型。它只负责协作控制和最终裁决，不替代三个 Specialist 完成专业初审。
+`DebateReviewChairAgent` 是后续接真实模型时的主 Agent 入口。它已经预留 `plan_debate` 和 `synthesize` 两个核心方法，并统一通过 `backend/env/model_client.py` 调用模型。它只负责协作控制和最终裁决，不替代多个 Specialist 完成专业初审。
 
 Demo 类职责：
 
 | 类 | 输入 | 输出 | 作用 |
 |---|---|---|---|
 | `DemoContextPlanner` | `DebateReviewInput` | `ReviewContext` | 构造全文上下文或内容包 |
-| `DemoSpecialist` | `ReviewContext`、争议问题 | `IndependentReview`、`DebateResponse` | 模拟三个专业评审 Agent |
+| `DemoSpecialist` | `ReviewContext`、争议问题 | `IndependentReview`、`DebateResponse` | 模拟按角色配置的专业评审 Agent |
 | `DemoReviewChair` | 独立评审、回应、证据 | `DebatePlan`、`ReviewSynthesis` | 模拟争议识别和最终裁决 |
 | `DemoEvidenceRetriever` | 外部证据 query | `ReviewEvidence` | 模拟 Evidence RAG |
 | `DemoHistoricalScoreRetriever` | 评分校准 query | `HistoricalScoreCase` | 模拟历史评分 RAG |
@@ -274,7 +274,7 @@ build_context
 | `arun` | `DebateReviewInput` 或 dict | `DebateRunResult` | 异步执行完整 Debate 工作流 |
 | `run` | `DebateReviewInput` 或 dict | `DebateRunResult` | 同步执行完整 Debate 工作流 |
 | `_build_context` | `DebateState` | `ReviewContext` | 构造评审上下文 |
-| `_independent_review` | `ReviewContext` | 多个 `IndependentReview` 和 issues | 并行调用三个 Specialist 初审 |
+| `_independent_review` | `ReviewContext` | 多个 `IndependentReview` 和 issues | 并行调用多个 Specialist 初审 |
 | `_plan_debate` | 初审结果 | `DebatePlan` | 由 Chair 判断是否需要 Debate |
 | `_retrieve_debate_evidence` | Debate 问题中的 evidence query | 外部 `ReviewEvidence` | 为争议补充证据 |
 | `_targeted_debate` | 争议计划、同伴意见、外部证据 | `DebateResponse` 列表 | 让相关 Specialist 定向回应 |
@@ -290,7 +290,7 @@ build_context
 |---|---|---|---|---|
 | `workflows/debate.py` | 编排 Debate 流程并装配默认工作流依赖 | 无直接业务输入 | `DebateWorkflow` | 指定当前固定使用的 Agent、RAG 和原流程适配器，并给 service 层提供统一构造入口 |
 
-当前 `DebateWorkflow.default()` 位于 `debate.py`，装配的是 Demo Context Planner、三个 Demo Specialist、Demo Review Chair、Demo Evidence RAG、Demo Historical Score RAG 和 Demo Original Pipeline Adapter。因为本项目假设 Agent 组合相对固定，所以默认装配逻辑直接并入主工作流类，不再单独保留独立装配文件。
+当前 `DebateWorkflow.default()` 位于 `debate.py`，装配的是 Demo Context Planner、按角色配置的 Demo Specialist、Demo Review Chair、Demo Evidence RAG、Demo Historical Score RAG 和 Demo Original Pipeline Adapter。因为本项目假设 Agent 组合相对固定，所以默认装配逻辑直接并入主工作流类，不再单独保留独立装配文件。
 
 ### 4.8 `services/`
 
@@ -340,7 +340,7 @@ GET  /api/debate/runs/{task_id}
 | `web/__init__.py` | Web 兼容出口 | 无直接输入 | 任务状态相关类 | 保留旧导入兼容，后续可弱化 |
 | `prompts/README.md` | Prompt 管理说明 | 无 | 文档 | 约束 Prompt 不散落在代码里 |
 | `prompts/context/planner.md` | Context Planner Prompt 占位 | 论文输入 | 评审上下文 | 后续接真实上下文构造 Agent |
-| `prompts/specialists/*.md` | Specialist Prompt 占位 | 评审上下文 | 独立评审和回应 | 后续接三个专业评审 Agent |
+| `prompts/specialists/*.md` | Specialist Prompt 占位 | 评审上下文 | 独立评审和回应 | 后续接按角色配置的专业评审 Agent |
 | `prompts/chair/*.md` | Review Chair Prompt 占位 | 多 Agent 意见、证据和争议 | Debate 计划、最终综合评审 | 后续接真实裁决 Agent |
 | `data/.gitignore` | 数据目录占位 | 本地数据文件 | 不提交运行数据 | 为缓存、索引、临时文件预留空间 |
 

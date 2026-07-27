@@ -8,12 +8,7 @@ from .demo import (
     DemoSpecialist,
 )
 from .review_chair import DebateReviewChairAgent
-from .specialists import (
-    DebateSpecialistAgent,
-    EmpiricalEvidenceSpecialistAgent,
-    GlobalQualitySpecialistAgent,
-    ScientificSoundnessSpecialistAgent,
-)
+from .specialists import DebateSpecialistAgent
 
 __all__ = [
     "DebateContextPlannerAgent",
@@ -25,7 +20,4 @@ __all__ = [
     "DemoOriginalPipelineAdapter",
     "DemoReviewChair",
     "DemoSpecialist",
-    "EmpiricalEvidenceSpecialistAgent",
-    "GlobalQualitySpecialistAgent",
-    "ScientificSoundnessSpecialistAgent",
 ]
