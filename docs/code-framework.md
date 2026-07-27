@@ -40,7 +40,7 @@
 
 | 目录 | 职责 |
 |---|---|
-| `models/` | 定义上下文、独立评审、争议、回应、全文评审和兼容输出 |
+| `schemas/` | 定义上下文、独立评审、争议、回应、全文评审和兼容输出 |
 | `ports/` | 定义 Specialist、Chair、RAG 与原流程适配接口 |
 | `agents/` | 放置 Context Planner、三个 Specialist、Review Chair 和 Demo 实现 |
 | `backend/env/` | 统一模型配置、消息格式和调用入口，避免不同 Agent 各自实现模型请求 |

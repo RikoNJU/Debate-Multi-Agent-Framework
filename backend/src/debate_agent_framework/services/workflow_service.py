@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from debate_agent_framework.models import DebateReviewInput
+from debate_agent_framework.schemas import DebateReviewInput
 from debate_agent_framework.services.jobs import InMemoryRunStore, RunSnapshot
 from debate_agent_framework.workflows import DebateWorkflow
 

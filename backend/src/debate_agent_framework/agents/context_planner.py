@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from backend.env import ModelClient
-from ..models import DebateReviewInput, ReviewContext
+from ..schemas import DebateReviewInput, ReviewContext
 from ..ports import ContextPlanner
 
 

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
-from debate_agent_framework.models import DebateReviewInput
+from debate_agent_framework.schemas import DebateReviewInput
 from debate_agent_framework.services.jobs import RunSnapshot
 
 from ..services import DebateWorkflowService, get_debate_workflow_service

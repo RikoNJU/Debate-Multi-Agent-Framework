@@ -14,7 +14,7 @@ from .agents import (
     DemoReviewChair,
     DemoSpecialist,
 )
-from .models import DebateReviewInput, SpecialistRole
+from .schemas import DebateReviewInput, SpecialistRole
 from .workflows import DebateWorkflow, DebateWorkflowServices
 
 

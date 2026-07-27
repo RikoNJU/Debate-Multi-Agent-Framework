@@ -17,7 +17,7 @@ from debate_agent_framework.agents import (
     DemoReviewChair,
     DemoSpecialist,
 )
-from debate_agent_framework.models import (
+from debate_agent_framework.schemas import (
     ChapterInput,
     DebatePlan,
     DebateReviewInput,

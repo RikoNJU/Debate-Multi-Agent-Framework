@@ -28,9 +28,9 @@ Original Pipeline Adapter 负责复用原 Step 6/7
 backend/src/debate_agent_framework/
 ```
 
-包内按职责拆分为 Agent、Workflow、Model、Port、Service、Router 等目录。核心思想是：
+包内按职责拆分为 Agent、Workflow、Schema、Port、Service、Router 等目录。核心思想是：
 
-- `models/` 定义评审输入、争议、证据、回应和兼容输出结构；
+- `schemas/` 定义评审输入、争议、证据、回应和兼容输出结构；
 - `ports/` 定义 Specialist、Chair、RAG 和原流程适配接口；
 - `agents/` 放具体 Agent 或 Demo 实现；
 - `backend/env/` 统一模型配置、消息格式和调用入口；

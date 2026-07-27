@@ -6,7 +6,7 @@ from debate_agent_framework.agents import (
     GlobalQualitySpecialistAgent,
     ScientificSoundnessSpecialistAgent,
 )
-from debate_agent_framework.models import (
+from debate_agent_framework.schemas import (
     ChapterInput,
     DebateReviewInput,
     PaperType,

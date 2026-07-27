@@ -42,7 +42,7 @@ backend/src/debate_agent_framework/
 | `config/` | `settings.py`、`settings.example.json` | 管理 API 前缀、端口、CORS 等配置 |
 | `core/` | `errors.py` | 存放核心异常和基础公共能力 |
 | `data/` | `.gitignore` | 后端运行数据目录占位 |
-| `models/` | `schemas.py`、`api.py` | 定义评审输入、争议、证据、综合输出等数据结构 |
+| `schemas/` | `domain.py`、`api.py` | 定义评审输入、争议、证据、综合输出等数据结构 |
 | `ports/` | `interfaces.py` | 定义可替换 Agent、RAG 和原流程接口 |
 | `prompts/` | `context/`、`specialists/`、`chair/` | 存放未来真实 Agent 的 Prompt 模板 |
 | `routers/` | `health.py`、`runs.py` | FastAPI 路由入口 |
@@ -84,9 +84,9 @@ backend/src/debate_agent_framework/
 
 该目录不应存放源码、Prompt 或正式配置。它主要服务于运行时、调试和本地实验。
 
-#### `models/`
+#### `schemas/`
 
-该目录存放系统最重要的数据结构和校验规则。当前 `schemas.py` 定义评审输入、章节信息、历史建议、论文证据、外部证据、独立评审、争议计划、定向回应、最终综合评审、Step 4/5 兼容输出和 Step 7 评分结果；`api.py` 定义健康检查响应；`__init__.py` 统一导出常用模型。
+该目录存放系统最重要的数据结构和校验规则。当前 `domain.py` 定义评审输入、章节信息、历史建议、论文证据、外部证据、独立评审、争议计划、定向回应、最终综合评审、Step 4/5 兼容输出和 Step 7 评分结果；`api.py` 定义健康检查响应；`__init__.py` 统一导出常用数据结构。
 
 Agent 之间传递的数据必须优先在这里建模。例如新增“引用查证结果”“低置信度段落”“人工复核请求”“多轮 Debate 记录”，都应先定义 Pydantic 模型，再进入 Workflow 或 Agent。
 
@@ -146,7 +146,7 @@ Service 是 Router 和 Workflow 之间的中间层。它知道“某个请求对
 
 Workflow 负责回答“Agent 之间如何协作”：如何构造上下文，如何并行调用三个 Specialist，如何由 Chair 识别争议，何时调用 Evidence RAG，如何定向追问，如何综合裁决，以及如何进入原 Step 6/7。
 
-该目录不应该直接写具体模型调用、数据库查询或长 Prompt。它应依赖 `ports/` 中的抽象接口，并使用 `models/` 中的数据结构来保证原流程兼容和测试稳定。
+该目录不应该直接写具体模型调用、数据库查询或长 Prompt。它应依赖 `ports/` 中的抽象接口，并使用 `schemas/` 中的数据结构来保证原流程兼容和测试稳定。
 
 ## 4. Python 文件功能、输入输出与系统作用
 
@@ -158,13 +158,13 @@ Workflow 负责回答“Agent 之间如何协作”：如何构造上下文，�
 | `main.py` | 创建 FastAPI 应用 | `DebateWebSettings` 或环境变量 | `FastAPI` 实例 | API 服务入口，挂载健康检查和任务接口 |
 | `cli.py` | 命令行 demo 入口 | 示例评审 JSON 路径、输出路径 | Debate 评审结果 JSON | 用于本地验证完整评审链路 |
 
-### 4.2 `models/`
+### 4.2 `schemas/`
 
 | 文件 | 功能 | 输入 | 输出 | 系统作用 |
 |---|---|---|---|---|
-| `models/schemas.py` | 定义 Debate 工作流核心数据模型 | 论文、章节、历史建议、证据、争议、回应、评分字段 | Pydantic 模型 | 约束 Agent 协作协议和原 Step 4/5/7 兼容输出 |
-| `models/api.py` | 定义 API 健康检查响应 | 服务名、版本、状态 | `HealthResponse` | 让 API 返回稳定健康检查结构 |
-| `models/__init__.py` | 聚合导出模型 | 无直接输入 | `DebateReviewInput`、`ReviewSynthesis`、`ComprehensiveScoreResult` 等 | 统一模型导入路径 |
+| `schemas/domain.py` | 定义 Debate 工作流核心数据结构 | 论文、章节、历史建议、证据、争议、回应、评分字段 | Pydantic 数据结构 | 约束 Agent 协作协议和原 Step 4/5/7 兼容输出 |
+| `schemas/api.py` | 定义 API 健康检查响应 | 服务名、版本、状态 | `HealthResponse` | 让 API 返回稳定健康检查结构 |
+| `schemas/__init__.py` | 聚合导出数据结构 | 无直接输入 | `DebateReviewInput`、`ReviewSynthesis`、`ComprehensiveScoreResult` 等 | 统一数据结构导入路径 |
 
 主要数据流：
 
@@ -354,7 +354,7 @@ HTTP 请求
 → agents/demo.py 或真实 Agent
 → backend/env/model_client.py 统一真实模型调用
 → ports/interfaces.py 约束外部能力
-→ models/schemas.py 约束输入输出
+→ schemas/domain.py 约束输入输出
 ```
 
 CLI 调用关系：
@@ -369,7 +369,7 @@ examples/review_input.json
 
 ## 6. 开发规范
 
-1. 新业务数据结构必须先写入 `models/`，不要在 Agent 或路由里临时拼 dict。
+1. 新业务数据结构必须先写入 `schemas/`，不要在 Agent 或路由里临时拼 dict。
 2. 新 Agent 能力必须先在 `ports/` 定义接口，再在 `agents/` 中实现，并在 `workflows/debate.py` 中装配。
 3. `workflows/` 只负责流程编排，不直接写具体模型 SDK、数据库连接或复杂 Prompt。
 4. `agents/` 负责专业判断和结构化输出，不处理 HTTP 请求和任务状态。
@@ -408,4 +408,4 @@ workflows/debate.py
 生产级任务存储
 ```
 
-只要这些实现遵守 `ports/` 中的接口，`workflows/`、`models/` 和原流程兼容测试通常不需要重写。
+只要这些实现遵守 `ports/` 中的接口，`workflows/`、`schemas/` 和原流程兼容测试通常不需要重写。

@@ -20,7 +20,7 @@ from ..agents import (
     DemoReviewChair,
     DemoSpecialist,
 )
-from ..models import (
+from ..schemas import (
     ComprehensiveScoreResult,
     DebatePlan,
     DebateResponse,

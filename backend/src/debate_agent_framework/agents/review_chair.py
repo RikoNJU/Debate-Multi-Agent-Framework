@@ -13,7 +13,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from backend.env import ChatMessage, ModelCallOptions, ModelClient
-from ..models import (
+from ..schemas import (
     DebatePlan,
     DebateResponse,
     IndependentReview,

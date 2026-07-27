@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from backend.env import ModelClient
-from ..models import (
+from ..schemas import (
     DebateIssue,
     DebateQuestion,
     DebateResponse,

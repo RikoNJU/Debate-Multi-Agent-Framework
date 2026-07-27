@@ -1,5 +1,5 @@
 """Evidence-Grounded Debate 论文评审工作流。"""
 
-from .models import DebateReviewInput
+from .schemas import DebateReviewInput
 
 __all__ = ["DebateReviewInput"]

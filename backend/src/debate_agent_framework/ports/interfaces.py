@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Mapping, Sequence
 from typing import Protocol, TypeAlias, TypeVar
 
-from ..models import (
+from ..schemas import (
     ComprehensiveScoreResult,
     DebateIssue,
     DebatePlan,
