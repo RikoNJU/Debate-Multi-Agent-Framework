@@ -12,6 +12,14 @@ from pydantic import ValidationError
 
 from debate_agent_framework.core.errors import WorkflowExecutionError
 
+from ..agents import (
+    DemoContextPlanner,
+    DemoEvidenceRetriever,
+    DemoHistoricalScoreRetriever,
+    DemoOriginalPipelineAdapter,
+    DemoReviewChair,
+    DemoSpecialist,
+)
 from ..models import (
     ComprehensiveScoreResult,
     DebatePlan,
@@ -404,3 +412,21 @@ class DebateWorkflow:
         except RuntimeError:
             return asyncio.run(self.arun(review_input))
         raise RuntimeError("检测到正在运行的事件循环，请改用 await workflow.arun(...) ")
+
+
+def build_debate_workflow() -> DebateWorkflow:
+    """构造默认 Debate 工作流。
+
+    当前项目采用固定 Agent 组合，因此默认装配逻辑直接放在工作流文件中。
+    """
+
+    return DebateWorkflow(
+        DebateWorkflowServices(
+            context_planner=DemoContextPlanner(),
+            specialists={role: DemoSpecialist(role) for role in SpecialistRole},
+            review_chair=DemoReviewChair(),
+            evidence_retriever=DemoEvidenceRetriever(),
+            historical_score_retriever=DemoHistoricalScoreRetriever(),
+            original_pipeline=DemoOriginalPipelineAdapter(),
+        )
+    )

@@ -1,5 +1,4 @@
-from .workflow_factory import build_debate_workflow
-from .debate import DebateWorkflow
+from .debate import DebateWorkflow, build_debate_workflow
 from .state import DebateState, DebateWorkflowConfig, DebateWorkflowServices
 
 __all__ = [
