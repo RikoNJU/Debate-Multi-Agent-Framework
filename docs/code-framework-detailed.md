@@ -267,7 +267,7 @@ build_context
 |---|---|---|---|---|
 | `workflows/debate.py` | 编排 Debate 流程并装配默认工作流依赖 | 无直接业务输入 | `DebateWorkflow` | 指定当前固定使用的 Agent、RAG 和原流程适配器，并给 service 层提供统一构造入口 |
 
-当前 `build_debate_workflow` 位于 `debate.py`，装配的是 Demo Context Planner、三个 Demo Specialist、Demo Review Chair、Demo Evidence RAG、Demo Historical Score RAG 和 Demo Original Pipeline Adapter。因为本项目假设 Agent 组合相对固定，所以默认装配逻辑直接并入主工作流文件，不再单独保留独立装配文件。
+当前 `DebateWorkflow.default()` 位于 `debate.py`，装配的是 Demo Context Planner、三个 Demo Specialist、Demo Review Chair、Demo Evidence RAG、Demo Historical Score RAG 和 Demo Original Pipeline Adapter。因为本项目假设 Agent 组合相对固定，所以默认装配逻辑直接并入主工作流类，不再单独保留独立装配文件。
 
 ### 4.7 `services/`
 
@@ -351,7 +351,7 @@ examples/review_input.json
 4. `agents/` 负责专业判断和结构化输出，不处理 HTTP 请求和任务状态。
 5. `routers/` 只做请求校验、依赖注入和响应返回，不写业务流程。
 6. `services/` 负责任务生命周期，不直接实现 Debate 评审逻辑。
-7. `workflows/debate.py` 同时负责固定 Agent 组合装配和流程编排，调整默认运行能力时应修改其中的 `build_debate_workflow`。
+7. `workflows/debate.py` 同时负责固定 Agent 组合装配和流程编排，调整默认运行能力时应修改其中的 `DebateWorkflow.default()`。
 8. Prompt 放在 `prompts/`，需要版本化、可追踪，不要散落到多个 Python 文件中。
 9. 所有 Agent 输出必须经过 Pydantic 模型校验，不能让自由文本直接进入后续流程。
 10. 高严重度评审结论必须有证据；证据不足时要降低置信度或转人工复核。

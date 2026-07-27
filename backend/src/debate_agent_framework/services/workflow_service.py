@@ -8,8 +8,6 @@ from debate_agent_framework.models import DebateReviewInput
 from debate_agent_framework.services.jobs import InMemoryRunStore, RunSnapshot
 from debate_agent_framework.workflows import DebateWorkflow
 
-from ..workflows import build_debate_workflow
-
 
 class DebateWorkflowService:
     def __init__(
@@ -17,7 +15,7 @@ class DebateWorkflowService:
         workflow: DebateWorkflow | None = None,
         store: InMemoryRunStore | None = None,
     ) -> None:
-        self.workflow = workflow or build_debate_workflow()
+        self.workflow = workflow or DebateWorkflow.default()
         self.store = store or InMemoryRunStore()
 
     def create_run(self) -> RunSnapshot:
