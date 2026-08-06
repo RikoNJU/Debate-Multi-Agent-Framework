@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 
 from debate_agent_framework.schemas import DebateReviewInput
 from debate_agent_framework.services.jobs import InMemoryRunStore, RunSnapshot
-from debate_agent_framework.workflows import DebateWorkflow
+from debate_agent_framework.workflows import DebateWorkflow, build_workflow
 
 
 class DebateWorkflowService:
@@ -14,8 +15,12 @@ class DebateWorkflowService:
         self,
         workflow: DebateWorkflow | None = None,
         store: InMemoryRunStore | None = None,
+        *,
+        runtime: str | None = None,
     ) -> None:
-        self.workflow = workflow or DebateWorkflow.default()
+        self.workflow = workflow or build_workflow(
+            runtime or os.getenv("DEBATE_RUNTIME", "demo")
+        )
         self.store = store or InMemoryRunStore()
 
     def create_run(self) -> RunSnapshot:

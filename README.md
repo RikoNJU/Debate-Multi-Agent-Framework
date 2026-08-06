@@ -67,8 +67,28 @@ debate-demo --input examples\review_input.json --output output\result.json
 python -m debate_agent_framework.main
 ```
 
+### Demo 与真实模型运行模式
+
+项目支持两种运行模式，通过 `--runtime` 或环境变量 `DEBATE_RUNTIME` 切换：
+
+```text
+demo  确定性 Demo Agent，用于测试和回归基线（默认）
+real  真实 LLM 驱动的 Agent，用于生产评审
+```
+
 - [代码框架说明](docs/code-framework.md)
 - [代码框架详细说明](docs/code-framework-detailed.md)
 - [V0 设计方案](docs/design-v0.md)
 
 当前默认工作流装配确定性的 Demo Agent，只用于验证框架闭环和原 Step 4/5 兼容输出。
+真实模式通过 `DebateWorkflow.real()` 使用真实 Specialist 与 Review Chair，并自动读取
+`backend/.env`（参照 `backend/.env.example` 配置 `DEBATE_API_KEY`、`DEBATE_BASE_URL`、
+`DEBATE_MODEL`）。
+
+```bash
+# 真实模型评审
+python -m debate_agent_framework.cli --runtime real \
+  --input examples/review_input.json --output output/result_real.json
+```
+
+真实模式会调用模型约 8 次（3 份独立初审、争议计划、定向回应、综合裁决）。

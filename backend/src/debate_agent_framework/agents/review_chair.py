@@ -6,21 +6,22 @@ Review Chair 是 Debate 工作流中的主 Agent，负责把多个 Specialist �
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from typing import Any
 
 from pydantic import ValidationError
 
-from backend.env import ChatMessage, ModelCallOptions, ModelClient
+from backend.env import ModelClient
 from ..schemas import (
     DebatePlan,
     DebateResponse,
+    GlobalReview,
     IndependentReview,
     ReviewContext,
     ReviewEvidence,
-    ReviewSynthesis,
 )
+from .compat import assemble_review_synthesis
+from .json_client import complete_json
 from ..ports import ReviewChair
 
 
@@ -66,11 +67,14 @@ class DebateReviewChairAgent(ReviewChair):
             system_prompt=self._system_prompt(),
             user_prompt=(
                 "请识别独立评审中的关键争议、遗漏和证据缺口，输出 DebatePlan JSON。"
-                "没有必要争议时，issues 和 questions 可以为空。"
+                "每个 issue 的 participating_roles 必须是至少两个不同角色的列表；"
+                "每个 question 的 target_role 必须属于其所属 issue 的"
+                "participating_roles。没有必要争议时，issues 和 questions 可以为空。"
             ),
             payload=payload,
+            schema=DebatePlan.model_json_schema(),
         )
-        return self._validate_plan(data)
+        return self._validate_plan(data, reviews)
 
     def synthesize(
         self,
@@ -83,8 +87,8 @@ class DebateReviewChairAgent(ReviewChair):
     ) -> ReviewSynthesis:
         """综合 Debate 结果并生成原流程兼容输出。
 
-        最终输出要同时服务两个目标：一是形成全文级评审裁决，二是保持原
-        Step 4/5 的字段结构，让后续 Step 6/7 可以继续复用。
+        Review Chair 只让模型产出判断部分 ``GlobalReview``，章节评价和工作量
+        评价等原 Step 4/5 兼容结构由确定性装配完成，保证字段结构稳定。
         """
 
         payload = {
@@ -101,13 +105,15 @@ class DebateReviewChairAgent(ReviewChair):
         data = self._complete_json(
             system_prompt=self._system_prompt(),
             user_prompt=(
-                "请综合原文、独立初审、Debate 回应和外部证据，输出 ReviewSynthesis JSON。"
-                "输出必须包含 global_review、chapter_evaluation 和 workload_evaluation，"
-                "并保持原 Step 4/5 兼容字段。"
+                "请综合原文、独立初审、Debate 回应和外部证据，输出 GlobalReview JSON。"
+                "resolved_findings 必须逐条给出证据和最终判断，不能使用多数投票；"
+                "高严重度且无证据的问题必须标记为 insufficient 或 human_review 并降低置信度。"
             ),
             payload=payload,
+            schema=GlobalReview.model_json_schema(),
         )
-        return self._validate_synthesis(data)
+        global_review = self._validate_global_review(data)
+        return assemble_review_synthesis(context, global_review)
 
     def _complete_json(
         self,
@@ -115,51 +121,103 @@ class DebateReviewChairAgent(ReviewChair):
         system_prompt: str,
         user_prompt: str,
         payload: dict[str, Any],
+        schema: dict[str, Any],
     ) -> dict[str, Any]:
-        """调用统一模型客户端，并把回复解析为 JSON dict。"""
+        """调用统一模型客户端并解析 JSON，最终由 complete_json 完成。"""
 
         if self.model_client is None:
             raise NotImplementedError("DebateReviewChairAgent 需要注入 ModelClient")
-
-        response = self.model_client.complete(
-            [
-                ChatMessage(role="system", content=system_prompt),
-                ChatMessage(
-                    role="user",
-                    content=f"{user_prompt}\n\n输入数据：\n{json.dumps(payload, ensure_ascii=False)}",
-                ),
-            ],
-            options=ModelCallOptions(
-                temperature=self.temperature,
-                response_format={"type": "json_object"},
-            ),
+        data = complete_json(
+            self.model_client,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            payload=payload,
+            schema=schema,
+            temperature=self.temperature,
         )
-        try:
-            data = json.loads(response.content)
-        except json.JSONDecodeError as exc:
-            raise ValueError("DebateReviewChairAgent 返回内容不是合法 JSON") from exc
-        if not isinstance(data, dict):
-            raise ValueError("DebateReviewChairAgent 返回 JSON 顶层必须是对象")
         return data
 
-    @staticmethod
-    def _validate_plan(data: dict[str, Any]) -> DebatePlan:
-        """校验 Chair 生成的争议路由计划。"""
+    @classmethod
+    def _validate_plan(
+        cls,
+        data: dict[str, Any],
+        reviews: Sequence[IndependentReview],
+    ) -> DebatePlan:
+        """校验 Chair 生成的争议路由计划。
 
+        模型的跨字段约束（参与角色数量、question 引用、target_role 归属）容易
+        出错，这里先做一次结构修复：用独立初审把 ``finding_id -> role`` 补全，
+        再丢弃仍不合规的 issue 与 question，最后才校验。这样模型只要大致给出
+        争议方向，就不会因为个别字段不合规而整轮失败。
+        """
+
+        repaired = cls._repair_plan(data, reviews)
         try:
-            return DebatePlan.model_validate(data)
-        except ValidationError as exc:
-            raise ValueError("DebateReviewChairAgent 输出不符合 DebatePlan") from exc
-
-    @staticmethod
-    def _validate_synthesis(data: dict[str, Any]) -> ReviewSynthesis:
-        """校验最终综合评审，防止破坏 Step 4/5 兼容结构。"""
-
-        try:
-            return ReviewSynthesis.model_validate(data)
+            return DebatePlan.model_validate(repaired)
         except ValidationError as exc:
             raise ValueError(
-                "DebateReviewChairAgent 输出不符合 ReviewSynthesis"
+                f"DebateReviewChairAgent 输出不符合 DebatePlan：{exc}"
+            ) from exc
+
+    @staticmethod
+    def _repair_plan(
+        data: dict[str, Any],
+        reviews: Sequence[IndependentReview],
+    ) -> dict[str, Any]:
+        finding_role: dict[str, str] = {
+            finding.finding_id: review.role.value
+            for review in reviews
+            for finding in review.findings
+        }
+
+        issues = data.get("issues") or []
+        questions = data.get("questions") or []
+
+        issues_by_id: dict[str, dict[str, Any]] = {}
+        for issue in issues:
+            roles = list(
+                dict.fromkeys(issue.get("participating_roles") or [])
+            )
+            for finding_id in issue.get("conflicting_finding_ids") or []:
+                role = finding_role.get(finding_id)
+                if role and role not in roles:
+                    roles.append(role)
+            issue["participating_roles"] = roles
+            issues_by_id[issue["issue_id"]] = issue
+
+        kept_questions: list[dict[str, Any]] = []
+        for question in questions:
+            issue = issues_by_id.get(question.get("issue_id"))
+            if issue is None:
+                continue
+            target_role = question.get("target_role")
+            if target_role and target_role not in issue["participating_roles"]:
+                issue["participating_roles"].append(target_role)
+            kept_questions.append(question)
+        questions = kept_questions
+
+        valid_issues = [
+            issue
+            for issue in issues
+            if len(set(issue["participating_roles"])) >= 2
+        ]
+        valid_issue_ids = {issue["issue_id"] for issue in valid_issues}
+        questions = [
+            question
+            for question in questions
+            if question["issue_id"] in valid_issue_ids
+        ]
+        return {"issues": valid_issues, "questions": questions}
+
+    @staticmethod
+    def _validate_global_review(data: dict[str, Any]) -> GlobalReview:
+        """校验 Chair 生成的最终裁决判断部分。"""
+
+        try:
+            return GlobalReview.model_validate(data)
+        except ValidationError as exc:
+            raise ValueError(
+                "DebateReviewChairAgent 输出不符合 GlobalReview"
             ) from exc
 
     @staticmethod

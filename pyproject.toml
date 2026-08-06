@@ -27,7 +27,8 @@ web = [
 debate-demo = "debate_agent_framework.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["backend/src"]
+where = ["backend/src", "."]
+namespaces = false
 
 [tool.pytest.ini_options]
 pythonpath = ["backend/src", "."]

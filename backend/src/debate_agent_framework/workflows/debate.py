@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from collections.abc import Awaitable
 from typing import Any, TypeVar, cast
 
@@ -12,7 +13,12 @@ from pydantic import ValidationError
 
 from debate_agent_framework.core.errors import WorkflowExecutionError
 
+from backend.env import ModelClient, ModelClientError, build_model_client
+
 from ..agents import (
+    DebateContextPlannerAgent,
+    DebateReviewChairAgent,
+    DebateSpecialistAgent,
     DemoContextPlanner,
     DemoEvidenceRetriever,
     DemoHistoricalScoreRetriever,
@@ -41,6 +47,7 @@ from .state import DebateState, DebateWorkflowConfig, DebateWorkflowServices
 
 T = TypeVar("T")
 REQUIRED_ROLES = frozenset(SpecialistRole)
+logger = logging.getLogger("debate.workflow")
 
 
 async def _resolve(value: T | Awaitable[T]) -> T:
@@ -66,6 +73,29 @@ class DebateWorkflow:
                 context_planner=DemoContextPlanner(),
                 specialists={role: DemoSpecialist(role) for role in SpecialistRole},
                 review_chair=DemoReviewChair(),
+                evidence_retriever=DemoEvidenceRetriever(),
+                historical_score_retriever=DemoHistoricalScoreRetriever(),
+                original_pipeline=DemoOriginalPipelineAdapter(),
+            )
+        )
+
+    @classmethod
+    def real(cls, model_client: ModelClient | None = None) -> "DebateWorkflow":
+        """构造真实模型驱动的 Debate 工作流。
+
+        Specialist 与 Review Chair 使用真实 LLM，Evidence RAG、历史评分 RAG
+        和原 Step 6/7 仍使用 Demo 实现，等待后续替换为真实工具和原系统函数。
+        """
+
+        client = model_client or build_model_client()
+        return cls(
+            DebateWorkflowServices(
+                context_planner=DebateContextPlannerAgent(model_client=client),
+                specialists={
+                    role: DebateSpecialistAgent(role, model_client=client)
+                    for role in SpecialistRole
+                },
+                review_chair=DebateReviewChairAgent(model_client=client),
                 evidence_retriever=DemoEvidenceRetriever(),
                 historical_score_retriever=DemoHistoricalScoreRetriever(),
                 original_pipeline=DemoOriginalPipelineAdapter(),
@@ -112,7 +142,37 @@ class DebateWorkflow:
         builder.add_edge("step7_scoring", END)
         return builder.compile()
 
+    async def _call_validated(
+        self,
+        call: Any,
+        model: Any,
+        *,
+        attempts: int = 2,
+    ) -> Any:
+        """调用 Agent 并校验输出，失败时重试。
+
+        真实模型的输出存在偶发不合规，重试能显著降低这类失败率。
+        """
+
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                value = await _resolve(call())
+                return model.model_validate(value)
+            except Exception as exc:
+                last_error = exc
+                if attempt < attempts:
+                    logger.warning(
+                        "Agent 输出校验失败，重试 %d/%d：%s",
+                        attempt + 1,
+                        attempts,
+                        exc,
+                    )
+        assert last_error is not None
+        raise last_error
+
     async def _build_context(self, state: DebateState) -> dict[str, Any]:
+        logger.info("开始构造评审上下文 build_context")
         try:
             value = self.services.context_planner.build(state["review_input"])
             context = ReviewContext.model_validate(await _resolve(value))
@@ -120,6 +180,7 @@ class DebateWorkflow:
             raise WorkflowExecutionError(f"Context Planner 输出不合法：{exc}") from exc
         if context.paper_id != state["review_input"].paper_id:
             raise WorkflowExecutionError("ReviewContext.paper_id 与输入论文不一致")
+        logger.info("上下文构造完成，章节数=%d", len(context.chapters))
         return {"context": context}
 
     async def _independent_review(self, state: DebateState) -> dict[str, Any]:
@@ -154,16 +215,39 @@ class DebateWorkflow:
                 f"仅获得 {len(reviews)} 份独立初审，低于最低要求 "
                 f"{self.config.minimum_independent_reviews}"
             )
+        logger.info(
+            "独立初审完成，成功=%d，失败=%d", len(reviews), len(issues)
+        )
         return {"independent_reviews": reviews, "issues": issues}
 
     async def _plan_debate(self, state: DebateState) -> dict[str, Any]:
+        logger.info("Review Chair 正在识别争议 plan_debate")
         try:
-            value = self.services.review_chair.plan_debate(
-                state["context"], state["independent_reviews"]
+            plan = await self._call_validated(
+                lambda: self.services.review_chair.plan_debate(
+                    state["context"], state["independent_reviews"]
+                ),
+                DebatePlan,
+                attempts=3,
             )
-            plan = DebatePlan.model_validate(await _resolve(value))
-        except (ValidationError, TypeError, ValueError) as exc:
-            raise WorkflowExecutionError(f"Review Chair 的 DebatePlan 不合法：{exc}") from exc
+        except Exception as exc:
+            logger.warning("DebatePlan 生成失败，本轮跳过 Debate：%s", exc)
+            return {
+                "debate_plan": DebatePlan(),
+                "issues": [
+                    DebateWorkflowIssue(
+                        node="plan_debate",
+                        code="plan_debate_failed",
+                        message=(
+                            "Review Chair 的 DebatePlan 生成失败，本轮跳过 Debate："
+                            f"{exc}"
+                        ),
+                        severity=IssueSeverity.WARNING,
+                    )
+                ],
+            }
+        logger.info("DebatePlan 完成，issues=%d questions=%d",
+                    len(plan.issues), len(plan.questions))
         return {"debate_plan": plan}
 
     async def _retrieve_debate_evidence(self, state: DebateState) -> dict[str, Any]:
@@ -271,20 +355,37 @@ class DebateWorkflow:
         results = await asyncio.gather(*(respond_one(question) for question in questions))
         responses = [response for response, _ in results if response is not None]
         issues = [issue for _, issue in results if issue is not None]
+        logger.info(
+            "定向 Debate 完成，问题=%d 回应=%d 失败=%d",
+            len(questions), len(responses), len(issues),
+        )
         return {"debate_responses": responses, "issues": issues}
 
     async def _synthesize_review(self, state: DebateState) -> dict[str, Any]:
+        logger.info("Review Chair 正在综合最终裁决 synthesize_review")
         try:
-            value = self.services.review_chair.synthesize(
-                state["context"],
-                reviews=state["independent_reviews"],
-                debate_plan=state["debate_plan"],
-                responses=state.get("debate_responses", []),
-                external_evidence=state.get("external_evidence", []),
+            synthesis = await self._call_validated(
+                lambda: self.services.review_chair.synthesize(
+                    state["context"],
+                    reviews=state["independent_reviews"],
+                    debate_plan=state["debate_plan"],
+                    responses=state.get("debate_responses", []),
+                    external_evidence=state.get("external_evidence", []),
+                ),
+                ReviewSynthesis,
             )
-            synthesis = ReviewSynthesis.model_validate(await _resolve(value))
-        except (ValidationError, TypeError, ValueError) as exc:
-            raise WorkflowExecutionError(f"Review Chair 的最终输出不合法：{exc}") from exc
+        except ModelClientError as exc:
+            raise WorkflowExecutionError(
+                f"Review Chair 模型调用失败（网络/超时/API 错误）：{exc}"
+            ) from exc
+        except Exception as exc:
+            raise WorkflowExecutionError(
+                f"Review Chair 的最终输出不合法：{exc}"
+            ) from exc
+        logger.info(
+            "综合裁决完成，章节=%d",
+            len(synthesis.chapter_evaluation),
+        )
         return {"synthesis": synthesis}
 
     def _compatibility_gate(self, state: DebateState) -> dict[str, Any]:
@@ -376,6 +477,8 @@ class DebateWorkflow:
                 historical_cases=state.get("historical_score_cases", []),
             )
             score = ComprehensiveScoreResult.model_validate(await _resolve(value))
+            logger.info("Step 7 评分完成，总分=%.1f 等级=%s",
+                        score.total_score, score.grade)
             return {"final_score": score}
         except Exception as exc:
             return {
@@ -430,3 +533,17 @@ class DebateWorkflow:
         except RuntimeError:
             return asyncio.run(self.arun(review_input))
         raise RuntimeError("检测到正在运行的事件循环，请改用 await workflow.arun(...) ")
+
+
+def build_workflow(runtime: str = "demo") -> DebateWorkflow:
+    """按运行模式构造 Debate 工作流。
+
+    - ``demo``：确定性 Demo Agent，用于测试和回归基线；
+    - ``real``：真实模型驱动的 Agent，用于生产评审。
+    """
+
+    if runtime == "real":
+        return DebateWorkflow.real()
+    if runtime == "demo":
+        return DebateWorkflow.default()
+    raise ValueError(f"未知的 Debate 运行模式: {runtime}")
