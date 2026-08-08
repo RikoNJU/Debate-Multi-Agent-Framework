@@ -7,6 +7,51 @@ from typing import Any
 
 from backend.env import ChatMessage, ModelCallOptions, ModelClient
 
+from ..schemas import ReviewContext
+
+
+def review_context_payload(context: ReviewContext) -> dict[str, Any]:
+    """序列化评审上下文，避免正文同时出现在 chapters 和内容载体中。"""
+
+    payload = context.model_dump(mode="json")
+    payload["chapters"] = [
+        {
+            "chapter_id": chapter.chapter_id,
+            "chapter_name": chapter.chapter_name,
+            "stage": chapter.stage,
+            "section_titles": chapter.section_titles,
+            "reviewable": chapter.reviewable,
+            "content_chars": len(chapter.content),
+            "metadata": chapter.metadata,
+        }
+        for chapter in context.chapters
+    ]
+    if context.structured_document is not None:
+        document = context.structured_document
+        indexed_blocks = document.blocks[:250]
+        payload["structured_document"] = {
+            "source": document.source,
+            "page_count": document.page_count,
+            "quality": document.quality.model_dump(mode="json"),
+            "blocks": [
+                {
+                    "block_id": block.block_id,
+                    "chunk_id": block.chunk_id,
+                    "block_type": block.block_type,
+                    "text_excerpt": block.text[:120],
+                    "page_number": block.page_number,
+                    "bbox": block.bbox.model_dump(mode="json") if block.bbox else None,
+                    "asset_path": block.asset_path,
+                    "latex": block.latex,
+                    "chapter_id": block.chapter_id,
+                }
+                for block in indexed_blocks
+            ],
+            "index_truncated": len(indexed_blocks) < len(document.blocks),
+            "total_blocks": len(document.blocks),
+        }
+    return payload
+
 
 def complete_json(
     model_client: ModelClient,

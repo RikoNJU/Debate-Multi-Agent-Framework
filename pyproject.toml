@@ -38,6 +38,9 @@ debate-demo = "debate_agent_framework.cli:main"
 where = ["backend/src", "."]
 namespaces = false
 
+[tool.setuptools.package-data]
+debate_agent_framework = ["prompts/**/*.md"]
+
 [tool.pytest.ini_options]
 pythonpath = ["backend/src", "."]
 testpaths = ["tests"]

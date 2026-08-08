@@ -19,6 +19,28 @@ class PaperType(StrEnum):
     ENGINEERING = "工程实现"
 
 
+class PaperClassificationResult(StrictModel):
+    """旧 Step 1 的严格结构化输出。"""
+
+    paper_type: PaperType
+    rationale: str = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class ChapterStageClassification(StrictModel):
+    """旧 Step 2 对单个章节的分类结果。"""
+
+    chapter_id: str = Field(min_length=1)
+    chapter_name: str = Field(min_length=1)
+    stage: str = Field(min_length=1)
+
+
+class ChapterClassificationResult(StrictModel):
+    """旧 Step 2 的全文章节分类结果。"""
+
+    chapters: list[ChapterStageClassification] = Field(min_length=1)
+
+
 class SpecialistRole(StrEnum):
     SCIENTIFIC_SOUNDNESS = "scientific_soundness"
     EMPIRICAL_EVIDENCE = "empirical_evidence"
@@ -58,6 +80,56 @@ class IssueSeverity(StrEnum):
     ERROR = "error"
 
 
+class ParseQualityStatus(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class BoundingBox(StrictModel):
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+    @model_validator(mode="after")
+    def validate_order(self) -> "BoundingBox":
+        if self.x1 < self.x0 or self.y1 < self.y0:
+            raise ValueError("bbox coordinates must be ordered")
+        return self
+
+
+class StructuredBlock(StrictModel):
+    """A normalized MinerU content block with a stable source locator."""
+
+    block_id: str = Field(min_length=1)
+    chunk_id: str = Field(min_length=1)
+    block_type: str = Field(min_length=1)
+    text: str = ""
+    page_number: int | None = Field(default=None, ge=1)
+    bbox: BoundingBox | None = None
+    asset_path: str | None = None
+    latex: str | None = None
+    heading_level: int | None = Field(default=None, ge=1, le=6)
+    chapter_id: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class ParseQuality(StrictModel):
+    status: ParseQualityStatus
+    score: float = Field(ge=0.0, le=1.0)
+    mapped_block_ratio: float = Field(ge=0.0, le=1.0)
+    located_block_ratio: float = Field(ge=0.0, le=1.0)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class StructuredPaperDocument(StrictModel):
+    source: str = "mineru_content_list"
+    blocks: list[StructuredBlock] = Field(default_factory=list)
+    page_count: int = Field(default=0, ge=0)
+    quality: ParseQuality
+
+
 class ChapterInput(StrictModel):
     """原 Step 2 章节识别和语义分组结果。"""
 
@@ -67,6 +139,7 @@ class ChapterInput(StrictModel):
     content: str = Field(min_length=1)
     section_titles: list[str] = Field(default_factory=list)
     reviewable: bool = True
+    block_ids: list[str] = Field(default_factory=list)
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
@@ -86,10 +159,11 @@ class DebateReviewInput(StrictModel):
     abstract: str = ""
     keywords: list[str] = Field(default_factory=list)
     full_text: str = Field(min_length=1)
-    paper_type: PaperType
+    paper_type: PaperType | None = None
     chapters: list[ChapterInput] = Field(min_length=1)
     step3_advice: list[RetrievedAdvice] = Field(default_factory=list)
     references: list[str] = Field(default_factory=list)
+    structured_document: StructuredPaperDocument | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
@@ -123,6 +197,8 @@ class ReviewContext(StrictModel):
     content_packets: list[ContentPacket] = Field(default_factory=list)
     chapters: list[ChapterInput] = Field(min_length=1)
     step3_advice: list[RetrievedAdvice] = Field(default_factory=list)
+    structured_document: StructuredPaperDocument | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def require_readable_content(self) -> "ReviewContext":
@@ -140,6 +216,10 @@ class ReviewEvidence(StrictModel):
     quote: str = Field(min_length=1)
     location: str = Field(min_length=1)
     chapter_id: str | None = None
+    block_id: str | None = None
+    chunk_id: str | None = None
+    page_number: int | None = Field(default=None, ge=1)
+    bbox: BoundingBox | None = None
     doi: str | None = None
     url: str | None = None
     relevance: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -372,9 +452,27 @@ class ReviewSynthesis(StrictModel):
         return self
 
 
+class SummaryAdviceItem(StrictModel):
+    position: str = Field(min_length=1)
+    suggestion: str = Field(min_length=1)
+    severity: FindingSeverity
+    finding_ids: list[str] = Field(min_length=1)
+    evidence_ids: list[str] = Field(default_factory=list)
+    affected_chapter_ids: list[str] = Field(default_factory=list)
+    requires_human_review: bool = False
+
+
 class SummaryAdviceResult(StrictModel):
     summary: str = Field(min_length=1)
     advice_count: int = Field(default=0, ge=0)
+    items: list[SummaryAdviceItem] = Field(default_factory=list, max_length=5)
+    rule_version: str = "legacy_step6_v2"
+
+    @model_validator(mode="after")
+    def keep_count_in_sync(self) -> "SummaryAdviceResult":
+        if self.items:
+            self.advice_count = len(self.items)
+        return self
 
 
 class HistoricalScoreCase(StrictModel):
@@ -402,6 +500,9 @@ class ComprehensiveScoreResult(StrictModel):
     overall_evaluation: str = Field(min_length=1)
     calibration_notes: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
+    legacy_raw_scores: list[float] = Field(default_factory=list)
+    legacy_level_scores: list[int] = Field(default_factory=list)
+    scoring_rule: str = "legacy_step7_v1"
 
     @model_validator(mode="after")
     def validate_original_dimensions(self) -> "ComprehensiveScoreResult":
@@ -410,6 +511,13 @@ class ComprehensiveScoreResult(StrictModel):
             raise ValueError("scores 必须包含原 Step 7 的 1 到 12 共十二项")
         if any(not 0.0 <= value <= 100.0 for value in self.scores.values()):
             raise ValueError("scores 中的每项分数必须位于 0 到 100 之间")
+        if self.legacy_raw_scores and len(self.legacy_raw_scores) != 18:
+            raise ValueError("legacy_raw_scores 必须包含 18 项")
+        if self.legacy_level_scores:
+            if len(self.legacy_level_scores) != 18:
+                raise ValueError("legacy_level_scores 必须包含 18 项")
+            if any(value not in {0, 1, 2, 3} for value in self.legacy_level_scores):
+                raise ValueError("legacy_level_scores 每项必须位于 0 到 3")
         return self
 
 

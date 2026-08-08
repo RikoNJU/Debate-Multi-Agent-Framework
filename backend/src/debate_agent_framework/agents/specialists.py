@@ -18,7 +18,7 @@ from ..schemas import (
     SpecialistRole,
 )
 from ..ports import SpecialistAgent
-from .json_client import complete_json
+from .json_client import complete_json, review_context_payload
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts" / "specialists"
 
@@ -47,7 +47,7 @@ class DebateSpecialistAgent(SpecialistAgent):
                 "DebateSpecialistAgent 需要注入 ModelClient"
             )
 
-        payload = {"context": context.model_dump(mode="json")}
+        payload = {"context": review_context_payload(context)}
         data = complete_json(
             self.model_client,
             system_prompt=self._system_prompt(),
@@ -56,7 +56,8 @@ class DebateSpecialistAgent(SpecialistAgent):
                 "review_id、paper_summary、strengths、findings、author_questions 和 "
                 "confidence 由你根据论文内容生成；role 必须使用 schema 中给出的枚举。"
                 "findings 中的 evidence 引用论文原文章节，severity 为 fatal/major 的"
-                "问题必须附带可追溯的论文证据。"
+                "问题必须附带可追溯的论文证据。存在 structured_document 时，优先填写"
+                "对应的 block_id；系统将校正 chunk_id、page_number 和 bbox。"
             ),
             payload=payload,
             schema=IndependentReview.model_json_schema(),
@@ -87,7 +88,7 @@ class DebateSpecialistAgent(SpecialistAgent):
             )
 
         payload = {
-            "context": context.model_dump(mode="json"),
+            "context": review_context_payload(context),
             "own_review": own_review.model_dump(mode="json"),
             "issue": issue.model_dump(mode="json"),
             "question": question.model_dump(mode="json"),

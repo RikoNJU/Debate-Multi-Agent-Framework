@@ -34,12 +34,16 @@
 
 ```text
 START
+  → step1_classify_paper    自动识别论文类型（显式输入时跳过）
+  → step2_classify_chapters 按论文类型识别章节阶段
+  → retrieve_historical_advice 检索旧 Step 3 历史建议
   → build_context           Context Planner 构造评审上下文
   → independent_review      三个 Specialist 并行独立初审
   → plan_debate             Chair 识别争议并制定 Debate 计划
   → retrieve_debate_evidence 按需检索外部证据
   → targeted_debate         相关 Specialist 定向回应
-  → synthesize_review       Chair 形成全文裁决与 Step 4/5 兼容输出
+  → synthesize_review       Chair 形成全文裁决与 Step 4 兼容输出
+  → step5_workload_evaluation 按三类旧标准评价结构与工作量
   → compatibility_gate      校验章节键与章节名一致性
   → step6_summary_advice    复用原 Step 6 汇总修改建议
   → retrieve_score_cases    检索历史评分案例
@@ -101,9 +105,15 @@ Chair 把每个问题派发给对应的目标 Specialist。被质询的 Speciali
 
 - 每个 finding 绑定证据后转为 `ResolvedFinding`，标记 `ResolutionStatus`；
 - 生成 `GlobalReview`（全文维度、优点缺点、作者问题、未决争议）；
-- 生成 `chapter_evaluation`（`chapter_N → CompatibleChapterEnvelope`）与 `workload_evaluation`，结构与原 Step 4/5 完全兼容。
+- 生成 `chapter_evaluation`（`chapter_N → CompatibleChapterEnvelope`）；Step 5 在下一独立节点覆盖工作量占位结果。
 
-### 4.7 compatibility_gate（兼容性校验）
+### 4.7 step5_workload_evaluation（原 Step 5 适配）
+
+理论研究、方法创新和工程实现分别使用旧项目标准。摘要、目录、正文、参考文献、
+章节字数和致谢等客观事实由确定性代码计算；真实模型结合论文类型、章节阶段和
+Agent 已确认问题撰写整体工作量分析。MinerU 解析置信度只触发人工核对，不作为扣分项。
+
+### 4.8 compatibility_gate（兼容性校验）
 
 调用原 Step 6/7 前强制校验：
 
@@ -111,15 +121,15 @@ Chair 把每个问题派发给对应的目标 Specialist。被质询的 Speciali
 - 每个键对应的章节名必须与输入一致；
 - 校验失败抛出 `WorkflowExecutionError`，防止把不兼容的结构喂给原流程。
 
-### 4.8 step6_summary_advice（原 Step 6 适配）
+### 4.9 step6_summary_advice（原 Step 6 适配）
 
-`OriginalPipelineAdapter.summarize_advice` 汇总所有章节建议为 `SummaryAdviceResult`。执行失败时降级为固定占位文本并记 ERROR issue。
+`OriginalPipelineAdapter.summarize_advice` 最多选择五条关键建议，并在存在多个问题章节时保持跨章节覆盖。每条建议绑定严重程度、finding、evidence、章节与人工复核标记；未知 ID 会被丢弃，争议未决结论不会被写成确定要求。执行失败会使任务失败。
 
-### 4.9 retrieve_score_cases（历史评分 RAG）
+### 4.10 retrieve_score_cases（历史评分 RAG）
 
 在事实评审完成之后，用 `ScoreCalibrationQuery`（论文类型、维度摘要、严重 finding）检索历史评分案例，仅用于评分尺度校准，不修改已形成的评审事实。失败则跳过。
 
-### 4.10 step7_scoring（原 Step 7 适配）
+### 4.11 step7_scoring（原 Step 7 适配）
 
 `OriginalPipelineAdapter.score` 输出 `ComprehensiveScoreResult`：保留原十二项语义评分（`scores["1"]..["12"]`）、总分、等级、综合评语、校准说明和置信度。失败时只记 ERROR issue，其余结果仍可返回。
 

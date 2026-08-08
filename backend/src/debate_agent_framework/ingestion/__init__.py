@@ -6,6 +6,8 @@ from .mineru import (
     MinerUError,
     MinerUTimeoutError,
 )
+from .markdown import MarkdownPaperParser
+from .content_list import MinerUContentListAdapter
 
 __all__ = [
     "InvalidPdfError",
@@ -14,4 +16,6 @@ __all__ = [
     "MinerUConfig",
     "MinerUError",
     "MinerUTimeoutError",
+    "MarkdownPaperParser",
+    "MinerUContentListAdapter",
 ]

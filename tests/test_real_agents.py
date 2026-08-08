@@ -6,9 +6,11 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 
+import pytest
 from pydantic import ValidationError
 
 from backend.env import ChatMessage, ModelCallOptions, ModelResponse
+from debate_agent_framework.core.errors import WorkflowExecutionError
 from debate_agent_framework.agents import (
     DebateContextPlannerAgent,
     DebateReviewChairAgent,
@@ -17,6 +19,7 @@ from debate_agent_framework.agents import (
     DemoSpecialist,
     RealOriginalPipelineAdapter,
 )
+from debate_agent_framework.agents.json_client import review_context_payload
 from debate_agent_framework.schemas import (
     ChapterInput,
     DebateIssue,
@@ -187,25 +190,47 @@ GLOBAL_REVIEW_JSON = json.dumps(
 
 SCORE_JSON = json.dumps(
     {
-        "scores": {
-            "1": 82.0,
-            "2": 84.0,
-            "3": 80.0,
-            "4": 81.0,
-            "5": 86.0,
-            "6": 79.0,
-            "7": 83.0,
-            "8": 80.0,
-            "9": 78.0,
-            "10": 85.0,
-            "11": 82.0,
-            "12": 84.0,
-        },
+        "scores": {str(index): 82.0 for index in range(1, 13)},
         "total_score": 99.0,
         "grade": "优秀",
         "overall_evaluation": "模型给出的综合评语。",
-        "calibration_notes": ["模型生成的校准说明"],
+        "calibration_notes": ["未使用历史评分案例"],
         "confidence": 0.82,
+    },
+    ensure_ascii=False,
+)
+
+WORKLOAD_JSON = json.dumps(
+    {
+        "structure_evaluation": {
+            "completeness": {"score": 80, "analysis": "缺少英文摘要"},
+            "abstract_and_keywords": {"score": 80, "analysis": "摘要过短"},
+            "catalog_standardization": {"score": 80, "analysis": "目录待核对"},
+            "chapter_standardization": {"score": 60, "analysis": "正文低于最低参考值"},
+            "acknowledgement_standardization": {"score": 60, "analysis": "未识别到致谢"},
+        },
+        "summary": "结构与篇幅需要补充。",
+        "workload_evaluation": "方法与实验链路存在，但正文篇幅不足。",
+    },
+    ensure_ascii=False,
+)
+
+SUMMARY_JSON = json.dumps(
+    {
+        "summary": "[第二章 方法设计] 补充关键假设的适用边界。",
+        "advice_count": 1,
+        "items": [
+            {
+                "position": "第二章 方法设计",
+                "suggestion": "补充关键假设的适用边界。",
+                "severity": "moderate",
+                "finding_ids": ["F-SS-1"],
+                "evidence_ids": ["PAPER-C2"],
+                "affected_chapter_ids": ["C2"],
+                "requires_human_review": False,
+            }
+        ],
+        "rule_version": "legacy_step6_v2",
     },
     ensure_ascii=False,
 )
@@ -332,6 +357,15 @@ def test_context_planner_packs_long_text() -> None:
     assert context.content_packets[1].dependency_packet_ids == ["PACKET-1"]
 
 
+def test_model_context_payload_does_not_duplicate_chapter_content() -> None:
+    context = make_context()
+    payload = review_context_payload(context)
+
+    assert payload["full_text"]
+    assert "content" not in payload["chapters"][0]
+    assert payload["chapters"][0]["content_chars"] > 0
+
+
 def test_real_chair_plan_and_synthesis_with_fake_client() -> None:
     context = make_context()
     client = FakeModelClient([PLAN_JSON, GLOBAL_REVIEW_JSON])
@@ -373,6 +407,8 @@ def test_real_workflow_full_chain_with_fake_client() -> None:
             PLAN_JSON,
             RESPONSE_JSON,
             GLOBAL_REVIEW_JSON,
+            WORKLOAD_JSON,
+            SUMMARY_JSON,
             SCORE_JSON,
         ]
     )
@@ -384,28 +420,102 @@ def test_real_workflow_full_chain_with_fake_client() -> None:
     assert len(result.debate_responses) == 1
     assert result.summary_advice is not None
     assert result.final_score is not None
-    assert set(result.final_score.scores) == {str(index) for index in range(1, 13)}
-    assert result.final_score.scores == {
-        "1": 82.0,
-        "2": 84.0,
-        "3": 80.0,
-        "4": 81.0,
-        "5": 86.0,
-        "6": 79.0,
-        "7": 83.0,
-        "8": 80.0,
-        "9": 78.0,
-        "10": 85.0,
-        "11": 82.0,
-        "12": 84.0,
-    }
-    assert result.final_score.total_score == 82.0
-    assert result.final_score.grade == "良好"
+    assert result.final_score.total_score == 75.0
+    assert len(result.final_score.legacy_raw_scores) == 18
+    assert len(result.final_score.legacy_level_scores) == 18
+    assert result.final_score.scoring_rule == "legacy_step7_v1"
+    assert result.historical_score_cases == []
+    assert result.external_evidence == []
     assert result.issues == []
-    assert client.calls == 7
+    assert client.calls == 9
 
 
-def test_real_scoring_adapter_uses_model_scores_and_derives_total() -> None:
+def test_real_workflow_runs_legacy_step1_and_step2_before_agents() -> None:
+    step1 = json.dumps(
+        {
+            "paper_type": "方法创新",
+            "rationale": "论文提出多智能体评审方法并进行实验验证",
+            "confidence": 0.91,
+        },
+        ensure_ascii=False,
+    )
+    step2 = json.dumps(
+        {
+            "chapters": [
+                {
+                    "chapter_id": "C1",
+                    "chapter_name": "第一章 绪论",
+                    "stage": "引言/绪论",
+                },
+                {
+                    "chapter_id": "C2",
+                    "chapter_name": "第二章 方法设计",
+                    "stage": "方法构建",
+                },
+                {
+                    "chapter_id": "C3",
+                    "chapter_name": "第三章 实验验证",
+                    "stage": "实验验证",
+                },
+            ]
+        },
+        ensure_ascii=False,
+    )
+    client = FakeModelClient(
+        [
+            step1,
+            step2,
+            REVIEW_JSON,
+            REVIEW_JSON,
+            REVIEW_JSON,
+            PLAN_JSON,
+            RESPONSE_JSON,
+            GLOBAL_REVIEW_JSON,
+            WORKLOAD_JSON,
+            SUMMARY_JSON,
+            SCORE_JSON,
+        ]
+    )
+    review_input = make_input().model_copy(
+        update={
+            "paper_type": None,
+            "chapters": [
+                chapter.model_copy(update={"stage": "正文"})
+                for chapter in make_input().chapters
+            ],
+            "metadata": {
+                "paper_type_source": "auto_pending",
+                "chapter_stage_source": "markdown_heuristic",
+            },
+        }
+    )
+
+    result = DebateWorkflow.real(model_client=client).run(review_input)
+
+    assert result.context.profile.paper_type is PaperType.METHOD
+    assert [chapter.stage for chapter in result.context.chapters] == [
+        "引言/绪论",
+        "方法构建",
+        "实验验证",
+    ]
+    assert result.context.metadata["paper_type_rule_version"] == "legacy_step1_v1"
+    assert result.context.metadata["chapter_stage_rule_version"] == "legacy_step2_v1"
+    assert client.calls == 11
+
+
+def test_real_workflow_rejects_unlocatable_paper_quotes() -> None:
+    bad_review = json.loads(REVIEW_JSON)
+    bad_review["findings"][0]["evidence"][0]["quote"] = "原文中不存在的引文"
+    response = json.dumps(bad_review, ensure_ascii=False)
+    workflow = DebateWorkflow.real(
+        model_client=FakeModelClient([response, response, response])
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="低于最低要求"):
+        workflow.run(make_input())
+
+
+def test_real_scoring_adapter_uses_legacy_total_rule() -> None:
     context = make_context()
 
     async def collect_reviews() -> list[IndependentReview]:
@@ -435,6 +545,7 @@ def test_real_scoring_adapter_uses_model_scores_and_derives_total() -> None:
     assert result.scores["1"] == 82.0
     assert result.total_score == 82.0
     assert result.grade == "良好"
+    assert len(result.legacy_level_scores) == 18
     assert result.overall_evaluation == "模型给出的综合评语。"
     assert result.confidence == 0.82
     assert client.calls == 1

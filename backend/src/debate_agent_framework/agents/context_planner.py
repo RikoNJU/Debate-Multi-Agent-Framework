@@ -54,6 +54,8 @@ class DebateContextPlannerAgent(ContextPlanner):
                 content_packets=[],
                 chapters=review_input.chapters,
                 step3_advice=review_input.step3_advice,
+                structured_document=review_input.structured_document,
+                metadata=review_input.metadata,
             )
 
         packets: list[ContentPacket] = []
@@ -77,4 +79,6 @@ class DebateContextPlannerAgent(ContextPlanner):
             content_packets=packets,
             chapters=review_input.chapters,
             step3_advice=review_input.step3_advice,
+            structured_document=review_input.structured_document,
+            metadata=review_input.metadata,
         )

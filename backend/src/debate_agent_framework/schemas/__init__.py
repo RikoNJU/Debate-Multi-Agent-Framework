@@ -1,8 +1,11 @@
 from .api import HealthResponse
-from .ingestion import MinerUParseResponse, MinerUParseResult
+from .ingestion import MinerUParseResponse, MinerUParseResult, PaperReviewSubmission
 from .domain import (
     ChapterAdvice,
+    BoundingBox,
     ChapterInput,
+    ChapterClassificationResult,
+    ChapterStageClassification,
     CompatibleChapterData,
     CompatibleChapterEnvelope,
     CompatibleStructureEvaluation,
@@ -25,6 +28,9 @@ from .domain import (
     IndependentReview,
     IssueSeverity,
     PaperProfile,
+    ParseQuality,
+    ParseQualityStatus,
+    PaperClassificationResult,
     PaperType,
     ResolutionStatus,
     ResolvedFinding,
@@ -38,12 +44,18 @@ from .domain import (
     SpecialistRole,
     StrictModel,
     SummaryAdviceResult,
+    SummaryAdviceItem,
+    StructuredBlock,
+    StructuredPaperDocument,
     WorkloadItem,
 )
 
 __all__ = [
     "ChapterAdvice",
+    "BoundingBox",
     "ChapterInput",
+    "ChapterClassificationResult",
+    "ChapterStageClassification",
     "CompatibleChapterData",
     "CompatibleChapterEnvelope",
     "CompatibleStructureEvaluation",
@@ -68,7 +80,11 @@ __all__ = [
     "IssueSeverity",
     "MinerUParseResult",
     "MinerUParseResponse",
+    "PaperReviewSubmission",
     "PaperProfile",
+    "ParseQuality",
+    "ParseQualityStatus",
+    "PaperClassificationResult",
     "PaperType",
     "ResolutionStatus",
     "ResolvedFinding",
@@ -82,5 +98,8 @@ __all__ = [
     "SpecialistRole",
     "StrictModel",
     "SummaryAdviceResult",
+    "SummaryAdviceItem",
+    "StructuredBlock",
+    "StructuredPaperDocument",
     "WorkloadItem",
 ]
