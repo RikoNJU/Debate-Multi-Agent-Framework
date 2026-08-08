@@ -111,12 +111,25 @@ class LegacyChromaHistoricalAdviceRetriever:
 
         try:
             import chromadb
+            from chromadb.config import Settings
         except ImportError as exc:  # pragma: no cover - depends on optional extra
             raise RuntimeError(
                 "chromadb is required; install the project with the 'rag' extra"
             ) from exc
 
-        client = chromadb.PersistentClient(path=str(path))
+        database_path = Path(path).expanduser().resolve()
+        if not database_path.is_dir():
+            raise RuntimeError(f"legacy Chroma directory does not exist: {database_path}")
+        client = chromadb.PersistentClient(
+            path=str(database_path),
+            settings=Settings(anonymized_telemetry=False, allow_reset=False),
+        )
+        available = {collection.name for collection in client.list_collections()}
+        missing = sorted(set(collection_names) - available)
+        if missing:
+            raise RuntimeError(
+                f"legacy Chroma collections are missing: {missing}; available={sorted(available)}"
+            )
         collections = [client.get_collection(name=name) for name in collection_names]
         return cls(
             collections=collections,
@@ -200,14 +213,20 @@ class LegacyChromaHistoricalAdviceRetriever:
     def _build_query(
         self, review_input: DebateReviewInput, chapter: ChapterInput
     ) -> str:
-        parts = [
-            f"论文类型：{review_input.paper_type.value}",
-            f"论文标题：{review_input.title}",
-            f"章节阶段：{chapter.stage}",
-            f"章节名称：{chapter.chapter_name}",
-            f"章节内容：{chapter.content}",
-        ]
-        return "\n".join(parts)[: self.max_query_chars]
+        query = f"""请在专家评审案例数据库中，基于以下论文元数据和章节内容，检索出与该章节最相关的修改建议。
+【论文元数据】
+标题：{review_input.title}
+摘要：{review_input.abstract[:500]}
+关键词：{', '.join(review_input.keywords)}
+论文类型：{review_input.paper_type.value}
+
+【章节阶段】{chapter.stage}
+【章节标题】{chapter.chapter_name}
+
+【章节内容】
+{chapter.content}
+"""
+        return query[: self.max_query_chars]
 
     @staticmethod
     def _first_row(value: Any) -> list[Any]:
@@ -237,29 +256,47 @@ def build_historical_advice_retriever_from_env(
 ) -> LegacyChromaHistoricalAdviceRetriever | None:
     """Build the legacy RAG adapter when a Chroma path is configured."""
 
-    chroma_path = os.getenv("DEBATE_RAG_CHROMA_PATH")
+    chroma_path = _legacy_chroma_path()
     if not chroma_path:
         return None
-    api_key = os.getenv("DEBATE_EMBEDDING_API_KEY") or os.getenv("DEBATE_API_KEY", "")
+    api_key = (
+        os.getenv("DEBATE_EMBEDDING_API_KEY")
+        or os.getenv("CLOUD_API_KEY")
+        or os.getenv("DEBATE_API_KEY", "")
+    )
     if not api_key:
         raise RuntimeError(
             "DEBATE_EMBEDDING_API_KEY or DEBATE_API_KEY is required when RAG is enabled"
         )
-    base_url = os.getenv("DEBATE_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-    endpoint = os.getenv("DEBATE_EMBEDDING_ENDPOINT", f"{base_url}/embeddings")
-    dimensions_value = os.getenv("DEBATE_EMBEDDING_DIMENSIONS")
+    endpoint = os.getenv(
+        "DEBATE_EMBEDDING_ENDPOINT",
+        os.getenv(
+            "CLOUD_EMBEDDING_ENDPOINT",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings",
+        ),
+    )
+    dimensions_value = os.getenv("DEBATE_EMBEDDING_DIMENSIONS") or os.getenv(
+        "EMBEDDING_DIMENSION"
+    )
     collections = [
         item.strip()
         for item in os.getenv(
-            "DEBATE_RAG_COLLECTIONS", "advice_collection_cloud_4b"
+            "DEBATE_RAG_COLLECTIONS",
+            (
+                "user_result_content_collection_cloud_4b,"
+                "user_result_format_collection_cloud_4b"
+            ),
         ).split(",")
         if item.strip()
     ]
     provider = OpenAICompatibleEmbeddingProvider(
         endpoint=endpoint,
-        model=os.getenv("DEBATE_EMBEDDING_MODEL", "text-embedding-3-small"),
+        model=os.getenv(
+            "DEBATE_EMBEDDING_MODEL",
+            os.getenv("CLOUD_EMBEDDING_MODEL", "text-embedding-v4"),
+        ),
         api_key=api_key,
-        dimensions=int(dimensions_value) if dimensions_value else None,
+        dimensions=int(dimensions_value) if dimensions_value else 2048,
         timeout_seconds=float(os.getenv("DEBATE_EMBEDDING_TIMEOUT_SECONDS", "60")),
     )
     return LegacyChromaHistoricalAdviceRetriever.from_persistent_path(
@@ -267,3 +304,16 @@ def build_historical_advice_retriever_from_env(
         collection_names=collections,
         embedding_provider=provider,
     )
+
+
+def _legacy_chroma_path() -> str | None:
+    configured = os.getenv("DEBATE_RAG_CHROMA_PATH")
+    if configured:
+        return configured
+
+    legacy_root = os.getenv("PAPER_REVIEW_BACKEND_ROOT")
+    if not legacy_root:
+        return None
+    root = Path(legacy_root).expanduser().resolve()
+    backend_root = root / "backend" if (root / "backend").is_dir() else root
+    return str(backend_root / "data" / "databases" / "user_result_cloud")

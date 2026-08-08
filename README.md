@@ -92,3 +92,34 @@ python -m debate_agent_framework.cli --runtime real \
 ```
 
 真实模式会调用模型约 8 次（3 份独立初审、争议计划、定向回应、综合裁决）。
+
+### 复用旧 MinerU 与历史建议库
+
+安装接入依赖：
+
+```powershell
+pip install -e ".[web,ingestion,rag]"
+```
+
+MinerU 可以直接沿用旧项目的 `MINERU_TOKEN`，也可以使用优先级更高的
+`DEBATE_MINERU_TOKEN`。上传解析接口为 `POST /api/debate/papers/parse`。
+
+历史建议 RAG 可以直接读取旧项目运行时 Chroma 库：
+
+```env
+PAPER_REVIEW_BACKEND_ROOT=D:\paper-review-backend
+CLOUD_API_KEY=your-dashscope-key
+DEBATE_RUNTIME=real
+```
+
+系统会从旧仓根目录推导
+`backend/data/databases/user_result_cloud`，并查询：
+
+```text
+user_result_content_collection_cloud_4b
+user_result_format_collection_cloud_4b
+```
+
+旧库由 DashScope `text-embedding-v4`、2048 维向量建立。除非旧库本身已经重建，
+不要修改 `DEBATE_EMBEDDING_MODEL` 或 `DEBATE_EMBEDDING_DIMENSIONS`，否则查询向量
+会与库内向量不兼容。也可以用 `DEBATE_RAG_CHROMA_PATH` 显式指定 Chroma 目录。
