@@ -13,10 +13,14 @@ from debate_agent_framework.agents import (
     DebateContextPlannerAgent,
     DebateReviewChairAgent,
     DebateSpecialistAgent,
+    DemoReviewChair,
+    DemoSpecialist,
+    RealOriginalPipelineAdapter,
 )
 from debate_agent_framework.schemas import (
     ChapterInput,
     DebateIssue,
+    DebatePlan,
     DebateQuestion,
     DebateResponse,
     DebateReviewInput,
@@ -25,6 +29,7 @@ from debate_agent_framework.schemas import (
     PaperType,
     ReviewFinding,
     SpecialistRole,
+    SummaryAdviceResult,
 )
 from debate_agent_framework.workflows import DebateWorkflow
 
@@ -176,6 +181,31 @@ GLOBAL_REVIEW_JSON = json.dumps(
         ],
         "unresolved_issue_ids": [],
         "confidence": 0.8,
+    },
+    ensure_ascii=False,
+)
+
+SCORE_JSON = json.dumps(
+    {
+        "scores": {
+            "1": 82.0,
+            "2": 84.0,
+            "3": 80.0,
+            "4": 81.0,
+            "5": 86.0,
+            "6": 79.0,
+            "7": 83.0,
+            "8": 80.0,
+            "9": 78.0,
+            "10": 85.0,
+            "11": 82.0,
+            "12": 84.0,
+        },
+        "total_score": 99.0,
+        "grade": "优秀",
+        "overall_evaluation": "模型给出的综合评语。",
+        "calibration_notes": ["模型生成的校准说明"],
+        "confidence": 0.82,
     },
     ensure_ascii=False,
 )
@@ -336,7 +366,15 @@ def test_real_chair_plan_and_synthesis_with_fake_client() -> None:
 
 def test_real_workflow_full_chain_with_fake_client() -> None:
     client = FakeModelClient(
-        [REVIEW_JSON, REVIEW_JSON, REVIEW_JSON, PLAN_JSON, RESPONSE_JSON, GLOBAL_REVIEW_JSON]
+        [
+            REVIEW_JSON,
+            REVIEW_JSON,
+            REVIEW_JSON,
+            PLAN_JSON,
+            RESPONSE_JSON,
+            GLOBAL_REVIEW_JSON,
+            SCORE_JSON,
+        ]
     )
     workflow = DebateWorkflow.real(model_client=client)
     result = workflow.run(make_input())
@@ -346,7 +384,61 @@ def test_real_workflow_full_chain_with_fake_client() -> None:
     assert len(result.debate_responses) == 1
     assert result.summary_advice is not None
     assert result.final_score is not None
+    assert set(result.final_score.scores) == {str(index) for index in range(1, 13)}
+    assert result.final_score.scores == {
+        "1": 82.0,
+        "2": 84.0,
+        "3": 80.0,
+        "4": 81.0,
+        "5": 86.0,
+        "6": 79.0,
+        "7": 83.0,
+        "8": 80.0,
+        "9": 78.0,
+        "10": 85.0,
+        "11": 82.0,
+        "12": 84.0,
+    }
+    assert result.final_score.total_score == 82.0
+    assert result.final_score.grade == "良好"
     assert result.issues == []
+    assert client.calls == 7
+
+
+def test_real_scoring_adapter_uses_model_scores_and_derives_total() -> None:
+    context = make_context()
+
+    async def collect_reviews() -> list[IndependentReview]:
+        return list(
+            await asyncio.gather(
+                *(DemoSpecialist(role).review(context) for role in SpecialistRole)
+            )
+        )
+
+    reviews = asyncio.run(collect_reviews())
+    synthesis = DemoReviewChair().synthesize(
+        context,
+        reviews=reviews,
+        debate_plan=DebatePlan(),
+        responses=[],
+        external_evidence=[],
+    )
+    client = FakeModelClient([SCORE_JSON])
+    adapter = RealOriginalPipelineAdapter(model_client=client)
+    result = adapter.score(
+        make_input(),
+        synthesis,
+        summary_advice=SummaryAdviceResult(summary="测试建议", advice_count=1),
+        historical_cases=[],
+    )
+
+    assert result.scores["1"] == 82.0
+    assert result.total_score == 82.0
+    assert result.grade == "良好"
+    assert result.overall_evaluation == "模型给出的综合评语。"
+    assert result.confidence == 0.82
+    assert client.calls == 1
+    assert client.used_schema_guidance == [True]
 
 
 PLAN_BAD_JSON = json.dumps(
