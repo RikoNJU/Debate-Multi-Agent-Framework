@@ -25,6 +25,7 @@ from ..agents import (
     DemoOriginalPipelineAdapter,
     DemoReviewChair,
     DemoSpecialist,
+    RealOriginalPipelineAdapter,
 )
 from ..schemas import (
     ComprehensiveScoreResult,
@@ -83,8 +84,8 @@ class DebateWorkflow:
     def real(cls, model_client: ModelClient | None = None) -> "DebateWorkflow":
         """构造真实模型驱动的 Debate 工作流。
 
-        Specialist 与 Review Chair 使用真实 LLM，Evidence RAG、历史评分 RAG
-        和原 Step 6/7 仍使用 Demo 实现，等待后续替换为真实工具和原系统函数。
+        Specialist、Review Chair 与 Step 6/7 评分均使用真实 LLM；Evidence RAG
+        和历史评分 RAG 仍使用 Demo 实现，等待后续替换为真实工具。
         """
 
         client = model_client or build_model_client()
@@ -98,7 +99,7 @@ class DebateWorkflow:
                 review_chair=DebateReviewChairAgent(model_client=client),
                 evidence_retriever=DemoEvidenceRetriever(),
                 historical_score_retriever=DemoHistoricalScoreRetriever(),
-                original_pipeline=DemoOriginalPipelineAdapter(),
+                original_pipeline=RealOriginalPipelineAdapter(model_client=client),
             )
         )
 

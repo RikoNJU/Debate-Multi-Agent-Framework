@@ -7,6 +7,7 @@ from .demo import (
     DemoReviewChair,
     DemoSpecialist,
 )
+from .real_pipeline import RealOriginalPipelineAdapter
 from .review_chair import DebateReviewChairAgent
 from .specialists import DebateSpecialistAgent
 
@@ -20,4 +21,5 @@ __all__ = [
     "DemoOriginalPipelineAdapter",
     "DemoReviewChair",
     "DemoSpecialist",
+    "RealOriginalPipelineAdapter",
 ]
