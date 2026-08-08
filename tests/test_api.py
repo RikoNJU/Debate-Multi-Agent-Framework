@@ -39,3 +39,16 @@ def test_api_validates_input_and_returns_not_found() -> None:
         invalid = client.post("/api/debate/runs", json={"title": "缺少字段"})
         assert invalid.status_code == 422
         assert client.get("/api/debate/runs/not-found").status_code == 404
+
+
+def test_mineru_parse_endpoint_requires_server_configuration(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.delenv("DEBATE_MINERU_TOKEN", raising=False)
+
+    with TestClient(create_app()) as client:
+        response = client.post(
+            "/api/debate/papers/parse",
+            files={"pdf": ("paper.pdf", b"%PDF-1.7\ntest", "application/pdf")},
+        )
+
+    assert response.status_code == 503
+    assert "DEBATE_MINERU_TOKEN" in response.json()["detail"]

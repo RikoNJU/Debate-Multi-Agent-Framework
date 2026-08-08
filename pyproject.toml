@@ -20,7 +20,15 @@ dev = [
 ]
 web = [
     "fastapi>=0.115,<1.0",
+    "python-multipart>=0.0.18,<1.0",
     "uvicorn>=0.30,<1.0",
+]
+ingestion = [
+    "httpx>=0.27,<1.0",
+]
+rag = [
+    "chromadb>=0.5,<2.0",
+    "httpx>=0.27,<1.0",
 ]
 
 [project.scripts]

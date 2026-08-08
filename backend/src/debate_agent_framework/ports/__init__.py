@@ -1,6 +1,7 @@
 from .interfaces import (
     ContextPlanner,
     EvidenceRetriever,
+    HistoricalAdviceRetriever,
     HistoricalScoreRetriever,
     OriginalPipelineAdapter,
     ReviewChair,
@@ -11,6 +12,7 @@ from .interfaces import (
 __all__ = [
     "ContextPlanner",
     "EvidenceRetriever",
+    "HistoricalAdviceRetriever",
     "HistoricalScoreRetriever",
     "OriginalPipelineAdapter",
     "ReviewChair",

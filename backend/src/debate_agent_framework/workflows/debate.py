@@ -39,6 +39,7 @@ from ..schemas import (
     ReviewContext,
     ReviewEvidence,
     ReviewSynthesis,
+    RetrievedAdvice,
     ScoreCalibrationQuery,
     SpecialistRole,
     SummaryAdviceResult,
@@ -87,6 +88,10 @@ class DebateWorkflow:
         和原 Step 6/7 仍使用 Demo 实现，等待后续替换为真实工具和原系统函数。
         """
 
+        from ..services.historical_advice import (
+            build_historical_advice_retriever_from_env,
+        )
+
         client = model_client or build_model_client()
         return cls(
             DebateWorkflowServices(
@@ -97,6 +102,9 @@ class DebateWorkflow:
                 },
                 review_chair=DebateReviewChairAgent(model_client=client),
                 evidence_retriever=DemoEvidenceRetriever(),
+                historical_advice_retriever=(
+                    build_historical_advice_retriever_from_env()
+                ),
                 historical_score_retriever=DemoHistoricalScoreRetriever(),
                 original_pipeline=DemoOriginalPipelineAdapter(),
             )
@@ -118,6 +126,7 @@ class DebateWorkflow:
 
     def _build_graph(self) -> Any:
         builder = StateGraph(DebateState)
+        builder.add_node("retrieve_historical_advice", self._retrieve_historical_advice)
         builder.add_node("build_context", self._build_context)
         builder.add_node("independent_review", self._independent_review)
         builder.add_node("plan_debate", self._plan_debate)
@@ -129,7 +138,8 @@ class DebateWorkflow:
         builder.add_node("retrieve_score_cases", self._retrieve_score_cases)
         builder.add_node("step7_scoring", self._step7_scoring)
 
-        builder.add_edge(START, "build_context")
+        builder.add_edge(START, "retrieve_historical_advice")
+        builder.add_edge("retrieve_historical_advice", "build_context")
         builder.add_edge("build_context", "independent_review")
         builder.add_edge("independent_review", "plan_debate")
         builder.add_edge("plan_debate", "retrieve_debate_evidence")
@@ -141,6 +151,85 @@ class DebateWorkflow:
         builder.add_edge("retrieve_score_cases", "step7_scoring")
         builder.add_edge("step7_scoring", END)
         return builder.compile()
+
+    async def _retrieve_historical_advice(self, state: DebateState) -> dict[str, Any]:
+        """补齐原 Step 3 建议；检索失败时保留调用方输入并继续评审。"""
+
+        retriever = self.services.historical_advice_retriever
+        if retriever is None:
+            return {}
+
+        review_input = state["review_input"]
+        try:
+            value = retriever.retrieve(
+                review_input,
+                limit_per_chapter=self.config.historical_advice_limit_per_chapter,
+            )
+            retrieved = [RetrievedAdvice.model_validate(item) for item in await _resolve(value)]
+            chapter_ids = {chapter.chapter_id for chapter in review_input.chapters}
+            unknown_chapter_ids = sorted(
+                {item.chapter_id for item in retrieved} - chapter_ids
+            )
+            if unknown_chapter_ids:
+                raise ValueError(f"检索结果包含未知章节：{unknown_chapter_ids}")
+            merged = self._merge_historical_advice(
+                review_input.step3_advice,
+                retrieved,
+                limit_per_chapter=self.config.historical_advice_limit_per_chapter,
+            )
+            return {"review_input": review_input.model_copy(update={"step3_advice": merged})}
+        except Exception as exc:
+            return {
+                "issues": [
+                    DebateWorkflowIssue(
+                        node="retrieve_historical_advice",
+                        code="historical_advice_retrieval_failed",
+                        message=f"历史评审建议检索失败，已使用现有输入继续评审：{exc}",
+                        severity=IssueSeverity.WARNING,
+                    )
+                ]
+            }
+
+    @staticmethod
+    def _merge_historical_advice(
+        existing: list[RetrievedAdvice],
+        retrieved: list[RetrievedAdvice],
+        *,
+        limit_per_chapter: int,
+    ) -> list[RetrievedAdvice]:
+        chapter_order: list[str] = []
+        stages: dict[str, str] = {}
+        suggestions: dict[str, list[str]] = {}
+
+        for advice in existing:
+            if advice.chapter_id not in suggestions:
+                chapter_order.append(advice.chapter_id)
+                suggestions[advice.chapter_id] = []
+                stages[advice.chapter_id] = advice.stage
+            for suggestion in advice.suggestions:
+                if suggestion not in suggestions[advice.chapter_id]:
+                    suggestions[advice.chapter_id].append(suggestion)
+
+        for advice in retrieved:
+            if advice.chapter_id not in suggestions:
+                chapter_order.append(advice.chapter_id)
+                suggestions[advice.chapter_id] = []
+                stages[advice.chapter_id] = advice.stage
+            for suggestion in advice.suggestions:
+                if len(suggestions[advice.chapter_id]) >= limit_per_chapter:
+                    break
+                if suggestion not in suggestions[advice.chapter_id]:
+                    suggestions[advice.chapter_id].append(suggestion)
+
+        return [
+            RetrievedAdvice(
+                chapter_id=chapter_id,
+                stage=stages[chapter_id],
+                suggestions=suggestions[chapter_id],
+            )
+            for chapter_id in chapter_order
+            if suggestions[chapter_id]
+        ]
 
     async def _call_validated(
         self,
