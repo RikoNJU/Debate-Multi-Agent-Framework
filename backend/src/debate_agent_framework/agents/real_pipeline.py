@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from importlib.resources import files
 
 from backend.env import ModelClient
 
@@ -15,6 +16,7 @@ from ..schemas import (
 )
 from .json_client import complete_json
 from .legacy_scoring import calculate_legacy_score
+from .legacy_summary import build_summary_advice
 
 
 SCORE_DIMENSIONS = {
@@ -50,29 +52,31 @@ class RealOriginalPipelineAdapter:
         review_input: DebateReviewInput,
         synthesis: ReviewSynthesis,
     ) -> SummaryAdviceResult:
-        severity_order = {"fatal": 0, "major": 1, "moderate": 2, "minor": 3, "info": 4}
-        findings = sorted(
-            synthesis.global_review.resolved_findings,
-            key=lambda item: (severity_order[item.severity.value], -item.confidence),
+        if self.model_client is None:
+            raise NotImplementedError("RealOriginalPipelineAdapter 需要注入 ModelClient")
+        prompt = files("debate_agent_framework.prompts.summary").joinpath("step6.md").read_text(encoding="utf-8")
+        data = complete_json(
+            self.model_client,
+            system_prompt="你是论文评审流程的 Step 6 建议汇总员。只能选择已给出的已裁决问题，不得伪造 finding_id 或 evidence_id。",
+            user_prompt=prompt,
+            payload={
+                "title": review_input.title,
+                "abstract": review_input.abstract,
+                "keywords": review_input.keywords,
+                "chapter_advices": {
+                    key: [item.model_dump(mode="json") for item in envelope.chapter_data.advice]
+                    for key, envelope in synthesis.chapter_evaluation.items()
+                },
+                "resolved_findings": [
+                    item.model_dump(mode="json")
+                    for item in synthesis.global_review.resolved_findings
+                ],
+            },
+            schema=SummaryAdviceResult.model_json_schema(),
+            temperature=self.temperature,
         )
-        chapter_names = {
-            chapter.chapter_id: chapter.chapter_name for chapter in review_input.chapters
-        }
-        selected = []
-        for finding in findings:
-            if finding.status.value in {"disputed", "insufficient"}:
-                continue
-            location = "、".join(
-                chapter_names.get(chapter_id, chapter_id)
-                for chapter_id in finding.affected_chapter_ids
-            ) or "全文"
-            selected.append(
-                f"[{location}] 针对“{finding.claim}”修改正文并补充可核验证据"
-            )
-            if len(selected) == 5:
-                break
-        summary = "；".join(selected) or "未发现需要修改的问题。"
-        return SummaryAdviceResult(summary=summary, advice_count=len(findings))
+        proposed = SummaryAdviceResult.model_validate(data)
+        return build_summary_advice(review_input, synthesis, proposed.items)
 
     def score(
         self,

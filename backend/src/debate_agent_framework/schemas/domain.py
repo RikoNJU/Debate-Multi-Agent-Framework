@@ -80,6 +80,56 @@ class IssueSeverity(StrEnum):
     ERROR = "error"
 
 
+class ParseQualityStatus(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class BoundingBox(StrictModel):
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+    @model_validator(mode="after")
+    def validate_order(self) -> "BoundingBox":
+        if self.x1 < self.x0 or self.y1 < self.y0:
+            raise ValueError("bbox coordinates must be ordered")
+        return self
+
+
+class StructuredBlock(StrictModel):
+    """A normalized MinerU content block with a stable source locator."""
+
+    block_id: str = Field(min_length=1)
+    chunk_id: str = Field(min_length=1)
+    block_type: str = Field(min_length=1)
+    text: str = ""
+    page_number: int | None = Field(default=None, ge=1)
+    bbox: BoundingBox | None = None
+    asset_path: str | None = None
+    latex: str | None = None
+    heading_level: int | None = Field(default=None, ge=1, le=6)
+    chapter_id: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class ParseQuality(StrictModel):
+    status: ParseQualityStatus
+    score: float = Field(ge=0.0, le=1.0)
+    mapped_block_ratio: float = Field(ge=0.0, le=1.0)
+    located_block_ratio: float = Field(ge=0.0, le=1.0)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class StructuredPaperDocument(StrictModel):
+    source: str = "mineru_content_list"
+    blocks: list[StructuredBlock] = Field(default_factory=list)
+    page_count: int = Field(default=0, ge=0)
+    quality: ParseQuality
+
+
 class ChapterInput(StrictModel):
     """原 Step 2 章节识别和语义分组结果。"""
 
@@ -89,6 +139,7 @@ class ChapterInput(StrictModel):
     content: str = Field(min_length=1)
     section_titles: list[str] = Field(default_factory=list)
     reviewable: bool = True
+    block_ids: list[str] = Field(default_factory=list)
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
@@ -112,6 +163,7 @@ class DebateReviewInput(StrictModel):
     chapters: list[ChapterInput] = Field(min_length=1)
     step3_advice: list[RetrievedAdvice] = Field(default_factory=list)
     references: list[str] = Field(default_factory=list)
+    structured_document: StructuredPaperDocument | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
@@ -145,6 +197,7 @@ class ReviewContext(StrictModel):
     content_packets: list[ContentPacket] = Field(default_factory=list)
     chapters: list[ChapterInput] = Field(min_length=1)
     step3_advice: list[RetrievedAdvice] = Field(default_factory=list)
+    structured_document: StructuredPaperDocument | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -163,6 +216,10 @@ class ReviewEvidence(StrictModel):
     quote: str = Field(min_length=1)
     location: str = Field(min_length=1)
     chapter_id: str | None = None
+    block_id: str | None = None
+    chunk_id: str | None = None
+    page_number: int | None = Field(default=None, ge=1)
+    bbox: BoundingBox | None = None
     doi: str | None = None
     url: str | None = None
     relevance: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -395,9 +452,27 @@ class ReviewSynthesis(StrictModel):
         return self
 
 
+class SummaryAdviceItem(StrictModel):
+    position: str = Field(min_length=1)
+    suggestion: str = Field(min_length=1)
+    severity: FindingSeverity
+    finding_ids: list[str] = Field(min_length=1)
+    evidence_ids: list[str] = Field(default_factory=list)
+    affected_chapter_ids: list[str] = Field(default_factory=list)
+    requires_human_review: bool = False
+
+
 class SummaryAdviceResult(StrictModel):
     summary: str = Field(min_length=1)
     advice_count: int = Field(default=0, ge=0)
+    items: list[SummaryAdviceItem] = Field(default_factory=list, max_length=5)
+    rule_version: str = "legacy_step6_v2"
+
+    @model_validator(mode="after")
+    def keep_count_in_sync(self) -> "SummaryAdviceResult":
+        if self.items:
+            self.advice_count = len(self.items)
+        return self
 
 
 class HistoricalScoreCase(StrictModel):

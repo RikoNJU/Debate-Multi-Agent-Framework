@@ -91,8 +91,9 @@ python -m debate_agent_framework.cli --runtime real \
   --input examples/review_input.json --output output/result_real.json
 ```
 
-真实模式在输入已包含 Step 1/2 结果时，模型调用数为 `6 + 定向问题数`：3 份独立
-初审、1 次争议计划、每个定向问题 1 次回应、1 次综合裁决和 1 次 Step 7 评分。
+真实模式在输入已包含 Step 1/2 结果时，模型调用数为 `8 + 定向问题数`：3 份独立
+初审、1 次争议计划、每个定向问题 1 次回应、1 次综合裁决、1 次 Step 5、1 次
+Step 6 和 1 次 Step 7。
 MinerU 输入会增加 1 次 Step 2 章节分类；未提供论文类型时再增加 1 次 Step 1 分类。
 同步模型客户端会在线程池中并发运行，不阻塞 Web 事件循环。
 
@@ -117,7 +118,9 @@ GET  /api/debate/runs/{task_id} 查询任务状态和最终结果
 `理论研究`、`方法创新` 或 `工程实现`；未提供时，真实模式会按旧 Step 1 标准自动分类。
 MinerU 切分出的正文会按分类结果使用旧 Step 2 的对应标签集重新分类。可选提供
 `paper_id` 和 `title`。解析器会从 MinerU Markdown 提取摘要、关键词、章节、小节和
-参考文献，未提供 `paper_id` 时根据正文哈希生成稳定标识。
+参考文献，并读取 `content_list.json` 建立稳定 block/chunk ID、页码、坐标、图表、
+公式和章节映射。结构化解析质量低时标记 `requires_parse_review`，不会直接扣论文分。
+未提供 `paper_id` 时根据正文哈希生成稳定标识。
 
 历史建议 RAG 可以直接读取旧项目运行时 Chroma 库：
 
@@ -145,13 +148,20 @@ user_result_format_collection_cloud_4b
 Step 1 论文类型分类 -> Step 2 章节阶段分类 -> 历史建议 RAG -> Context Planner
 -> 三专家并发独立初审 -> Chair 争议计划
 -> 外部证据检索（未配置时显式降级）-> 定向 Debate -> Chair 综合裁决
--> Step 4/5 兼容装配 -> Step 6 关键建议汇总 -> 历史评分检索（未配置时为空）
+-> Step 4 兼容装配 -> Step 5 三类论文结构/工作量评价 -> 兼容性校验
+-> Step 6 关键建议汇总 -> 历史评分检索（未配置时为空）
 -> Step 7 十二维评分
 ```
 
 真实模式不会使用 Demo 外部证据或 Demo 历史评分案例。论文内证据必须包含有效
-`chapter_id`，且引用文本能在对应章节原文中定位；Step 6 或 Step 7 失败时任务会标记
+`chapter_id`，且引用文本能在对应章节原文中定位；有 MinerU 结构时还会校验并补齐
+`block_id`、`chunk_id`、页码和坐标。Step 5、Step 6 或 Step 7 失败时任务会标记
 失败，不会返回缺少最终分数的“成功”结果。
+
+Step 5 已复用旧项目理论研究、方法创新、工程实现三套标准。摘要、目录、章节、
+参考文献和致谢等可确定事实由代码计算，模型只结合论文类型与 Agent 裁决撰写整体
+工作量分析。Step 6 延续“最多五条且覆盖不同章节”的旧规则，每条建议额外保留
+严重程度、`finding_id`、`evidence_id`、受影响章节和人工复核标记。
 
 Step 7 直接复用旧项目 `dev` 分支的十二项定义和总分算法：五个 Step 5 结构项、
 一个参考文献项和十二个语义项先转换为 18 个 `0-3` 等级项，再按旧

@@ -56,7 +56,8 @@ class DebateSpecialistAgent(SpecialistAgent):
                 "review_id、paper_summary、strengths、findings、author_questions 和 "
                 "confidence 由你根据论文内容生成；role 必须使用 schema 中给出的枚举。"
                 "findings 中的 evidence 引用论文原文章节，severity 为 fatal/major 的"
-                "问题必须附带可追溯的论文证据。"
+                "问题必须附带可追溯的论文证据。存在 structured_document 时，优先填写"
+                "对应的 block_id；系统将校正 chunk_id、page_number 和 bbox。"
             ),
             payload=payload,
             schema=IndependentReview.model_json_schema(),

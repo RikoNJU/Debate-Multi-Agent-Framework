@@ -26,6 +26,30 @@ def review_context_payload(context: ReviewContext) -> dict[str, Any]:
         }
         for chapter in context.chapters
     ]
+    if context.structured_document is not None:
+        document = context.structured_document
+        indexed_blocks = document.blocks[:250]
+        payload["structured_document"] = {
+            "source": document.source,
+            "page_count": document.page_count,
+            "quality": document.quality.model_dump(mode="json"),
+            "blocks": [
+                {
+                    "block_id": block.block_id,
+                    "chunk_id": block.chunk_id,
+                    "block_type": block.block_type,
+                    "text_excerpt": block.text[:120],
+                    "page_number": block.page_number,
+                    "bbox": block.bbox.model_dump(mode="json") if block.bbox else None,
+                    "asset_path": block.asset_path,
+                    "latex": block.latex,
+                    "chapter_id": block.chapter_id,
+                }
+                for block in indexed_blocks
+            ],
+            "index_truncated": len(indexed_blocks) < len(document.blocks),
+            "total_blocks": len(document.blocks),
+        }
     return payload
 
 

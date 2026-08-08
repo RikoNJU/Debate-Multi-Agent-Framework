@@ -200,6 +200,41 @@ SCORE_JSON = json.dumps(
     ensure_ascii=False,
 )
 
+WORKLOAD_JSON = json.dumps(
+    {
+        "structure_evaluation": {
+            "completeness": {"score": 80, "analysis": "缺少英文摘要"},
+            "abstract_and_keywords": {"score": 80, "analysis": "摘要过短"},
+            "catalog_standardization": {"score": 80, "analysis": "目录待核对"},
+            "chapter_standardization": {"score": 60, "analysis": "正文低于最低参考值"},
+            "acknowledgement_standardization": {"score": 60, "analysis": "未识别到致谢"},
+        },
+        "summary": "结构与篇幅需要补充。",
+        "workload_evaluation": "方法与实验链路存在，但正文篇幅不足。",
+    },
+    ensure_ascii=False,
+)
+
+SUMMARY_JSON = json.dumps(
+    {
+        "summary": "[第二章 方法设计] 补充关键假设的适用边界。",
+        "advice_count": 1,
+        "items": [
+            {
+                "position": "第二章 方法设计",
+                "suggestion": "补充关键假设的适用边界。",
+                "severity": "moderate",
+                "finding_ids": ["F-SS-1"],
+                "evidence_ids": ["PAPER-C2"],
+                "affected_chapter_ids": ["C2"],
+                "requires_human_review": False,
+            }
+        ],
+        "rule_version": "legacy_step6_v2",
+    },
+    ensure_ascii=False,
+)
+
 
 def make_input() -> DebateReviewInput:
     chapters = [
@@ -372,6 +407,8 @@ def test_real_workflow_full_chain_with_fake_client() -> None:
             PLAN_JSON,
             RESPONSE_JSON,
             GLOBAL_REVIEW_JSON,
+            WORKLOAD_JSON,
+            SUMMARY_JSON,
             SCORE_JSON,
         ]
     )
@@ -383,14 +420,14 @@ def test_real_workflow_full_chain_with_fake_client() -> None:
     assert len(result.debate_responses) == 1
     assert result.summary_advice is not None
     assert result.final_score is not None
-    assert result.final_score.total_score == 82.0
+    assert result.final_score.total_score == 75.0
     assert len(result.final_score.legacy_raw_scores) == 18
     assert len(result.final_score.legacy_level_scores) == 18
     assert result.final_score.scoring_rule == "legacy_step7_v1"
     assert result.historical_score_cases == []
     assert result.external_evidence == []
     assert result.issues == []
-    assert client.calls == 7
+    assert client.calls == 9
 
 
 def test_real_workflow_runs_legacy_step1_and_step2_before_agents() -> None:
@@ -434,6 +471,8 @@ def test_real_workflow_runs_legacy_step1_and_step2_before_agents() -> None:
             PLAN_JSON,
             RESPONSE_JSON,
             GLOBAL_REVIEW_JSON,
+            WORKLOAD_JSON,
+            SUMMARY_JSON,
             SCORE_JSON,
         ]
     )
@@ -461,7 +500,7 @@ def test_real_workflow_runs_legacy_step1_and_step2_before_agents() -> None:
     ]
     assert result.context.metadata["paper_type_rule_version"] == "legacy_step1_v1"
     assert result.context.metadata["chapter_stage_rule_version"] == "legacy_step2_v1"
-    assert client.calls == 9
+    assert client.calls == 11
 
 
 def test_real_workflow_rejects_unlocatable_paper_quotes() -> None:

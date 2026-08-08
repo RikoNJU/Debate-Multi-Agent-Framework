@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Mapping, Sequence
 from typing import Protocol, TypeAlias, TypeVar
 
 from ..schemas import (
+    CompatibleWorkloadEvaluation,
     ComprehensiveScoreResult,
     ChapterClassificationResult,
     DebateIssue,
@@ -154,3 +155,14 @@ class OriginalPipelineAdapter(Protocol):
 
 
 SpecialistRegistry: TypeAlias = Mapping[SpecialistRole, SpecialistAgent]
+
+
+class WorkloadEvaluator(Protocol):
+    """Reuse the old paper-type-specific Step 5 standards."""
+
+    def evaluate_workload(
+        self,
+        review_input: DebateReviewInput,
+        synthesis: ReviewSynthesis,
+    ) -> MaybeAwaitable[CompatibleWorkloadEvaluation]:
+        ...

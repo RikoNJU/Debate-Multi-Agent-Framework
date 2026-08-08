@@ -80,6 +80,7 @@ class DemoContextPlanner:
             content_packets=packets,
             chapters=review_input.chapters,
             step3_advice=review_input.step3_advice,
+            structured_document=review_input.structured_document,
             metadata=review_input.metadata,
         )
 
@@ -368,13 +369,9 @@ class DemoOriginalPipelineAdapter:
         review_input: DebateReviewInput,
         synthesis: ReviewSynthesis,
     ) -> SummaryAdviceResult:
-        advice = [
-            item
-            for envelope in synthesis.chapter_evaluation.values()
-            for item in envelope.chapter_data.advice
-        ]
-        summary = "；".join(item.suggestion for item in advice) or "未发现需要修改的问题。"
-        return SummaryAdviceResult(summary=summary, advice_count=len(advice))
+        from .legacy_summary import build_summary_advice
+
+        return build_summary_advice(review_input, synthesis)
 
     def score(
         self,

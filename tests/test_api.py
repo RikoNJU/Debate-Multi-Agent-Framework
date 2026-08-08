@@ -65,11 +65,23 @@ def test_pdf_review_endpoint_parses_and_creates_run(monkeypatch, tmp_path) -> No
         async def parse_pdf(self, pdf_path, *, output_root):  # type: ignore[no-untyped-def]
             markdown_path = tmp_path / "full.md"
             markdown_path.write_text("# 测试论文\n\n## 第一章 绪论\n论文正文。", encoding="utf-8")
+            content_list_path = tmp_path / "content_list.json"
+            content_list_path.write_text(
+                json.dumps(
+                    [
+                        {"type": "title", "text": "第一章 绪论", "text_level": 1, "page_idx": 1, "bbox": [10, 20, 300, 50]},
+                        {"type": "text", "text": "论文正文。", "page_idx": 1, "bbox": [10, 60, 300, 100]},
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
             return MinerUParseResult(
                 batch_id="batch-api",
                 markdown=markdown_path.read_text(encoding="utf-8"),
                 output_dir=str(tmp_path),
                 markdown_path=str(markdown_path),
+                content_list_path=str(content_list_path),
             )
 
     monkeypatch.setenv("DEBATE_MINERU_TOKEN", "test-token")
@@ -89,6 +101,9 @@ def test_pdf_review_endpoint_parses_and_creates_run(monkeypatch, tmp_path) -> No
         result = client.get(f"/api/debate/runs/{payload['task_id']}")
         assert result.status_code == 200
         assert result.json()["status"] == "succeeded"
+        structured = result.json()["result"]["context"]["structured_document"]
+        assert structured["page_count"] == 2
+        assert structured["blocks"][1]["chapter_id"] == "C1"
 
 
 def test_pdf_review_endpoint_auto_classifies_without_paper_type(

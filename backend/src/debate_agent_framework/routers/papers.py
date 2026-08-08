@@ -10,6 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from ..ingestion import (
     InvalidPdfError,
     MarkdownPaperParser,
+    MinerUContentListAdapter,
     MinerUClient,
     MinerUConfig,
     MinerUConfigurationError,
@@ -98,6 +99,10 @@ async def parse_and_review_paper(
             source_filename=pdf.filename,
             mineru_batch_id=parsed.batch_id,
         )
+        if parsed.content_list_path:
+            review_input = MinerUContentListAdapter().enrich(
+                review_input, parsed.content_list_path
+            )
         snapshot = service.create_run()
         background_tasks.add_task(service.execute, snapshot.task_id, review_input)
         return PaperReviewSubmission(

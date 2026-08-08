@@ -29,6 +29,7 @@ from ..ports import (
     PaperClassifier,
     ReviewChair,
     SpecialistRegistry,
+    WorkloadEvaluator,
 )
 
 
@@ -75,6 +76,7 @@ class DebateWorkflowServices:
     specialists: SpecialistRegistry
     review_chair: ReviewChair
     original_pipeline: OriginalPipelineAdapter
+    workload_evaluator: WorkloadEvaluator | None = None
     paper_classifier: PaperClassifier | None = None
     chapter_classifier: ChapterClassifier | None = None
     evidence_retriever: EvidenceRetriever | None = None

@@ -25,12 +25,15 @@ from ..agents import (
     DemoOriginalPipelineAdapter,
     DemoReviewChair,
     DemoSpecialist,
+    DeterministicLegacyWorkloadEvaluator,
     LegacyStep12ClassificationAdapter,
     RealOriginalPipelineAdapter,
+    RealLegacyWorkloadEvaluator,
     STEP1_RULE_VERSION,
     STEP2_RULE_VERSION,
 )
 from ..schemas import (
+    CompatibleWorkloadEvaluation,
     ComprehensiveScoreResult,
     DebatePlan,
     DebateResponse,
@@ -92,6 +95,7 @@ class DebateWorkflow:
                 evidence_retriever=DemoEvidenceRetriever(),
                 historical_score_retriever=DemoHistoricalScoreRetriever(),
                 original_pipeline=DemoOriginalPipelineAdapter(),
+                workload_evaluator=DeterministicLegacyWorkloadEvaluator(),
             )
         )
 
@@ -125,6 +129,7 @@ class DebateWorkflow:
                 ),
                 historical_score_retriever=None,
                 original_pipeline=RealOriginalPipelineAdapter(model_client=client),
+                workload_evaluator=RealLegacyWorkloadEvaluator(client),
             )
         )
 
@@ -153,6 +158,7 @@ class DebateWorkflow:
         builder.add_node("retrieve_debate_evidence", self._retrieve_debate_evidence)
         builder.add_node("targeted_debate", self._targeted_debate)
         builder.add_node("synthesize_review", self._synthesize_review)
+        builder.add_node("step5_workload_evaluation", self._step5_workload_evaluation)
         builder.add_node("compatibility_gate", self._compatibility_gate)
         builder.add_node("step6_summary_advice", self._step6_summary_advice)
         builder.add_node("retrieve_score_cases", self._retrieve_score_cases)
@@ -167,7 +173,8 @@ class DebateWorkflow:
         builder.add_edge("plan_debate", "retrieve_debate_evidence")
         builder.add_edge("retrieve_debate_evidence", "targeted_debate")
         builder.add_edge("targeted_debate", "synthesize_review")
-        builder.add_edge("synthesize_review", "compatibility_gate")
+        builder.add_edge("synthesize_review", "step5_workload_evaluation")
+        builder.add_edge("step5_workload_evaluation", "compatibility_gate")
         builder.add_edge("compatibility_gate", "step6_summary_advice")
         builder.add_edge("step6_summary_advice", "retrieve_score_cases")
         builder.add_edge("retrieve_score_cases", "step7_scoring")
@@ -359,440 +366,4 @@ class DebateWorkflow:
                         attempts,
                         exc,
                     )
-        assert last_error is not None
-        raise last_error
-
-    async def _build_context(self, state: DebateState) -> dict[str, Any]:
-        logger.info("å¼€å§‹æ„é€ è¯„å®¡ä¸Šä¸‹æ–‡ build_context")
-        try:
-            context = ReviewContext.model_validate(
-                await _invoke(
-                    lambda: self.services.context_planner.build(state["review_input"])
-                )
-            )
-        except (ValidationError, TypeError, ValueError) as exc:
-            raise WorkflowExecutionError(f"Context Planner è¾“å‡ºä¸åˆæ³•ï¼š{exc}") from exc
-        if context.paper_id != state["review_input"].paper_id:
-            raise WorkflowExecutionError("ReviewContext.paper_id ä¸è¾“å…¥è®ºæ–‡ä¸ä¸€è‡´")
-        logger.info("ä¸Šä¸‹æ–‡æ„é€ å®Œæˆï¼Œç« èŠ‚æ•°=%d", len(context.chapters))
-        return {"context": context}
-
-    async def _independent_review(self, state: DebateState) -> dict[str, Any]:
-        semaphore = asyncio.Semaphore(self.config.max_concurrency)
-
-        async def run_one(
-            role: SpecialistRole,
-        ) -> tuple[IndependentReview | None, DebateWorkflowIssue | None]:
-            async with semaphore:
-                try:
-                    review = IndependentReview.model_validate(
-                        await _invoke(
-                            lambda: self.services.specialists[role].review(state["context"])
-                        )
-                    )
-                    if review.role is not role:
-                        raise ValueError(
-                            f"æ³¨å†Œä¸º {role.value} çš„ Agent è¿”å›äº† {review.role.value}"
-                        )
-                    self._validate_review_grounding(review, state["context"])
-                    return review, None
-                except Exception as exc:  # ä¸€ä¸ªè§†è§’å¤±è´¥æ—¶ä¿ç•™å…¶ä»–ç‹¬ç«‹æ„è§
-                    return None, DebateWorkflowIssue(
-                        node="independent_review",
-                        code="specialist_review_failed",
-                        message=f"{role.value} ç‹¬ç«‹åˆå®¡å¤±è´¥ï¼š{exc}",
-                        severity=IssueSeverity.WARNING,
-                        role=role,
-                    )
-
-        results = await asyncio.gather(*(run_one(role) for role in SpecialistRole))
-        reviews = [review for review, _ in results if review is not None]
-        issues = [issue for _, issue in results if issue is not None]
-        if len(reviews) < self.config.minimum_independent_reviews:
-            raise WorkflowExecutionError(
-                f"ä»…è·å¾— {len(reviews)} ä»½ç‹¬ç«‹åˆå®¡ï¼Œä½äºæœ€ä½è¦æ±‚ "
-                f"{self.config.minimum_independent_reviews}"
-            )
-        logger.info(
-            "ç‹¬ç«‹åˆå®¡å®Œæˆï¼ŒæˆåŠŸ=%dï¼Œå¤±è´¥=%d", len(reviews), len(issues)
-        )
-        return {"independent_reviews": reviews, "issues": issues}
-
-    async def _plan_debate(self, state: DebateState) -> dict[str, Any]:
-        logger.info("Review Chair æ­£åœ¨è¯†åˆ«äº‰è®® plan_debate")
-        try:
-            plan = await self._call_validated(
-                lambda: self.services.review_chair.plan_debate(
-                    state["context"], state["independent_reviews"]
-                ),
-                DebatePlan,
-                attempts=3,
-            )
-        except Exception as exc:
-            logger.warning("DebatePlan ç”Ÿæˆå¤±è´¥ï¼Œæœ¬è½®è·³è¿‡ Debateï¼š%s", exc)
-            return {
-                "debate_plan": DebatePlan(),
-                "issues": [
-                    DebateWorkflowIssue(
-                        node="plan_debate",
-                        code="plan_debate_failed",
-                        message=(
-                            "Review Chair çš„ DebatePlan ç”Ÿæˆå¤±è´¥ï¼Œæœ¬è½®è·³è¿‡ Debateï¼š"
-                            f"{exc}"
-                        ),
-                        severity=IssueSeverity.WARNING,
-                    )
-                ],
-            }
-        logger.info("DebatePlan å®Œæˆï¼Œissues=%d questions=%d",
-                    len(plan.issues), len(plan.questions))
-        return {"debate_plan": plan}
-
-    async def _retrieve_debate_evidence(self, state: DebateState) -> dict[str, Any]:
-        queries = list(
-            dict.fromkeys(
-                question.evidence_query
-                for question in state["debate_plan"].questions
-                if question.requires_external_evidence and question.evidence_query
-            )
-        )
-        if not queries:
-            return {"external_evidence": []}
-        if self.services.evidence_retriever is None:
-            return {
-                "external_evidence": [],
-                "issues": [
-                    DebateWorkflowIssue(
-                        node="retrieve_debate_evidence",
-                        code="evidence_retriever_unavailable",
-                        message="Debate éœ€è¦å¤–éƒ¨è¯æ®ï¼Œä½†æœªé…ç½® EvidenceRetriever",
-                    )
-                ],
-            }
-
-        try:
-            raw_evidence = await _invoke(
-                lambda: self.services.evidence_retriever.retrieve(
-                    queries,
-                    context=state["context"],
-                    limit=self.config.evidence_limit,
-                )
-            )
-            evidence = [ReviewEvidence.model_validate(item) for item in raw_evidence]
-            external = [item for item in evidence if item.kind.value == "external"]
-            return {"external_evidence": external[: self.config.evidence_limit]}
-        except Exception as exc:
-            return {
-                "external_evidence": [],
-                "issues": [
-                    DebateWorkflowIssue(
-                        node="retrieve_debate_evidence",
-                        code="evidence_retrieval_failed",
-                        message=f"å¤–éƒ¨è¯æ®æ£€ç´¢å¤±è´¥ï¼š{exc}",
-                    )
-                ],
-            }
-
-    async def _targeted_debate(self, state: DebateState) -> dict[str, Any]:
-        questions = state["debate_plan"].questions
-        if not questions:
-            return {"debate_responses": []}
-
-        issue_by_id = {issue.issue_id: issue for issue in state["debate_plan"].issues}
-        review_by_role = {
-            review.role: review for review in state["independent_reviews"]
-        }
-        semaphore = asyncio.Semaphore(self.config.max_concurrency)
-
-        async def respond_one(
-            question: Any,
-        ) -> tuple[DebateResponse | None, DebateWorkflowIssue | None]:
-            role = question.target_role
-            own_review = review_by_role.get(role)
-            if own_review is None:
-                return None, DebateWorkflowIssue(
-                    node="targeted_debate",
-                    code="target_specialist_unavailable",
-                    message=f"é—®é¢˜ {question.question_id} çš„ç›®æ ‡ Specialist æ— å¯ç”¨åˆå®¡",
-                    role=role,
-                    question_id=question.question_id,
-                )
-
-            issue = issue_by_id[question.issue_id]
-            peer_reviews = [
-                review
-                for review in state["independent_reviews"]
-                if review.role in issue.participating_roles and review.role is not role
-            ]
-            async with semaphore:
-                try:
-                    response = DebateResponse.model_validate(
-                        await _invoke(
-                            lambda: self.services.specialists[role].respond(
-                                state["context"],
-                                own_review=own_review,
-                                issue=issue,
-                                question=question,
-                                peer_reviews=peer_reviews,
-                                external_evidence=state.get("external_evidence", []),
-                            )
-                        )
-                    )
-                    if (
-                        response.role is not role
-                        or response.question_id != question.question_id
-                        or response.issue_id != question.issue_id
-                    ):
-                        raise ValueError("DebateResponse ä¸å®šå‘é—®é¢˜çš„è§’è‰²æˆ–æ ‡è¯†ä¸ä¸€è‡´")
-                    self._validate_response_grounding(response, state["context"])
-                    return response, None
-                except Exception as exc:
-                    return None, DebateWorkflowIssue(
-                        node="targeted_debate",
-                        code="debate_response_failed",
-                        message=f"é—®é¢˜ {question.question_id} å›åº”å¤±è´¥ï¼š{exc}",
-                        role=role,
-                        question_id=question.question_id,
-                    )
-
-        results = await asyncio.gather(*(respond_one(question) for question in questions))
-        responses = [response for response, _ in results if response is not None]
-        issues = [issue for _, issue in results if issue is not None]
-        logger.info(
-            "å®šå‘ Debate å®Œæˆï¼Œé—®é¢˜=%d å›åº”=%d å¤±è´¥=%d",
-            len(questions), len(responses), len(issues),
-        )
-        return {"debate_responses": responses, "issues": issues}
-
-    async def _synthesize_review(self, state: DebateState) -> dict[str, Any]:
-        logger.info("Review Chair æ­£åœ¨ç»¼åˆæœ€ç»ˆè£å†³ synthesize_review")
-        try:
-            synthesis = await self._call_validated(
-                lambda: self.services.review_chair.synthesize(
-                    state["context"],
-                    reviews=state["independent_reviews"],
-                    debate_plan=state["debate_plan"],
-                    responses=state.get("debate_responses", []),
-                    external_evidence=state.get("external_evidence", []),
-                ),
-                ReviewSynthesis,
-            )
-            self._validate_synthesis_grounding(synthesis, state["context"])
-        except ModelClientError as exc:
-            raise WorkflowExecutionError(
-                f"Review Chair æ¨¡å‹è°ƒç”¨å¤±è´¥ï¼ˆç½‘ç»œ/è¶…æ—¶/API é”™è¯¯ï¼‰ï¼š{exc}"
-            ) from exc
-        except Exception as exc:
-            raise WorkflowExecutionError(
-                f"Review Chair çš„æœ€ç»ˆè¾“å‡ºä¸åˆæ³•ï¼š{exc}"
-            ) from exc
-        logger.info(
-            "ç»¼åˆè£å†³å®Œæˆï¼Œç« èŠ‚=%d",
-            len(synthesis.chapter_evaluation),
-        )
-        return {"synthesis": synthesis}
-
-    def _compatibility_gate(self, state: DebateState) -> dict[str, Any]:
-        """åœ¨è°ƒç”¨åŸ Step 6/7 å‰æ£€æŸ¥ç« èŠ‚æ•°é‡ã€é¡ºåºé”®å’Œ Step 5 å­—æ®µã€‚"""
-
-        reviewable = [
-            chapter for chapter in state["review_input"].chapters if chapter.reviewable
-        ]
-        expected_keys = [f"chapter_{index}" for index in range(1, len(reviewable) + 1)]
-        actual_keys = list(state["synthesis"].chapter_evaluation)
-        if actual_keys != expected_keys:
-            raise WorkflowExecutionError(
-                f"chapter_evaluation é”®ä¸åŸæµç¨‹ä¸å…¼å®¹ï¼ŒæœŸæœ› {expected_keys}ï¼Œå®é™… {actual_keys}"
-            )
-
-        for key, chapter in zip(expected_keys, reviewable, strict=True):
-            output_name = state["synthesis"].chapter_evaluation[key].chapter_data.chapter_name
-            if output_name != chapter.chapter_name:
-                raise WorkflowExecutionError(
-                    f"{key} ç« èŠ‚åä¸ä¸€è‡´ï¼šæœŸæœ› {chapter.chapter_name}ï¼Œå®é™… {output_name}"
-                )
-        return {}
-
-    async def _step6_summary_advice(self, state: DebateState) -> dict[str, Any]:
-        try:
-            result = SummaryAdviceResult.model_validate(
-                await _invoke(
-                    lambda: self.services.original_pipeline.summarize_advice(
-                        state["review_input"], state["synthesis"]
-                    )
-                )
-            )
-            return {"summary_advice": result}
-        except Exception as exc:
-            raise WorkflowExecutionError(f"Step 6 é€‚é…å™¨æ‰§è¡Œå¤±è´¥ï¼š{exc}") from exc
-
-    async def _retrieve_score_cases(self, state: DebateState) -> dict[str, Any]:
-        retriever = self.services.historical_score_retriever
-        if retriever is None:
-            return {"historical_score_cases": []}
-
-        global_review = state["synthesis"].global_review
-        query = ScoreCalibrationQuery(
-            paper_type=state["review_input"].paper_type,
-            dimensions={item.dimension: item.summary for item in global_review.dimensions},
-            severe_findings=[
-                finding.claim
-                for finding in global_review.resolved_findings
-                if finding.severity.value in {"fatal", "major"}
-            ],
-        )
-        try:
-            raw_cases = await _invoke(
-                lambda: retriever.retrieve(
-                    query, limit=self.config.historical_case_limit
-                )
-            )
-            cases = [HistoricalScoreCase.model_validate(item) for item in raw_cases]
-            cases.sort(key=lambda item: item.similarity, reverse=True)
-            return {"historical_score_cases": cases[: self.config.historical_case_limit]}
-        except Exception as exc:
-            return {
-                "historical_score_cases": [],
-                "issues": [
-                    DebateWorkflowIssue(
-                        node="retrieve_score_cases",
-                        code="score_rag_failed",
-                        message=f"å†å²è¯„åˆ† RAG æ‰§è¡Œå¤±è´¥ï¼š{exc}",
-                    )
-                ],
-            }
-
-    async def _step7_scoring(self, state: DebateState) -> dict[str, Any]:
-        try:
-            score = ComprehensiveScoreResult.model_validate(
-                await _invoke(
-                    lambda: self.services.original_pipeline.score(
-                        state["review_input"],
-                        state["synthesis"],
-                        summary_advice=state["summary_advice"],
-                        historical_cases=state.get("historical_score_cases", []),
-                    )
-                )
-            )
-            logger.info("Step 7 è¯„åˆ†å®Œæˆï¼Œæ€»åˆ†=%.1f ç­‰çº§=%s",
-                        score.total_score, score.grade)
-            return {"final_score": score}
-        except Exception as exc:
-            raise WorkflowExecutionError(f"Step 7 é€‚é…å™¨æ‰§è¡Œå¤±è´¥ï¼š{exc}") from exc
-
-    async def arun(
-        self, review_input: DebateReviewInput | dict[str, Any]
-    ) -> DebateRunResult:
-        """å¼‚æ­¥æ‰§è¡Œå®Œæ•´ Debate è¯„å®¡é“¾è·¯ã€‚"""
-
-        validated_input = DebateReviewInput.model_validate(review_input)
-        initial: DebateState = {
-            "review_input": validated_input,
-            "independent_reviews": [],
-            "external_evidence": [],
-            "debate_responses": [],
-            "historical_score_cases": [],
-            "issues": [],
-        }
-        final = await self.graph.ainvoke(initial)
-        required = {
-            "context",
-            "debate_plan",
-            "synthesis",
-            "summary_advice",
-            "final_score",
-        }
-        missing = required - set(final)
-        if missing:
-            raise WorkflowExecutionError(f"Debate å·¥ä½œæµç»“æŸæ—¶ç¼ºå°‘çŠ¶æ€ï¼š{sorted(missing)}")
-
-        return DebateRunResult(
-            context=final["context"],
-            independent_reviews=final.get("independent_reviews", []),
-            debate_plan=final["debate_plan"],
-            external_evidence=final.get("external_evidence", []),
-            debate_responses=final.get("debate_responses", []),
-            synthesis=final["synthesis"],
-            summary_advice=final.get("summary_advice"),
-            historical_score_cases=final.get("historical_score_cases", []),
-            final_score=final.get("final_score"),
-            issues=final.get("issues", []),
-        )
-
-    @classmethod
-    def _validate_review_grounding(
-        cls, review: IndependentReview, context: ReviewContext
-    ) -> None:
-        for finding in review.findings:
-            cls._validate_chapter_ids(finding.affected_chapter_ids, context)
-            cls._validate_paper_evidence(finding.evidence, context)
-
-    @classmethod
-    def _validate_response_grounding(
-        cls, response: DebateResponse, context: ReviewContext
-    ) -> None:
-        cls._validate_paper_evidence(response.evidence, context)
-        for finding in response.revised_findings:
-            cls._validate_chapter_ids(finding.affected_chapter_ids, context)
-            cls._validate_paper_evidence(finding.evidence, context)
-
-    @classmethod
-    def _validate_synthesis_grounding(
-        cls, synthesis: ReviewSynthesis, context: ReviewContext
-    ) -> None:
-        for finding in getattr(synthesis.global_review, "resolved_findings", []):
-            cls._validate_chapter_ids(finding.affected_chapter_ids, context)
-            cls._validate_paper_evidence(finding.evidence, context)
-
-    @staticmethod
-    def _validate_chapter_ids(chapter_ids: list[str], context: ReviewContext) -> None:
-        known = {chapter.chapter_id for chapter in context.chapters}
-        unknown = sorted(set(chapter_ids) - known)
-        if unknown:
-            raise ValueError(f"è¯„å®¡ç»“è®ºå¼•ç”¨äº†æœªçŸ¥ç« èŠ‚ï¼š{unknown}")
-
-    @staticmethod
-    def _validate_paper_evidence(
-        evidence_items: list[ReviewEvidence], context: ReviewContext
-    ) -> None:
-        chapters = {chapter.chapter_id: chapter for chapter in context.chapters}
-
-        def normalize(value: str) -> str:
-            return "".join(value.split()).casefold()
-
-        for evidence in evidence_items:
-            if evidence.kind.value != "paper":
-                continue
-            if not evidence.chapter_id or evidence.chapter_id not in chapters:
-                raise ValueError(
-                    f"è®ºæ–‡è¯æ® {evidence.evidence_id} å¿…é¡»å¼•ç”¨æœ‰æ•ˆ chapter_id"
-                )
-            quote = normalize(evidence.quote)
-            source = normalize(chapters[evidence.chapter_id].content)
-            if quote not in source:
-                raise ValueError(
-                    f"è®ºæ–‡è¯æ® {evidence.evidence_id} çš„å¼•æ–‡æ— æ³•åœ¨ç« èŠ‚åŸæ–‡ä¸­å®šä½"
-                )
-
-    def run(self, review_input: DebateReviewInput | dict[str, Any]) -> DebateRunResult:
-        """åŒæ­¥å…¥å£ï¼›å¼‚æ­¥åº”ç”¨è¯·è°ƒç”¨ arunã€‚"""
-
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(self.arun(review_input))
-        raise RuntimeError("æ£€æµ‹åˆ°æ­£åœ¨è¿è¡Œçš„äº‹ä»¶å¾ªç¯ï¼Œè¯·æ”¹ç”¨ await workflow.arun(...) ")
-
-
-def build_workflow(runtime: str = "demo") -> DebateWorkflow:
-    """æŒ‰è¿è¡Œæ¨¡å¼æ„é€  Debate å·¥ä½œæµã€‚
-
-    - ``demo``ï¼šç¡®å®šæ€§ Demo Agentï¼Œç”¨äºæµ‹è¯•å’Œå›å½’åŸºçº¿ï¼›
-    - ``real``ï¼šçœŸå®æ¨¡å‹é©±åŠ¨çš„ Agentï¼Œç”¨äºç”Ÿäº§è¯„å®¡ã€‚
-    """
-
-    if runtime == "real":
-        return DebateWorkflow.real()
-    if runtime == "demo":
-        return DebateWorkflow.default()
-    raise ValueError(f"æœªçŸ¥çš„ Debate è¿è¡Œæ¨¡å¼: {runtime}")
+        assert last_error is noÛ^=¶‰ËkºwµçAğ9½¹”°•‰…Ñ•]½É­™±½İ%ÍÍÕ”ğ9½¹•tè(€€€€€€€€€€€É½±”€ôÅÕ•ÍÑ¥½¸¹Ñ…É•Ñ}É½±”(€€€€€€€€€€€½İ¹}É•Ù¥•Ü€ôÉ•Ù¥•İ}‰å}É½±”¹•Ğ¡É½±”¤(€€€€€€€€€€€¥˜½İ¹}É•Ù¥•Ü¥Ì9½¹”è(€€€€€€€€€€€€€€€É•ÑÕÉ¸9½¹”°•‰…Ñ•]½É­™±½İ%ÍÍÕ” (€€€€€€€€€€€€€€€€€€€¹½‘”ô‰Ñ…É•Ñ•‘}‘•‰…Ñ”ˆ°(€€€€€€€€€€€€€€€€€€€½‘”ô‰Ñ…É•Ñ}ÍÁ•¥…±¥ÍÑ}Õ¹…Ù…¥±…‰±”ˆ°(€€€€€€€€€€€€€€€€€€€µ•ÍÍ…”õ˜‹¦^»¦Š`íÅÕ•ÍÑ¥½¸¹ÅÕ•ÍÑ¥½¹}¥‘ôƒjn»š‚MÁ•¥…±¥ÍĞƒš^ƒ–>¿R£–"w–º„ˆ°(€€€€€€€€€€€€€€€€€€€É½±”õÉ½±”°(€€€€€€€€€€€€€€€€€€€ÅÕ•ÍÑ¥½¹}¥õÅÕ•ÍÑ¥½¸¹ÅÕ•ÍÑ¥½¹}¥°(€€€€€€€€€€€€€€€€¤((€€€€€€€€€€€¥ÍÍÕ”€ô¥ÍÍÕ•}‰å}¥‘mÅÕ•ÍÑ¥½¸¹¥ÍÍÕ•}¥‘t(€€€€€€€€€€€Á••É}É•Ù¥•İÌ€ôl(€€€€€€€€€€€€€€€É•Ù¥•Ü(€€€€€€€€€€€€€€€™½ÈÉ•Ù¥•Ü¥¸ÍÑ…Ñ•l‰¥¹‘•Á•¹‘•¹Ñ}É•Ù¥•İÌ‰t(€€€€€€€€€€€€€€€¥˜É•Ù¥•Ü¹É½±”¥¸¥ÍÍÕ”¹Á…ÉÑ¥¥Á…Ñ¥¹}É½±•Ì…¹É•Ù¥•Ü¹É½±”¥Ì¹½ĞÉ½±”(€€€€€€€€€€€t(€€€€€€€€€€€…Íå¹Œİ¥Ñ Í•µ…Á¡½É”è(€€€€€€€€€€€€€€€ÑÉäè(€€€€€€€€€€€€€€€€€€€É•ÍÁ½¹Í”€ô•‰…Ñ•I•ÍÁ½¹Í”¹µ½‘•±}Ù…±¥‘…Ñ” (€€€€€€€€€€€€€€€€€€€€€€€…İ…¥Ğ}¥¹Ù½­” (€€€€€€€€€€€€€€€€€€€€€€€€€€€±…µ‰‘„èÍ•±˜¹Í•ÉÙ¥•Ì¹ÍÁ•¥…±¥ÍÑÍmÉ½±•t¹É•ÍÁ½¹ (€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ÍÑ…Ñ•l‰½¹Ñ•áĞ‰t°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€½İ¹}É•Ù¥•Üõ½İ¹}É•Ù¥•Ü°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€¥ÍÍÕ”õ¥ÍÍÕ”°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€ÅÕ•ÍÑ¥½¸õÅÕ•ÍÑ¥½¸°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€Á••É}É•Ù¥•İÌõÁ••É}É•Ù¥•İÌ°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€•áÑ•É¹…±}•Ù¥‘•¹”õÍÑ…Ñ”¹•Ğ ‰•áÑ•É¹…±}•Ù¥‘•¹”ˆ°mt¤°(€€€€€€€€€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€€€€¥˜€ (€€€€€€€€€€€€€€€€€€€€€€€É•ÍÁ½¹Í”¹É½±”¥Ì¹½ĞÉ½±”(€€€€€€€€€€€€€€€€€€€€€€€½ÈÉ•ÍÁ½¹Í”¹ÅÕ•ÍÑ¥½¹}¥€„ôÅÕ•ÍÑ¥½¸¹ÅÕ•ÍÑ¥½¹}¥(€€€€€€€€€€€€€€€€€€€€€€€½ÈÉ•ÍÁ½¹Í”¹¥ÍÍÕ•}¥€„ôÅÕ•ÍÑ¥½¸¹¥ÍÍÕ•}¥(€€€€€€€€€€€€€€€€€€€€¤è(€€€€€€€€€€€€€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È ‰•‰…Ñ•I•ÍÁ½¹Í”ƒ’â;–ºk–BG¦^»¦Šcj¢K¢&Ëš"[š‚¢¾’â7’â¢Ğˆ¤(€€€€€€€€€€€€€€€€€€€Í•±˜¹}Ù…±¥‘…Ñ•}É•ÍÁ½¹Í•}É½Õ¹‘¥¹œ¡É•ÍÁ½¹Í”°ÍÑ…Ñ•l‰½¹Ñ•áĞ‰t¤(€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¸É•ÍÁ½¹Í”°9½¹”(€€€€€€€€€€€€€€€•á•ÁĞá•ÁÑ¥½¸…Ì•áŒè(€€€€€€€€€€€€€€€€€€€É•ÑÕÉ¸9½¹”°•‰…Ñ•]½É­™±½İ%ÍÍÕ” (€€€€€€€€€€€€€€€€€€€€€€€¹½‘”ô‰Ñ…É•Ñ•‘}‘•‰…Ñ”ˆ°(€€€€€€€€€€€€€€€€€€€€€€€½‘”ô‰‘•‰…Ñ•}É•ÍÁ½¹Í•}™…¥±•ˆ°(€€€€€€€€€€€€€€€€€€€€€€€µ•ÍÍ…”õ˜‹¦^»¦Š`íÅÕ•ÍÑ¥½¸¹ÅÕ•ÍÑ¥½¹}¥‘ôƒ–n{–êS–’Ç¢Ò—¾òií•áôˆ°(€€€€€€€€€€€€€€€€€€€€€€€É½±”õÉ½±”°(€€€€€€€€€€€€€€€€€€€€€€€ÅÕ•ÍÑ¥½¹}¥õÅÕ•ÍÑ¥½¸¹ÅÕ•ÍÑ¥½¹}¥°(€€€€€€€€€€€€€€€€€€€€¤((€€€€€€€É•ÍÕ±ÑÌ€ô…İ…¥Ğ…Íå¹¥¼¹…Ñ¡•È ¨¡É•ÍÁ½¹‘}½¹”¡ÅÕ•ÍÑ¥½¸¤™½ÈÅÕ•ÍÑ¥½¸¥¸ÅÕ•ÍÑ¥½¹Ì¤¤(€€€€€€€É•ÍÁ½¹Í•Ì€ômÉ•ÍÁ½¹Í”™½ÈÉ•ÍÁ½¹Í”°|¥¸É•ÍÕ±ÑÌ¥˜É•ÍÁ½¹Í”¥Ì¹½Ğ9½¹•t(€€€€€€€¥ÍÍÕ•Ì€ôm¥ÍÍÕ”™½È|°¥ÍÍÕ”¥¸É•ÍÕ±ÑÌ¥˜¥ÍÍÕ”¥Ì¹½Ğ9½¹•t(€€€€€€€±½•È¹¥¹™¼ (€€€€€€€€€€€€‹–ºk–BD•‰…Ñ”ƒ–º3š"C¾ò3¦^»¦Š`ô•ƒ–n{–êPô•ƒ–’Ç¢Ò”ô•ˆ°(€€€€€€€€€€€±•¸¡ÅÕ•ÍÑ¥½¹Ì¤°±•¸¡É•ÍÁ½¹Í•Ì¤°±•¸¡¥ÍÍÕ•Ì¤°(€€€€€€€€¤(€€€€€€€É•ÑÕÉ¸ì‰‘•‰…Ñ•}É•ÍÁ½¹Í•ÌˆèÉ•ÍÁ½¹Í•Ì°€‰¥ÍÍÕ•Ìˆè¥ÍÍÕ•Íô((€€€…Íå¹Œ‘•˜}Íå¹Ñ¡•Í¥é•}É•Ù¥•Ü¡Í•±˜°ÍÑ…Ñ”è•‰…Ñ•MÑ…Ñ”¤€´ø‘¥ÑmÍÑÈ°¹åtè(€€€€€€€±½•È¹¥¹™¼ ‰I•Ù¥•Ü¡…¥Èƒš¶–r£îó–B#šrî#¢–ÌÍå¹Ñ¡•Í¥é•}É•Ù¥•Üˆ¤(€€€€€€€ÑÉäè(€€€€€€€€€€€Íå¹Ñ¡•Í¥Ì€ô…İ…¥ĞÍ•±˜¹}…±±}Ù…±¥‘…Ñ• (€€€€€€€€€€€€€€€±…µ‰‘„èÍ•±˜¹Í•ÉÙ¥•Ì¹É•Ù¥•İ}¡…¥È¹Íå¹Ñ¡•Í¥é” (€€€€€€€€€€€€€€€€€€€ÍÑ…Ñ•l‰½¹Ñ•áĞ‰t°(€€€€€€€€€€€€€€€€€€€É•Ù¥•İÌõÍÑ…Ñ•l‰¥¹‘•Á•¹‘•¹Ñ}É•Ù¥•İÌ‰t°(€€€€€€€€€€€€€€€€€€€‘•‰…Ñ•}Á±…¸õÍÑ…Ñ•l‰‘•‰…Ñ•}Á±…¸‰t°(€€€€€€€€€€€€€€€€€€€É•ÍÁ½¹Í•ÌõÍÑ…Ñ”¹•Ğ ‰‘•‰…Ñ•}É•ÍÁ½¹Í•Ìˆ°mt¤°(€€€€€€€€€€€€€€€€€€€•áÑ•É¹…±}•Ù¥‘•¹”õÍÑ…Ñ”¹•Ğ ‰•áÑ•É¹…±}•Ù¥‘•¹”ˆ°mt¤°(€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€€€€I•Ù¥•İMå¹Ñ¡•Í¥Ì°(€€€€€€€€€€€€¤(€€€€€€€€€€€Í•±˜¹}Ù…±¥‘…Ñ•}Íå¹Ñ¡•Í¥Í}É½Õ¹‘¥¹œ¡Íå¹Ñ¡•Í¥Ì°ÍÑ…Ñ•l‰½¹Ñ•áĞ‰t¤(€€€€€€€•á•ÁĞ5½‘•±±¥•¹ÑÉÉ½È…Ì•áŒè(€€€€€€€€€€€É…¥Í”]½É­™±½İá•ÕÑ¥½¹ÉÉ½È (€€€€€€€€€€€€€€€˜‰I•Ù¥•Ü¡…¥Èƒš¢‡–z/¢ÂR£–’Ç¢Ò—¾ò#öGîp¿¢Úš^Ø½A$ƒ¦Rg¢¾¿¾ò'¾òií•áôˆ(€€€€€€€€€€€€¤™É½´•áŒ(€€€€€€€•á•ÁĞá•ÁÑ¥½¸…Ì•áŒè(€€€€€€€€€€€É…¥Í”]½É­™±½İá•ÕÑ¥½¹ÉÉ½È (€€€€€€€€€€€€€€€˜‰I•Ù¥•Ü¡…¥Èƒjšrî#¢úO–ë’â7–B#šÎW¾òií•áôˆ(€€€€€€€€€€€€¤™É½´•áŒ(€€€€€€€±½•È¹¥¹™¼ (€€€€€€€€€€€€‹îó–B#¢–Ï–º3š"C¾ò3®ƒ¢*ô•ˆ°(€€€€€€€€€€€±•¸¡Íå¹Ñ¡•Í¥Ì¹¡…ÁÑ•É}•Ù…±Õ…Ñ¥½¸¤°(€€€€€€€€¤(€€€€€€€É•ÑÕÉ¸ì‰Íå¹Ñ¡•Í¥ÌˆèÍå¹Ñ¡•Í¥Íô((€€€…Íå¹Œ‘•˜}ÍÑ•ÀÕ}İ½É­±½…‘}•Ù…±Õ…Ñ¥½¸¡Í•±˜°ÍÑ…Ñ”è•‰…Ñ•MÑ…Ñ”¤€´ø‘¥ÑmÍÑÈ°¹åtè(€€€€€€€€ˆˆ‰IÕ¸Ñ¡”½±Á…Á•ÈµÑåÁ”µÍÁ•¥™¥ŒMÑ•À€Ô…™Ñ•È¡…¥ÈÍå¹Ñ¡•Í¥Ì¸ˆˆˆ((€€€€€€€•Ù…±Õ…Ñ½È€ôÍ•±˜¹Í•ÉÙ¥•Ì¹İ½É­±½…‘}•Ù…±Õ…Ñ½È½È•Ñ•Éµ¥¹¥ÍÑ¥1•…å]½É­±½…‘Ù…±Õ…Ñ½È ¤(€€€€€€€ÑÉäè(€€€€€€€€€€€İ½É­±½…€ô…İ…¥ĞÍ•±˜¹}…±±}Ù…±¥‘…Ñ• (€€€€€€€€€€€€€€€±…µ‰‘„è•Ù…±Õ…Ñ½È¹•Ù…±Õ…Ñ•}İ½É­±½… (€€€€€€€€€€€€€€€€€€€ÍÑ…Ñ•l‰É•Ù¥•İ}¥¹ÁÕĞ‰t°ÍÑ…Ñ•l‰Íå¹Ñ¡•Í¥Ì‰t(€€€€€€€€€€€€€€€€¤°(€€€€€€€€€€€€€€€½µÁ…Ñ¥‰±•]½É­±½…‘Ù…±Õ…Ñ¥½¸°(€€€€€€€€€€€€¤(€€€€€€€•á•ÁĞá•ÁÑ¥½¸…Ì•áŒè(€€€€€€€€€€€É…¥Í”]½É­™±½İá•ÕÑ¥½¹ÉÉ½È¡˜‰MÑ•À€Ôƒ–Ş—’ös¦?¢¾’òÃ–’Ç¢Ò—¾òií•áôˆ¤™É½´•áŒ(€€€€€€€É•ÑÕÉ¸ì(€€€€€€€€€€€€‰Íå¹Ñ¡•Í¥ÌˆèÍÑ…Ñ•l‰Íå¹Ñ¡•Í¥Ì‰t¹µ½‘•±}½Áä (€€€€€€€€€€€€€€€ÕÁ‘…Ñ”õì‰İ½É­±½…‘}•Ù…±Õ…Ñ¥½¸ˆèİ½É­±½…‘ô(€€€€€€€€€€€€¤(€€€€€€€ô((€€€‘•˜}½µÁ…Ñ¥‰¥±¥Ñå}…Ñ”¡Í•±˜°ÍÑ…Ñ”è•‰…Ñ•MÑ…Ñ”¤€´ø‘¥ÑmÍÑÈ°¹åtè(€€€€€€€€ˆˆ‹–r£¢ÂR£–:|MÑ•À€Ø¼Üƒ–&7šš~—®ƒ¢*šVÃ¦?¦†ë–ê?¦R»–J0MÑ•À€Ôƒ–¶_šº×ˆˆˆ((€€€€€€€É•Ù¥•İ…‰±”€ôl(€€€€€€€€€€€¡…ÁÑ•È™½È¡…ÁÑ•È¥¸ÍÑ…Ñ•l‰É•Ù¥•İ}¥¹ÁÕĞ‰t¹¡…ÁÑ•ÉÌ¥˜¡…ÁÑ•È¹É•Ù¥•İ…‰±”(€€€€€€€t(€€€€€€€•áÁ•Ñ•‘}­•åÌ€ôm˜‰¡…ÁÑ•É}í¥¹‘•áôˆ™½È¥¹‘•à¥¸É…¹” Ä°±•¸¡É•Ù¥•İ…‰±”¤€¬€Ä¥t(€€€€€€€…ÑÕ…±}­•åÌ€ô±¥ÍĞ¡ÍÑ…Ñ•l‰Íå¹Ñ¡•Í¥Ì‰t¹¡…ÁÑ•É}•Ù…±Õ…Ñ¥½¸¤(€€€€€€€¥˜…ÑÕ…±}­•åÌ€„ô•áÁ•Ñ•‘}­•åÌè(€€€€€€€€€€€É…¥Í”]½É­™±½İá•ÕÑ¥½¹ÉÉ½È (€€€€€€€€€€€€€€€˜‰¡…ÁÑ•É}•Ù…±Õ…Ñ¥½¸ƒ¦R»’â;–:šÖ¢/’â7–ó–ºç¾ò3šršrlí•áÁ•Ñ•‘}­•åÍ÷¾ò3–º{¦fí…ÑÕ…±}­•åÍôˆ(€€€€€€€€€€€€¤((€€€€€€€™½È­•ä°¡…ÁÑ•È¥¸é¥À¡•áÁ•Ñ•‘}­•åÌ°É•Ù¥•İ…‰±”°ÍÑÉ¥ĞõQÉÕ”¤è(€€€€€€€€€€€½ÕÑÁÕÑ}¹…µ”€ôÍÑ…Ñ•l‰Íå¹Ñ¡•Í¥Ì‰t¹¡…ÁÑ•É}•Ù…±Õ…Ñ¥½¹m­•åt¹¡…ÁÑ•É}‘…Ñ„¹¡…ÁÑ•É}¹…µ”(€€€€€€€€€€€¥˜½ÕÑÁÕÑ}¹…µ”€„ô¡…ÁÑ•È¹¡…ÁÑ•É}¹…µ”è(€€€€€€€€€€€€€€€É…¥Í”]½É­™±½İá•ÕÑ¥½¹ÉÉ½È (€€€€€€€€€€€€€€€€€€€˜‰í­•åôƒ®ƒ¢*–B7’â7’â¢Ó¾òkšršrlí¡…ÁÑ•È¹¡…ÁÑ•É}¹…µ•÷¾ò3–º{¦fí½ÕÑÁÕÑ}¹…µ•ôˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€É•ÑÕÉ¸íô((€€€…Íå¹Œ‘•˜}ÍÑ•ÀÙ}ÍÕµµ…Éå}…‘Ù¥”¡Í•±˜°ÍÑ…Ñ”è•‰…Ñ•MÑ…Ñ”¤€´ø‘¥ÑmÍÑÈ°¹åtè(€€€€€€€ÑÉäè(€€€€€€€€€€€É•ÍÕ±Ğ€ôMÕµµ…Éå‘Ù¥•I•ÍÕ±Ğ¹µ½‘•±}Ù…±¥‘…Ñ” (€€€€€€€€€€€€€€€…İ…¥Ğ}¥¹Ù½­” (€€€€€€€€€€€€€€€€€€€±…µ‰‘„èÍ•±˜¹Í•ÉÙ¥•Ì¹½É¥¥¹…±}Á¥Á•±¥¹”¹ÍÕµµ…É¥é•}…‘Ù¥” (€€€€€€€€€€€€€€€€€€€€€€€ÍÑ…Ñ•l‰É•Ù¥•İ}¥¹ÁÕĞ‰t°ÍÑ…Ñ•l‰Íå¹Ñ¡•Í¥Ì‰t(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€¤(€€€€€€€€€€€É•ÑÕÉ¸ì‰ÍÕµµ…Éå}…‘Ù¥”ˆèÉ•ÍÕ±Ñô(€€€€€€€•á•ÁĞá•ÁÑ¥½¸…Ì•áŒè(€€€€€€€€€€€É…¥Í”]½É­™±½İá•ÕÑ¥½¹ÉÉ½È¡˜‰MÑ•À€Øƒ¦¦7–f£š&Ÿ¢†3–’Ç¢Ò—¾òií•áôˆ¤™É½´•áŒ((€€€…Íå¹Œ‘•˜}É•ÑÉ¥•Ù•}Í½É•}…Í•Ì¡Í•±˜°ÍÑ…Ñ”è•‰…Ñ•MÑ…Ñ”¤€´ø‘¥ÑmÍÑÈ°¹åtè(€€€€€€€É•ÑÉ¥•Ù•È€ôÍ•±˜¹Í•ÉÙ¥•Ì¹¡¥ÍÑ½É¥…±}Í½É•}É•ÑÉ¥•Ù•È(€€€€€€€¥˜É•ÑÉ¥•Ù•È¥Ì9½¹”è(€€€€€€€€€€€É•ÑÕÉ¸ì‰¡¥ÍÑ½É¥…±}Í½É•}…Í•Ìˆèmuô((€€€€€€€±½‰…±}É•Ù¥•Ü€ôÍÑ…Ñ•l‰Íå¹Ñ¡•Í¥Ì‰t¹±½‰…±}É•Ù¥•Ü(€€€€€€€ÅÕ•Éä€ôM½É•…±¥‰É…Ñ¥½¹EÕ•Éä (€€€€€€€€€€€Á…Á•É}ÑåÁ”õÍÑ…Ñ•l‰É•Ù¥•İ}¥¹ÁÕĞ‰t¹Á…Á•É}ÑåÁ”°(€€€€€€€€€€€‘¥µ•¹Í¥½¹Ìõí¥Ñ•´¹‘¥µ•¹Í¥½¸è¥Ñ•´¹ÍÕµµ…Éä™½È¥Ñ•´¥¸±½‰…±}É•Ù¥•Ü¹‘¥µ•¹Í¥½¹Íô°(€€€€€€€€€€€Í•Ù•É•}™¥¹‘¥¹Ìõl(€€€€€€€€€€€€€€€™¥¹‘¥¹œ¹±…¥´(€€€€€€€€€€€€€€€™½È™¥¹‘¥¹œ¥¸±½‰…±}É•Ù¥•Ü¹É•Í½±Ù•‘}™¥¹‘¥¹Ì(€€€€€€€€€€€€€€€¥˜™¥¹‘¥¹œ¹Í•Ù•É¥Ñä¹Ù…±Õ”¥¸ì‰™…Ñ…°ˆ°€‰µ…©½È‰ô(€€€€€€€€€€€t°(€€€€€€€€¤(€€€€€€€ÑÉäè(€€€€€€€€€€€É…İ}…Í•Ì€ô…İ…¥Ğ}¥¹Ù½­” (€€€€€€€€€€€€€€€±…µ‰‘„èÉ•ÑÉ¥•Ù•È¹É•ÑÉ¥•Ù” (€€€€€€€€€€€€€€€€€€€ÅÕ•Éä°±¥µ¥ĞõÍ•±˜¹½¹™¥œ¹¡¥ÍÑ½É¥…±}…Í•}±¥µ¥Ğ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€¤(€€€€€€€€€€€…Í•Ì€ôm!¥ÍÑ½É¥…±M½É•…Í”¹µ½‘•±}Ù…±¥‘…Ñ”¡¥Ñ•´¤™½È¥Ñ•´¥¸É…İ}…Í•Ít(€€€€€€€€€€€…Í•Ì¹Í½ÉĞ¡­•äõ±…µ‰‘„¥Ñ•´è¥Ñ•´¹Í¥µ¥±…É¥Ñä°É•Ù•ÉÍ”õQÉÕ”¤(€€€€€€€€€€€É•ÑÕÉ¸ì‰¡¥ÍÑ½É¥…±}Í½É•}…Í•Ìˆè…Í•ÍlèÍ•±˜¹½¹™¥œ¹¡¥ÍÑ½É¥…±}…Í•}±¥µ¥Ñuô(€€€€€€€•á•ÁĞá•ÁÑ¥½¸…Ì•áŒè(€€€€€€€€€€€É•ÑÕÉ¸ì(€€€€€€€€€€€€€€€€‰¡¥ÍÑ½É¥…±}Í½É•}…Í•Ìˆèmt°(€€€€€€€€€€€€€€€€‰¥ÍÍÕ•Ìˆèl(€€€€€€€€€€€€€€€€€€€•‰…Ñ•]½É­™±½İ%ÍÍÕ” (€€€€€€€€€€€€€€€€€€€€€€€¹½‘”ô‰É•ÑÉ¥•Ù•}Í½É•}…Í•Ìˆ°(€€€€€€€€€€€€€€€€€€€€€€€½‘”ô‰Í½É•}É…}™…¥±•ˆ°(€€€€€€€€€€€€€€€€€€€€€€€µ•ÍÍ…”õ˜‹–:–>Ë¢¾–"Iƒš&Ÿ¢†3–’Ç¢Ò—¾òií•áôˆ°(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€t°(€€€€€€€€€€€ô((€€€…Íå¹Œ‘•˜}ÍÑ•Àİ}Í½É¥¹œ¡Í•±˜°ÍÑ…Ñ”è•‰…Ñ•MÑ…Ñ”¤€´ø‘¥ÑmÍÑÈ°¹åtè(€€€€€€€ÑÉäè(€€€€€€€€€€€Í½É”€ô½µÁÉ•¡•¹Í¥Ù•M½É•I•ÍÕ±Ğ¹µ½‘•±}Ù…±¥‘…Ñ” (€€€€€€€€€€€€€€€…İ…¥Ğ}¥¹Ù½­” (€€€€€€€€€€€€€€€€€€€±…µ‰‘„èÍ•±˜¹Í•ÉÙ¥•Ì¹½É¥¥¹…±}Á¥Á•±¥¹”¹Í½É” (€€€€€€€€€€€€€€€€€€€€€€€ÍÑ…Ñ•l‰É•Ù¥•İ}¥¹ÁÕĞ‰t°(€€€€€€€€€€€€€€€€€€€€€€€ÍÑ…Ñ•l‰Íå¹Ñ¡•Í¥Ì‰t°(€€€€€€€€€€€€€€€€€€€€€€€ÍÕµµ…Éå}…‘Ù¥”õÍÑ…Ñ•l‰ÍÕµµ…Éå}…‘Ù¥”‰t°(€€€€€€€€€€€€€€€€€€€€€€€¡¥ÍÑ½É¥…±}…Í•ÌõÍÑ…Ñ”¹•Ğ ‰¡¥ÍÑ½É¥…±}Í½É•}…Í•Ìˆ°mt¤°(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€¤(€€€€€€€€€€€±½•È¹¥¹™¼ ‰MÑ•À€Üƒ¢¾–"–º3š"C¾ò3šï–"ô”¸Å˜ƒ¶'êœô•Ìˆ°(€€€€€€€€€€€€€€€€€€€€€€€Í½É”¹Ñ½Ñ…±}Í½É”°Í½É”¹É…‘”¤(€€€€€€€€€€€É•ÑÕÉ¸ì‰™¥¹…±}Í½É”ˆèÍ½É•ô(€€€€€€€•á•ÁĞá•ÁÑ¥½¸…Ì•áŒè(€€€€€€€€€€€É…¥Í”]½É­™±½İá•ÕÑ¥½¹ÉÉ½È¡˜‰MÑ•À€Üƒ¦¦7–f£š&Ÿ¢†3–’Ç¢Ò—¾òií•áôˆ¤™É½´•áŒ((€€€…Íå¹Œ‘•˜…ÉÕ¸ (€€€€€€€Í•±˜°É•Ù¥•İ}¥¹ÁÕĞè•‰…Ñ•I•Ù¥•İ%¹ÁÕĞğ‘¥ÑmÍÑÈ°¹åt(€€€€¤€´ø•‰…Ñ•IÕ¹I•ÍÕ±Ğè(€€€€€€€€ˆˆ‹–òš¶—š&Ÿ¢†3–º3šVĞ•‰…Ñ”ƒ¢¾–º‡¦Nû¢Ş¿ˆˆˆ((€€€€€€€Ù…±¥‘…Ñ•‘}¥¹ÁÕĞ€ô•‰…Ñ•I•Ù¥•İ%¹ÁÕĞ¹µ½‘•±}Ù…±¥‘…Ñ”¡É•Ù¥•İ}¥¹ÁÕĞ¤(€€€€€€€¥¹¥Ñ¥…°è•‰…Ñ•MÑ…Ñ”€ôì(€€€€€€€€€€€€‰É•Ù¥•İ}¥¹ÁÕĞˆèÙ…±¥‘…Ñ•‘}¥¹ÁÕĞ°(€€€€€€€€€€€€‰¥¹‘•Á•¹‘•¹Ñ}É•Ù¥•İÌˆèmt°(€€€€€€€€€€€€‰•áÑ•É¹…±}•Ù¥‘•¹”ˆèmt°(€€€€€€€€€€€€‰‘•‰…Ñ•}É•ÍÁ½¹Í•Ìˆèmt°(€€€€€€€€€€€€‰¡¥ÍÑ½É¥…±}Í½É•}…Í•Ìˆèmt°(€€€€€€€€€€€€‰¥ÍÍÕ•Ìˆèmt°(€€€€€€€ô(€€€€€€€™¥¹…°€ô…İ…¥ĞÍ•±˜¹É…Á ¹…¥¹Ù½­”¡¥¹¥Ñ¥…°¤(€€€€€€€É•ÅÕ¥É•€ôì(€€€€€€€€€€€€‰½¹Ñ•áĞˆ°(€€€€€€€€€€€€‰‘•‰…Ñ•}Á±…¸ˆ°(€€€€€€€€€€€€‰Íå¹Ñ¡•Í¥Ìˆ°(€€€€€€€€€€€€‰ÍÕµµ…Éå}…‘Ù¥”ˆ°(€€€€€€€€€€€€‰™¥¹…±}Í½É”ˆ°(€€€€€€€ô(€€€€€€€µ¥ÍÍ¥¹œ€ôÉ•ÅÕ¥É•€´Í•Ğ¡™¥¹…°¤(€€€€€€€¥˜µ¥ÍÍ¥¹œè(€€€€€€€€€€€É…¥Í”]½É­™±½İá•ÕÑ¥½¹ÉÉ½È¡˜‰•‰…Ñ”ƒ–Ş—’ösšÖîOšvš^Ûòë–ÂG*Ûš¾òiíÍ½ÉÑ•¡µ¥ÍÍ¥¹œ¥ôˆ¤((€€€€€€€É•ÑÕÉ¸•‰…Ñ•IÕ¹I•ÍÕ±Ğ (€€€€€€€€€€€½¹Ñ•áĞõ™¥¹…±l‰½¹Ñ•áĞ‰t°(€€€€€€€€€€€¥¹‘•Á•¹‘•¹Ñ}É•Ù¥•İÌõ™¥¹…°¹•Ğ ‰¥¹‘•Á•¹‘•¹Ñ}É•Ù¥•İÌˆ°mt¤°(€€€€€€€€€€€‘•‰…Ñ•}Á±…¸õ™¥¹…±l‰‘•‰…Ñ•}Á±…¸‰t°(€€€€€€€€€€€•áÑ•É¹…±}•Ù¥‘•¹”õ™¥¹…°¹•Ğ ‰•áÑ•É¹…±}•Ù¥‘•¹”ˆ°mt¤°(€€€€€€€€€€€‘•‰…Ñ•}É•ÍÁ½¹Í•Ìõ™¥¹…°¹•Ğ ‰‘•‰…Ñ•}É•ÍÁ½¹Í•Ìˆ°mt¤°(€€€€€€€€€€€Íå¹Ñ¡•Í¥Ìõ™¥¹…±l‰Íå¹Ñ¡•Í¥Ì‰t°(€€€€€€€€€€€ÍÕµµ…Éå}…‘Ù¥”õ™¥¹…°¹•Ğ ‰ÍÕµµ…Éå}…‘Ù¥”ˆ¤°(€€€€€€€€€€€¡¥ÍÑ½É¥…±}Í½É•}…Í•Ìõ™¥¹…°¹•Ğ ‰¡¥ÍÑ½É¥…±}Í½É•}…Í•Ìˆ°mt¤°(€€€€€€€€€€€™¥¹…±}Í½É”õ™¥¹…°¹•Ğ ‰™¥¹…±}Í½É”ˆ¤°(€€€€€€€€€€€¥ÍÍÕ•Ìõ™¥¹…°¹•Ğ ‰¥ÍÍÕ•Ìˆ°mt¤°(€€€€€€€€¤((€€€±…ÍÍµ•Ñ¡½(€€€‘•˜}Ù…±¥‘…Ñ•}É•Ù¥•İ}É½Õ¹‘¥¹œ (€€€€€€€±Ì°É•Ù¥•Üè%¹‘•Á•¹‘•¹ÑI•Ù¥•Ü°½¹Ñ•áĞèI•Ù¥•İ½¹Ñ•áĞ(€€€€¤€´ø9½¹”è(€€€€€€€™½È™¥¹‘¥¹œ¥¸É•Ù¥•Ü¹™¥¹‘¥¹Ìè(€€€€€€€€€€€±Ì¹}Ù…±¥‘…Ñ•}¡…ÁÑ•É}¥‘Ì¡™¥¹‘¥¹œ¹…™™•Ñ•‘}¡…ÁÑ•É}¥‘Ì°½¹Ñ•áĞ¤(€€€€€€€€€€€±Ì¹}Ù…±¥‘…Ñ•}Á…Á•É}•Ù¥‘•¹”¡™¥¹‘¥¹œ¹•Ù¥‘•¹”°½¹Ñ•áĞ¤((€€€±…ÍÍµ•Ñ¡½(€€€‘•˜}Ù…±¥‘…Ñ•}É•ÍÁ½¹Í•}É½Õ¹‘¥¹œ (€€€€€€€±Ì°É•ÍÁ½¹Í”è•‰…Ñ•I•ÍÁ½¹Í”°½¹Ñ•áĞèI•Ù¥•İ½¹Ñ•áĞ(€€€€¤€´ø9½¹”è(€€€€€€€±Ì¹}Ù…±¥‘…Ñ•}Á…Á•É}•Ù¥‘•¹”¡É•ÍÁ½¹Í”¹•Ù¥‘•¹”°½¹Ñ•áĞ¤(€€€€€€€™½È™¥¹‘¥¹œ¥¸É•ÍÁ½¹Í”¹É•Ù¥Í•‘}™¥¹‘¥¹Ìè(€€€€€€€€€€€±Ì¹}Ù…±¥‘…Ñ•}¡…ÁÑ•É}¥‘Ì¡™¥¹‘¥¹œ¹…™™•Ñ•‘}¡…ÁÑ•É}¥‘Ì°½¹Ñ•áĞ¤(€€€€€€€€€€€±Ì¹}Ù…±¥‘…Ñ•}Á…Á•É}•Ù¥‘•¹”¡™¥¹‘¥¹œ¹•Ù¥‘•¹”°½¹Ñ•áĞ¤((€€€±…ÍÍµ•Ñ¡½(€€€‘•˜}Ù…±¥‘…Ñ•}Íå¹Ñ¡•Í¥Í}É½Õ¹‘¥¹œ (€€€€€€€±Ì°Íå¹Ñ¡•Í¥ÌèI•Ù¥•İMå¹Ñ¡•Í¥Ì°½¹Ñ•áĞèI•Ù¥•İ½¹Ñ•áĞ(€€€€¤€´ø9½¹”è(€€€€€€€™½È™¥¹‘¥¹œ¥¸•Ñ…ÑÑÈ¡Íå¹Ñ¡•Í¥Ì¹±½‰…±}É•Ù¥•Ü°€‰É•Í½±Ù•‘}™¥¹‘¥¹Ìˆ°mt¤è(€€€€€€€€€€€±Ì¹}Ù…±¥‘…Ñ•}¡…ÁÑ•É}¥‘Ì¡™¥¹‘¥¹œ¹…™™•Ñ•‘}¡…ÁÑ•É}¥‘Ì°½¹Ñ•áĞ¤(€€€€€€€€€€€±Ì¹}Ù…±¥‘…Ñ•}Á…Á•É}•Ù¥‘•¹”¡™¥¹‘¥¹œ¹•Ù¥‘•¹”°½¹Ñ•áĞ¤((€€€ÍÑ…Ñ¥µ•Ñ¡½(€€€‘•˜}Ù…±¥‘…Ñ•}¡…ÁÑ•É}¥‘Ì¡¡…ÁÑ•É}¥‘Ìè±¥ÍÑmÍÑÉt°½¹Ñ•áĞèI•Ù¥•İ½¹Ñ•áĞ¤€´ø9½¹”è(€€€€€€€­¹½İ¸€ôí¡…ÁÑ•È¹¡…ÁÑ•É}¥™½È¡…ÁÑ•È¥¸½¹Ñ•áĞ¹¡…ÁÑ•ÉÍô(€€€€€€€Õ¹­¹½İ¸€ôÍ½ÉÑ•¡Í•Ğ¡¡…ÁÑ•É}¥‘Ì¤€´­¹½İ¸¤(€€€€€€€¥˜Õ¹­¹½İ¸è(€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È¡˜‹¢¾–º‡îO¢ºë–òWR£’êšr«~—®ƒ¢*¾òiíÕ¹­¹½İ¹ôˆ¤((€€€ÍÑ…Ñ¥µ•Ñ¡½(€€€‘•˜}Ù…±¥‘…Ñ•}Á…Á•É}•Ù¥‘•¹” (€€€€€€€•Ù¥‘•¹•}¥Ñ•µÌè±¥ÍÑmI•Ù¥•İÙ¥‘•¹•t°½¹Ñ•áĞèI•Ù¥•İ½¹Ñ•áĞ(€€€€¤€´ø9½¹”è(€€€€€€€¡…ÁÑ•ÉÌ€ôí¡…ÁÑ•È¹¡…ÁÑ•É}¥è¡…ÁÑ•È™½È¡…ÁÑ•È¥¸½¹Ñ•áĞ¹¡…ÁÑ•ÉÍô(€€€€€€€‰±½­Ì€ôì(€€€€€€€€€€€‰±½¬¹‰±½­}¥è‰±½¬(€€€€€€€€€€€™½È‰±½¬¥¸€ (€€€€€€€€€€€€€€€½¹Ñ•áĞ¹ÍÑÉÕÑÕÉ•‘}‘½Õµ•¹Ğ¹‰±½­Ì(€€€€€€€€€€€€€€€¥˜½¹Ñ•áĞ¹ÍÑÉÕÑÕÉ•‘}‘½Õµ•¹Ğ¥Ì¹½Ğ9½¹”(€€€€€€€€€€€€€€€•±Í”mt(€€€€€€€€€€€€¤(€€€€€€€ô((€€€€€€€‘•˜¹½Éµ…±¥é”¡Ù…±Õ”èÍÑÈ¤€´øÍÑÈè(€€€€€€€€€€€É•ÑÕÉ¸€ˆˆ¹©½¥¸¡Ù…±Õ”¹ÍÁ±¥Ğ ¤¤¹…Í•™½± ¤((€€€€€€€™½È•Ù¥‘•¹”¥¸•Ù¥‘•¹•}¥Ñ•µÌè(€€€€€€€€€€€¥˜•Ù¥‘•¹”¹­¥¹¹Ù…±Õ”€„ô€‰Á…Á•Èˆè(€€€€€€€€€€€€€€€½¹Ñ¥¹Õ”(€€€€€€€€€€€¥˜¹½Ğ•Ù¥‘•¹”¹¡…ÁÑ•É}¥½È•Ù¥‘•¹”¹¡…ÁÑ•É}¥¹½Ğ¥¸¡…ÁÑ•ÉÌè(€€€€€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È (€€€€€€€€€€€€€€€€€€€˜‹¢ºëšZ¢¾š6¸í•Ù¥‘•¹”¹•Ù¥‘•¹•}¥‘ôƒ–ş¦†ï–òWR£šr'šV ¡…ÁÑ•É}¥ˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€ÅÕ½Ñ”€ô¹½Éµ…±¥é”¡•Ù¥‘•¹”¹ÅÕ½Ñ”¤(€€€€€€€€€€€Í½ÕÉ”€ô¹½Éµ…±¥é”¡¡…ÁÑ•ÉÍm•Ù¥‘•¹”¹¡…ÁÑ•É}¥‘t¹½¹Ñ•¹Ğ¤(€€€€€€€€€€€¥˜ÅÕ½Ñ”¹½Ğ¥¸Í½ÕÉ”è(€€€€€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È (€€€€€€€€€€€€€€€€€€€˜‹¢ºëšZ¢¾š6¸í•Ù¥‘•¹”¹•Ù¥‘•¹•}¥‘ôƒj–òWšZš^ƒšÎW–r£®ƒ¢*–:šZ’â·–ºk’ö4ˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€‰±½¬€ô‰±½­Ì¹•Ğ¡•Ù¥‘•¹”¹‰±½­}¥¤¥˜•Ù¥‘•¹”¹‰±½­}¥•±Í”9½¹”(€€€€€€€€€€€¥˜•Ù¥‘•¹”¹‰±½­}¥…¹‰±½¬¥Ì9½¹”è(€€€€€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È (€€€€€€€€€€€€€€€€€€€˜‹¢ºëšZ¢¾š6¸í•Ù¥‘•¹”¹•Ù¥‘•¹•}¥‘ôƒ–òWR£’êšr«~”‰±½­}¥ˆ(€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€¥˜‰±½¬¥Ì9½¹”…¹‰±½­Ìè(€€€€€€€€€€€€€€€µ…Ñ¡•Ì€ôl(€€€€€€€€€€€€€€€€€€€¥Ñ•´™½È¥Ñ•´¥¸‰±½­Ì¹Ù…±Õ•Ì ¤(€€€€€€€€€€€€€€€€€€€¥˜¥Ñ•´¹¡…ÁÑ•É}¥€ôô•Ù¥‘•¹”¹¡…ÁÑ•É}¥(€€€€€€€€€€€€€€€€€€€…¹¥Ñ•´¹Ñ•áĞ(€€€€€€€€€€€€€€€€€€€…¹ÅÕ½Ñ”¥¸¹½Éµ…±¥é”¡¥Ñ•´¹Ñ•áĞ¤(€€€€€€€€€€€€€€€t(€€€€€€€€€€€€€€€¥˜±•¸¡µ…Ñ¡•Ì¤€ôô€Äè(€€€€€€€€€€€€€€€€€€€‰±½¬€ôµ…Ñ¡•ÍlÁt(€€€€€€€€€€€¥˜‰±½¬¥Ì¹½Ğ9½¹”è(€€€€€€€€€€€€€€€¥˜‰±½¬¹¡…ÁÑ•É}¥€„ô•Ù¥‘•¹”¹¡…ÁÑ•É}¥è(€€€€€€€€€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È (€€€€€€€€€€€€€€€€€€€€€€€˜‹¢ºëšZ¢¾š6¸í•Ù¥‘•¹”¹•Ù¥‘•¹•}¥‘ôƒj‰±½­}¥ƒ’â8¡…ÁÑ•É}¥ƒ’â7’â¢Ğˆ(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€¥˜‰±½¬¹Ñ•áĞ…¹ÅÕ½Ñ”¹½Ğ¥¸¹½Éµ…±¥é”¡‰±½¬¹Ñ•áĞ¤è(€€€€€€€€€€€€€€€€€€€É…¥Í”Y…±Õ•ÉÉ½È (€€€€€€€€€€€€€€€€€€€€€€€˜‹¢ºëšZ¢¾š6¸í•Ù¥‘•¹”¹•Ù¥‘•¹•}¥‘ôƒj–òWšZš^ƒšÎW–r£š2–ºk––ºç–v_’â·–ºk’ö4ˆ(€€€€€€€€€€€€€€€€€€€€¤(€€€€€€€€€€€€€€€•Ù¥‘•¹”¹‰±½­}¥€ô‰±½¬¹‰±½­}¥(€€€€€€€€€€€€€€€•Ù¥‘•¹”¹¡Õ¹­}¥€ô‰±½¬¹¡Õ¹­}¥(€€€€€€€€€€€€€€€•Ù¥‘•¹”¹Á…•}¹Õµ‰•È€ô‰±½¬¹Á…•}¹Õµ‰•È(€€€€€€€€€€€€€€€•Ù¥‘•¹”¹‰‰½à€ô‰±½¬¹‰‰½à((€€€‘•˜ÉÕ¸¡Í•±˜°É•Ù¥•İ}¥¹ÁÕĞè•‰…Ñ•I•Ù¥•İ%¹ÁÕĞğ‘¥ÑmÍÑÈ°¹åt¤€´ø•‰…Ñ•IÕ¹I•ÍÕ±Ğè(€€€€€€€€ˆˆ‹–B3š¶—–—–>¾òo–òš¶—–êSR£¢¾ß¢ÂR …ÉÕ»ˆˆˆ((€€€€€€€ÑÉäè(€€€€€€€€€€€…Íå¹¥¼¹•Ñ}ÉÕ¹¹¥¹}±½½À ¤(€€€€€€€•á•ÁĞIÕ¹Ñ¥µ•ÉÉ½Èè(€€€€€€€€€€€É•ÑÕÉ¸…Íå¹¥¼¹ÉÕ¸¡Í•±˜¹…ÉÕ¸¡É•Ù¥•İ}¥¹ÁÕĞ¤¤(€€€€€€€É…¥Í”IÕ¹Ñ¥µ•ÉÉ½È ‹ššÖ/–"Ãš¶–r£¢şC¢†3j’ê/’îÛ–ú«:¿¾ò3¢¾ßšRçR …İ…¥Ğİ½É­™±½Ü¹…ÉÕ¸ ¸¸¸¤€ˆ¤(()‘•˜‰Õ¥±‘}İ½É­™±½Ü¡ÉÕ¹Ñ¥µ”èÍÑÈ€ô€‰‘•µ¼ˆ¤€´ø•‰…Ñ•]½É­™±½Üè(€€€€ˆˆ‹š2'¢şC¢†3š¢‡–ò?šz¦€•‰…Ñ”ƒ–Ş—’ösšÖ((€€€€´‘•µ½ƒ¾òk†»–ºkšœ•µ¼•¹Ó¾ò3R£’ê;šÖ/¢¾W–J3–n{–öK–~ëêÿ¾òl(€€€€´É•…±ƒ¾òkr–º{š¢‡–z/¦¦Ç–*£j•¹Ó¾ò3R£’ê;R’êŸ¢¾–º‡(€€€€ˆˆˆ((€€€¥˜ÉÕ¹Ñ¥µ”€ôô€‰É•…°ˆè(€€€€€€€É•ÑÕÉ¸•‰…Ñ•]½É­™±½Ü¹É•…° ¤(€€€¥˜ÉÕ¹Ñ¥µ”€ôô€‰‘•µ¼ˆè(€€€€€€€É•ÑÕÉ¸•‰…Ñ•]½É­™±½Ü¹‘•™…Õ±Ğ ¤(€€€É…¥Í”Y…±Õ•ÉÉ½È¡˜‹šr«~—j•‰…Ñ”ƒ¢şC¢†3š¢‡–ò<èíÉÕ¹Ñ¥µ•ôˆ¤

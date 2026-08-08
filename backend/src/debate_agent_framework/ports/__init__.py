@@ -9,6 +9,7 @@ from .interfaces import (
     ReviewChair,
     SpecialistAgent,
     SpecialistRegistry,
+    WorkloadEvaluator,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "ReviewChair",
     "SpecialistAgent",
     "SpecialistRegistry",
+    "WorkloadEvaluator",
 ]
