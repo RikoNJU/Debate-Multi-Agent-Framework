@@ -18,7 +18,7 @@ from ..schemas import (
     SpecialistRole,
 )
 from ..ports import SpecialistAgent
-from .json_client import complete_json
+from .json_client import complete_json, review_context_payload
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts" / "specialists"
 
@@ -47,7 +47,7 @@ class DebateSpecialistAgent(SpecialistAgent):
                 "DebateSpecialistAgent 需要注入 ModelClient"
             )
 
-        payload = {"context": context.model_dump(mode="json")}
+        payload = {"context": review_context_payload(context)}
         data = complete_json(
             self.model_client,
             system_prompt=self._system_prompt(),
@@ -87,7 +87,7 @@ class DebateSpecialistAgent(SpecialistAgent):
             )
 
         payload = {
-            "context": context.model_dump(mode="json"),
+            "context": review_context_payload(context),
             "own_review": own_review.model_dump(mode="json"),
             "issue": issue.model_dump(mode="json"),
             "question": question.model_dump(mode="json"),

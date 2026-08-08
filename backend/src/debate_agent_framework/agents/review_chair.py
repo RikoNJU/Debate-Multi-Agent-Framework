@@ -21,7 +21,7 @@ from ..schemas import (
     ReviewEvidence,
 )
 from .compat import assemble_review_synthesis
-from .json_client import complete_json
+from .json_client import complete_json, review_context_payload
 from ..ports import ReviewChair
 
 
@@ -58,7 +58,7 @@ class DebateReviewChairAgent(ReviewChair):
         """
 
         payload = {
-            "context": context.model_dump(mode="json"),
+            "context": review_context_payload(context),
             "independent_reviews": [
                 item.model_dump(mode="json") for item in reviews
             ],
@@ -92,7 +92,7 @@ class DebateReviewChairAgent(ReviewChair):
         """
 
         payload = {
-            "context": context.model_dump(mode="json"),
+            "context": review_context_payload(context),
             "independent_reviews": [
                 item.model_dump(mode="json") for item in reviews
             ],

@@ -50,13 +50,23 @@ class MinerUConfig:
     @classmethod
     def from_env(cls) -> "MinerUConfig":
         return cls(
-            api_base=os.getenv("DEBATE_MINERU_API_BASE", "https://mineru.net/api/v4"),
-            token=os.getenv("DEBATE_MINERU_TOKEN", ""),
-            model_version=os.getenv("DEBATE_MINERU_MODEL_VERSION", "vlm"),
-            is_ocr=_env_bool("DEBATE_MINERU_IS_OCR", False),
-            enable_table=_env_bool("DEBATE_MINERU_ENABLE_TABLE", True),
-            enable_formula=_env_bool("DEBATE_MINERU_ENABLE_FORMULA", True),
-            language=os.getenv("DEBATE_MINERU_LANGUAGE", "ch"),
+            api_base=_env_value(
+                "DEBATE_MINERU_API_BASE", "MINERU_API_BASE", default="https://mineru.net/api/v4"
+            ),
+            token=_env_value("DEBATE_MINERU_TOKEN", "MINERU_TOKEN"),
+            model_version=_env_value(
+                "DEBATE_MINERU_MODEL_VERSION", "MINERU_MODEL_VERSION", default="vlm"
+            ),
+            is_ocr=_env_bool("DEBATE_MINERU_IS_OCR", True, "MINERU_IS_OCR"),
+            enable_table=_env_bool(
+                "DEBATE_MINERU_ENABLE_TABLE", True, "MINERU_ENABLE_TABLE"
+            ),
+            enable_formula=_env_bool(
+                "DEBATE_MINERU_ENABLE_FORMULA", True, "MINERU_ENABLE_FORMULA"
+            ),
+            language=_env_value(
+                "DEBATE_MINERU_LANGUAGE", "MINERU_LANGUAGE", default="ch"
+            ),
             poll_interval_seconds=float(
                 os.getenv("DEBATE_MINERU_POLL_INTERVAL_SECONDS", "5")
             ),
@@ -247,8 +257,12 @@ class MinerUClient:
                 raise
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
+def _env_value(primary: str, legacy: str, *, default: str = "") -> str:
+    return os.getenv(primary) or os.getenv(legacy) or default
+
+
+def _env_bool(name: str, default: bool, legacy_name: str | None = None) -> bool:
+    value = os.getenv(name) or (os.getenv(legacy_name) if legacy_name else None)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}

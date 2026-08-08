@@ -30,3 +30,12 @@ class MinerUParseResponse(StrictModel):
             artifacts=result.artifacts,
             has_content_list=result.content_list_path is not None,
         )
+
+
+class PaperReviewSubmission(StrictModel):
+    task_id: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+    paper_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    chapter_count: int = Field(ge=1)
+    batch_id: str = Field(min_length=1)

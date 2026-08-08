@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from debate_agent_framework.main import create_app
+from debate_agent_framework.schemas import MinerUParseResult
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -52,3 +53,39 @@ def test_mineru_parse_endpoint_requires_server_configuration(monkeypatch) -> Non
 
     assert response.status_code == 503
     assert "DEBATE_MINERU_TOKEN" in response.json()["detail"]
+
+
+def test_pdf_review_endpoint_parses_and_creates_run(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import debate_agent_framework.routers.papers as papers_router
+
+    class FakeMinerUClient:
+        def __init__(self, config) -> None:  # type: ignore[no-untyped-def]
+            self.config = config
+
+        async def parse_pdf(self, pdf_path, *, output_root):  # type: ignore[no-untyped-def]
+            markdown_path = tmp_path / "full.md"
+            markdown_path.write_text("# 测试论文\n\n## 第一章 绪论\n论文正文。", encoding="utf-8")
+            return MinerUParseResult(
+                batch_id="batch-api",
+                markdown=markdown_path.read_text(encoding="utf-8"),
+                output_dir=str(tmp_path),
+                markdown_path=str(markdown_path),
+            )
+
+    monkeypatch.setenv("DEBATE_MINERU_TOKEN", "test-token")
+    monkeypatch.setattr(papers_router, "MinerUClient", FakeMinerUClient)
+
+    with TestClient(create_app()) as client:
+        created = client.post(
+            "/api/debate/papers/review",
+            data={"paper_type": "方法创新"},
+            files={"pdf": ("paper.pdf", b"%PDF-1.7\ntest", "application/pdf")},
+        )
+        assert created.status_code == 202
+        payload = created.json()
+        assert payload["title"] == "测试论文"
+        assert payload["chapter_count"] == 1
+
+        result = client.get(f"/api/debate/runs/{payload['task_id']}")
+        assert result.status_code == 200
+        assert result.json()["status"] == "succeeded"

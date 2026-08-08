@@ -16,13 +16,23 @@ from ..schemas import (
 from .json_client import complete_json
 
 
+SCORE_DIMENSIONS = {
+    "1": "选题契合度：符合本学科专业培养目标，达到科研和实践能力培养目的",
+    "2": "选题工作量适宜度：满足培养方案要求，工作量适当",
+    "3": "选题学术价值：符合学科发展，具有科技或应用参考价值",
+    "4": "文献检索和分析能力：能够检索、分析、综合并应用中外文献",
+    "5": "知识综合应用和研究深度：目标明确，内容具体并具有一定深度",
+    "6": "专业方法工具运用：能够运用专业方法、手段和工具开展研究",
+    "7": "专业技能和实践能力：掌握专业技能和研究方法并具备实践能力",
+    "8": "技术应用和外语能力：软件、编程或建模能力及外文摘要和文献能力",
+    "9": "创新性：问题、方法、见解或工程设计具有特色或新意",
+    "10": "论证严谨性和科学性：数据可靠、论据充分、分析深入、结论正确",
+    "11": "论文结构和语言表达：完整反映工作，结构严谨、语言通顺",
+    "12": "成果价值：具有学术价值或可运行的实物、系统及复杂原型",
+}
+
+
 def grade_for(total: float) -> str:
-    """把总分映射为等级。
-
-    demo 版本只区分“良好/一般”，这里提供更细粒度的四档，同时保持
-    81.3 → 良好 的历史行为一致。
-    """
-
     if total >= 90:
         return "优秀"
     if total >= 75:
@@ -33,14 +43,7 @@ def grade_for(total: float) -> str:
 
 
 class RealOriginalPipelineAdapter:
-    """用真实 LLM 复用原 Step 6/7 的适配器。
-
-    ``summarize_advice`` 仍是确定性聚合（把各章节建议拼接为一段汇总），因为它是纯
-    汇总操作，不需要模型参与；``score`` 则把评审事实（GlobalReview、章节评价、工作量
-    评价、修改建议、历史评分案例）交给模型，要求模型逐项给出 1-12 的十二项语义评分，
-    再由适配器确定性地由十二项均值得出总分与等级，保证分数内部自洽（total 恒等于
-    十二项均值，grade 由统一规则映射）。
-    """
+    """用真实 LLM 生成 Step 7 语义评分，确定性计算总分与等级。"""
 
     def __init__(
         self,
@@ -56,13 +59,29 @@ class RealOriginalPipelineAdapter:
         review_input: DebateReviewInput,
         synthesis: ReviewSynthesis,
     ) -> SummaryAdviceResult:
-        advice = [
-            item
-            for envelope in synthesis.chapter_evaluation.values()
-            for item in envelope.chapter_data.advice
-        ]
-        summary = "；".join(item.suggestion for item in advice) or "未发现需要修改的问题。"
-        return SummaryAdviceResult(summary=summary, advice_count=len(advice))
+        severity_order = {"fatal": 0, "major": 1, "moderate": 2, "minor": 3, "info": 4}
+        findings = sorted(
+            synthesis.global_review.resolved_findings,
+            key=lambda item: (severity_order[item.severity.value], -item.confidence),
+        )
+        chapter_names = {
+            chapter.chapter_id: chapter.chapter_name for chapter in review_input.chapters
+        }
+        selected = []
+        for finding in findings:
+            if finding.status.value in {"disputed", "insufficient"}:
+                continue
+            location = "、".join(
+                chapter_names.get(chapter_id, chapter_id)
+                for chapter_id in finding.affected_chapter_ids
+            ) or "全文"
+            selected.append(
+                f"[{location}] 针对“{finding.claim}”修改正文并补充可核验证据"
+            )
+            if len(selected) == 5:
+                break
+        summary = "；".join(selected) or "未发现需要修改的问题。"
+        return SummaryAdviceResult(summary=summary, advice_count=len(findings))
 
     def score(
         self,
@@ -73,11 +92,10 @@ class RealOriginalPipelineAdapter:
         historical_cases: Sequence[HistoricalScoreCase],
     ) -> ComprehensiveScoreResult:
         if self.model_client is None:
-            raise NotImplementedError(
-                "RealOriginalPipelineAdapter 需要注入 ModelClient"
-            )
+            raise NotImplementedError("RealOriginalPipelineAdapter 需要注入 ModelClient")
 
         payload = {
+            "score_dimensions": SCORE_DIMENSIONS,
             "review_input": {
                 "title": review_input.title,
                 "paper_type": review_input.paper_type,
@@ -95,9 +113,7 @@ class RealOriginalPipelineAdapter:
                 key: envelope.chapter_data.model_dump(mode="json")
                 for key, envelope in synthesis.chapter_evaluation.items()
             },
-            "workload_evaluation": synthesis.workload_evaluation.model_dump(
-                mode="json"
-            ),
+            "workload_evaluation": synthesis.workload_evaluation.model_dump(mode="json"),
             "summary_advice": summary_advice.model_dump(mode="json"),
             "historical_score_cases": [
                 case.model_dump(mode="json") for case in historical_cases
@@ -120,26 +136,18 @@ class RealOriginalPipelineAdapter:
     @staticmethod
     def _system_prompt() -> str:
         return (
-            "你是论文评审系统的综合评分员（原 Step 7）。"
-            "你根据已经形成的评审事实（全文评价、各维度评价、章节评价、工作量评价、"
-            "修改建议汇总）对论文打分，而不是凭空给出固定数值。"
-            "评分必须与评审中列出的问题严重程度保持一致：fatal/major 问题应在对应维度"
-            "明显扣分，strengths 多的维度可以适当加分。"
-            "输出必须严格符合调用方要求的 JSON Schema，scores 必须覆盖字符串键 "
-            "'1' 到 '12' 共十二项，每项位于 0-100。"
+            "你是论文评审系统的综合评分员（Step 7）。"
+            "只能根据输入中的评审事实评分，不能把模板分数或历史案例当作论文事实。"
+            "fatal/major 问题必须在相关维度显著扣分；证据不足的结论不得导致确定性重扣。"
+            "输出必须严格符合 JSON Schema，scores 覆盖字符串键 '1' 到 '12'，每项 0-100。"
         )
 
     @staticmethod
     def _scoring_prompt() -> str:
         return (
-            "请依据输入中的评审事实，对论文在 1 到 12 号十二个评价维度逐项给出 0-100 的"
-            "评分（scores 的键必须是字符串 '1' 到 '12'）。评分依据如下：\n"
-            "1. global_review.resolved_findings 的严重程度：fatal/major 扣分最重，"
-            "moderate 次之，minor/info 轻微扣分；\n"
-            "2. global_review.dimensions 每个维度的 strengths 加分、weaknesses 扣分；\n"
-            "3. chapter_evaluation 与 workload_evaluation 反映结构完整性与工作量；\n"
-            "4. historical_score_cases 只用于尺度校准，不要直接照抄其分数。\n"
-            "同时给出 overall_evaluation（基于 global_review.overall_summary 与 "
-            "weaknesses 概括论文整体表现）、calibration_notes（说明是否参考了历史案例）"
-            "和 confidence。"
+            "请严格按照 score_dimensions 中给出的十二项定义逐项评分。"
+            "评分依据优先级为：有原文证据的 resolved_findings、各维度评价、章节评价、"
+            "工作量评价和修改建议。historical_score_cases 只用于尺度校准，不得照抄分数。"
+            "分数必须体现维度差异，避免无依据地集中为相同分数。"
+            "同时输出 overall_evaluation、calibration_notes 和 confidence。"
         )

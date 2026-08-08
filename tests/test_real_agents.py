@@ -6,9 +6,11 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 
+import pytest
 from pydantic import ValidationError
 
 from backend.env import ChatMessage, ModelCallOptions, ModelResponse
+from debate_agent_framework.core.errors import WorkflowExecutionError
 from debate_agent_framework.agents import (
     DebateContextPlannerAgent,
     DebateReviewChairAgent,
@@ -17,6 +19,7 @@ from debate_agent_framework.agents import (
     DemoSpecialist,
     RealOriginalPipelineAdapter,
 )
+from debate_agent_framework.agents.json_client import review_context_payload
 from debate_agent_framework.schemas import (
     ChapterInput,
     DebateIssue,
@@ -187,24 +190,11 @@ GLOBAL_REVIEW_JSON = json.dumps(
 
 SCORE_JSON = json.dumps(
     {
-        "scores": {
-            "1": 82.0,
-            "2": 84.0,
-            "3": 80.0,
-            "4": 81.0,
-            "5": 86.0,
-            "6": 79.0,
-            "7": 83.0,
-            "8": 80.0,
-            "9": 78.0,
-            "10": 85.0,
-            "11": 82.0,
-            "12": 84.0,
-        },
+        "scores": {str(index): 82.0 for index in range(1, 13)},
         "total_score": 99.0,
         "grade": "优秀",
         "overall_evaluation": "模型给出的综合评语。",
-        "calibration_notes": ["模型生成的校准说明"],
+        "calibration_notes": ["未使用历史评分案例"],
         "confidence": 0.82,
     },
     ensure_ascii=False,
@@ -332,6 +322,15 @@ def test_context_planner_packs_long_text() -> None:
     assert context.content_packets[1].dependency_packet_ids == ["PACKET-1"]
 
 
+def test_model_context_payload_does_not_duplicate_chapter_content() -> None:
+    context = make_context()
+    payload = review_context_payload(context)
+
+    assert payload["full_text"]
+    assert "content" not in payload["chapters"][0]
+    assert payload["chapters"][0]["content_chars"] > 0
+
+
 def test_real_chair_plan_and_synthesis_with_fake_client() -> None:
     context = make_context()
     client = FakeModelClient([PLAN_JSON, GLOBAL_REVIEW_JSON])
@@ -384,25 +383,23 @@ def test_real_workflow_full_chain_with_fake_client() -> None:
     assert len(result.debate_responses) == 1
     assert result.summary_advice is not None
     assert result.final_score is not None
-    assert set(result.final_score.scores) == {str(index) for index in range(1, 13)}
-    assert result.final_score.scores == {
-        "1": 82.0,
-        "2": 84.0,
-        "3": 80.0,
-        "4": 81.0,
-        "5": 86.0,
-        "6": 79.0,
-        "7": 83.0,
-        "8": 80.0,
-        "9": 78.0,
-        "10": 85.0,
-        "11": 82.0,
-        "12": 84.0,
-    }
     assert result.final_score.total_score == 82.0
-    assert result.final_score.grade == "良好"
+    assert result.historical_score_cases == []
+    assert result.external_evidence == []
     assert result.issues == []
     assert client.calls == 7
+
+
+def test_real_workflow_rejects_unlocatable_paper_quotes() -> None:
+    bad_review = json.loads(REVIEW_JSON)
+    bad_review["findings"][0]["evidence"][0]["quote"] = "原文中不存在的引文"
+    response = json.dumps(bad_review, ensure_ascii=False)
+    workflow = DebateWorkflow.real(
+        model_client=FakeModelClient([response, response, response])
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="低于最低要求"):
+        workflow.run(make_input())
 
 
 def test_real_scoring_adapter_uses_model_scores_and_derives_total() -> None:

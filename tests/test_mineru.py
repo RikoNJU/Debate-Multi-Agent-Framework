@@ -118,3 +118,14 @@ def test_mineru_client_rejects_zip_slip(tmp_path: Path) -> None:
     with pytest.raises(MinerUError, match="unsafe path"):
         asyncio.run(client.parse_pdf(pdf_path, output_root=tmp_path / "output"))
     assert not (tmp_path / "escape.md").exists()
+
+
+def test_mineru_config_accepts_legacy_environment_names(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.delenv("DEBATE_MINERU_TOKEN", raising=False)
+    monkeypatch.setenv("MINERU_TOKEN", "legacy-token")
+    monkeypatch.setenv("MINERU_IS_OCR", "false")
+
+    config = MinerUConfig.from_env()
+
+    assert config.token == "legacy-token"
+    assert config.is_ocr is False

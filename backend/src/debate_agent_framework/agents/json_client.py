@@ -7,6 +7,27 @@ from typing import Any
 
 from backend.env import ChatMessage, ModelCallOptions, ModelClient
 
+from ..schemas import ReviewContext
+
+
+def review_context_payload(context: ReviewContext) -> dict[str, Any]:
+    """序列化评审上下文，避免正文同时出现在 chapters 和内容载体中。"""
+
+    payload = context.model_dump(mode="json")
+    payload["chapters"] = [
+        {
+            "chapter_id": chapter.chapter_id,
+            "chapter_name": chapter.chapter_name,
+            "stage": chapter.stage,
+            "section_titles": chapter.section_titles,
+            "reviewable": chapter.reviewable,
+            "content_chars": len(chapter.content),
+            "metadata": chapter.metadata,
+        }
+        for chapter in context.chapters
+    ]
+    return payload
+
 
 def complete_json(
     model_client: ModelClient,

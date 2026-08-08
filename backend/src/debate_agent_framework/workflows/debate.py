@@ -60,6 +60,13 @@ async def _resolve(value: T | Awaitable[T]) -> T:
     return value
 
 
+async def _invoke(call: Any) -> Any:
+    """在线程池中调用同步实现，并兼容返回 awaitable 的异步实现。"""
+
+    value = await asyncio.to_thread(call)
+    return await _resolve(value)
+
+
 class DebateWorkflow:
     """执行独立初审、一轮定向 Debate 和原流程兼容输出。"""
 
@@ -85,8 +92,8 @@ class DebateWorkflow:
     def real(cls, model_client: ModelClient | None = None) -> "DebateWorkflow":
         """构造真实模型驱动的 Debate 工作流。
 
-        Specialist、Review Chair 与 Step 6/7 评分均使用真实 LLM；Evidence RAG
-        和历史评分 RAG 仍使用 Demo 实现，等待后续替换为真实工具。
+        Specialist、Review Chair 与 Step 6/7 使用真实 LLM。未配置的外部证据
+        与历史评分服务保持为空，禁止 Demo 数据污染真实评审。
         """
 
         from ..services.historical_advice import (
@@ -102,11 +109,11 @@ class DebateWorkflow:
                     for role in SpecialistRole
                 },
                 review_chair=DebateReviewChairAgent(model_client=client),
-                evidence_retriever=DemoEvidenceRetriever(),
+                evidence_retriever=None,
                 historical_advice_retriever=(
                     build_historical_advice_retriever_from_env()
                 ),
-                historical_score_retriever=DemoHistoricalScoreRetriever(),
+                historical_score_retriever=None,
                 original_pipeline=RealOriginalPipelineAdapter(model_client=client),
             )
         )
@@ -162,11 +169,15 @@ class DebateWorkflow:
 
         review_input = state["review_input"]
         try:
-            value = retriever.retrieve(
-                review_input,
-                limit_per_chapter=self.config.historical_advice_limit_per_chapter,
-            )
-            retrieved = [RetrievedAdvice.model_validate(item) for item in await _resolve(value)]
+            retrieved = [
+                RetrievedAdvice.model_validate(item)
+                for item in await _invoke(
+                    lambda: retriever.retrieve(
+                        review_input,
+                        limit_per_chapter=self.config.historical_advice_limit_per_chapter,
+                    )
+                )
+            ]
             chapter_ids = {chapter.chapter_id for chapter in review_input.chapters}
             unknown_chapter_ids = sorted(
                 {item.chapter_id for item in retrieved} - chapter_ids
@@ -247,7 +258,7 @@ class DebateWorkflow:
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
             try:
-                value = await _resolve(call())
+                value = await _invoke(call)
                 return model.model_validate(value)
             except Exception as exc:
                 last_error = exc
@@ -264,8 +275,11 @@ class DebateWorkflow:
     async def _build_context(self, state: DebateState) -> dict[str, Any]:
         logger.info("开始构造评审上下文 build_context")
         try:
-            value = self.services.context_planner.build(state["review_input"])
-            context = ReviewContext.model_validate(await _resolve(value))
+            context = ReviewContext.model_validate(
+                await _invoke(
+                    lambda: self.services.context_planner.build(state["review_input"])
+                )
+            )
         except (ValidationError, TypeError, ValueError) as exc:
             raise WorkflowExecutionError(f"Context Planner 输出不合法：{exc}") from exc
         if context.paper_id != state["review_input"].paper_id:
@@ -281,12 +295,16 @@ class DebateWorkflow:
         ) -> tuple[IndependentReview | None, DebateWorkflowIssue | None]:
             async with semaphore:
                 try:
-                    value = self.services.specialists[role].review(state["context"])
-                    review = IndependentReview.model_validate(await _resolve(value))
+                    review = IndependentReview.model_validate(
+                        await _invoke(
+                            lambda: self.services.specialists[role].review(state["context"])
+                        )
+                    )
                     if review.role is not role:
                         raise ValueError(
                             f"注册为 {role.value} 的 Agent 返回了 {review.role.value}"
                         )
+                    self._validate_review_grounding(review, state["context"])
                     return review, None
                 except Exception as exc:  # 一个视角失败时保留其他独立意见
                     return None, DebateWorkflowIssue(
@@ -363,12 +381,13 @@ class DebateWorkflow:
             }
 
         try:
-            value = self.services.evidence_retriever.retrieve(
-                queries,
-                context=state["context"],
-                limit=self.config.evidence_limit,
+            raw_evidence = await _invoke(
+                lambda: self.services.evidence_retriever.retrieve(
+                    queries,
+                    context=state["context"],
+                    limit=self.config.evidence_limit,
+                )
             )
-            raw_evidence = await _resolve(value)
             evidence = [ReviewEvidence.model_validate(item) for item in raw_evidence]
             external = [item for item in evidence if item.kind.value == "external"]
             return {"external_evidence": external[: self.config.evidence_limit]}
@@ -417,21 +436,25 @@ class DebateWorkflow:
             ]
             async with semaphore:
                 try:
-                    value = self.services.specialists[role].respond(
-                        state["context"],
-                        own_review=own_review,
-                        issue=issue,
-                        question=question,
-                        peer_reviews=peer_reviews,
-                        external_evidence=state.get("external_evidence", []),
+                    response = DebateResponse.model_validate(
+                        await _invoke(
+                            lambda: self.services.specialists[role].respond(
+                                state["context"],
+                                own_review=own_review,
+                                issue=issue,
+                                question=question,
+                                peer_reviews=peer_reviews,
+                                external_evidence=state.get("external_evidence", []),
+                            )
+                        )
                     )
-                    response = DebateResponse.model_validate(await _resolve(value))
                     if (
                         response.role is not role
                         or response.question_id != question.question_id
                         or response.issue_id != question.issue_id
                     ):
                         raise ValueError("DebateResponse 与定向问题的角色或标识不一致")
+                    self._validate_response_grounding(response, state["context"])
                     return response, None
                 except Exception as exc:
                     return None, DebateWorkflowIssue(
@@ -464,6 +487,7 @@ class DebateWorkflow:
                 ),
                 ReviewSynthesis,
             )
+            self._validate_synthesis_grounding(synthesis, state["context"])
         except ModelClientError as exc:
             raise WorkflowExecutionError(
                 f"Review Chair 模型调用失败（网络/超时/API 错误）：{exc}"
@@ -501,27 +525,16 @@ class DebateWorkflow:
 
     async def _step6_summary_advice(self, state: DebateState) -> dict[str, Any]:
         try:
-            value = self.services.original_pipeline.summarize_advice(
-                state["review_input"], state["synthesis"]
+            result = SummaryAdviceResult.model_validate(
+                await _invoke(
+                    lambda: self.services.original_pipeline.summarize_advice(
+                        state["review_input"], state["synthesis"]
+                    )
+                )
             )
-            result = SummaryAdviceResult.model_validate(await _resolve(value))
             return {"summary_advice": result}
         except Exception as exc:
-            fallback = SummaryAdviceResult(
-                summary="Step 6 执行失败，未生成修改建议汇总。",
-                advice_count=0,
-            )
-            return {
-                "summary_advice": fallback,
-                "issues": [
-                    DebateWorkflowIssue(
-                        node="step6_summary_advice",
-                        code="step6_failed",
-                        message=f"原 Step 6 适配器执行失败：{exc}",
-                        severity=IssueSeverity.ERROR,
-                    )
-                ],
-            }
+            raise WorkflowExecutionError(f"Step 6 适配器执行失败：{exc}") from exc
 
     async def _retrieve_score_cases(self, state: DebateState) -> dict[str, Any]:
         retriever = self.services.historical_score_retriever
@@ -539,10 +552,11 @@ class DebateWorkflow:
             ],
         )
         try:
-            value = retriever.retrieve(
-                query, limit=self.config.historical_case_limit
+            raw_cases = await _invoke(
+                lambda: retriever.retrieve(
+                    query, limit=self.config.historical_case_limit
+                )
             )
-            raw_cases = await _resolve(value)
             cases = [HistoricalScoreCase.model_validate(item) for item in raw_cases]
             cases.sort(key=lambda item: item.similarity, reverse=True)
             return {"historical_score_cases": cases[: self.config.historical_case_limit]}
@@ -560,27 +574,21 @@ class DebateWorkflow:
 
     async def _step7_scoring(self, state: DebateState) -> dict[str, Any]:
         try:
-            value = self.services.original_pipeline.score(
-                state["review_input"],
-                state["synthesis"],
-                summary_advice=state["summary_advice"],
-                historical_cases=state.get("historical_score_cases", []),
+            score = ComprehensiveScoreResult.model_validate(
+                await _invoke(
+                    lambda: self.services.original_pipeline.score(
+                        state["review_input"],
+                        state["synthesis"],
+                        summary_advice=state["summary_advice"],
+                        historical_cases=state.get("historical_score_cases", []),
+                    )
+                )
             )
-            score = ComprehensiveScoreResult.model_validate(await _resolve(value))
             logger.info("Step 7 评分完成，总分=%.1f 等级=%s",
                         score.total_score, score.grade)
             return {"final_score": score}
         except Exception as exc:
-            return {
-                "issues": [
-                    DebateWorkflowIssue(
-                        node="step7_scoring",
-                        code="step7_failed",
-                        message=f"原 Step 7 适配器执行失败：{exc}",
-                        severity=IssueSeverity.ERROR,
-                    )
-                ]
-            }
+            raise WorkflowExecutionError(f"Step 7 适配器执行失败：{exc}") from exc
 
     async def arun(
         self, review_input: DebateReviewInput | dict[str, Any]
@@ -597,7 +605,13 @@ class DebateWorkflow:
             "issues": [],
         }
         final = await self.graph.ainvoke(initial)
-        required = {"context", "debate_plan", "synthesis"}
+        required = {
+            "context",
+            "debate_plan",
+            "synthesis",
+            "summary_advice",
+            "final_score",
+        }
         missing = required - set(final)
         if missing:
             raise WorkflowExecutionError(f"Debate 工作流结束时缺少状态：{sorted(missing)}")
@@ -614,6 +628,61 @@ class DebateWorkflow:
             final_score=final.get("final_score"),
             issues=final.get("issues", []),
         )
+
+    @classmethod
+    def _validate_review_grounding(
+        cls, review: IndependentReview, context: ReviewContext
+    ) -> None:
+        for finding in review.findings:
+            cls._validate_chapter_ids(finding.affected_chapter_ids, context)
+            cls._validate_paper_evidence(finding.evidence, context)
+
+    @classmethod
+    def _validate_response_grounding(
+        cls, response: DebateResponse, context: ReviewContext
+    ) -> None:
+        cls._validate_paper_evidence(response.evidence, context)
+        for finding in response.revised_findings:
+            cls._validate_chapter_ids(finding.affected_chapter_ids, context)
+            cls._validate_paper_evidence(finding.evidence, context)
+
+    @classmethod
+    def _validate_synthesis_grounding(
+        cls, synthesis: ReviewSynthesis, context: ReviewContext
+    ) -> None:
+        for finding in getattr(synthesis.global_review, "resolved_findings", []):
+            cls._validate_chapter_ids(finding.affected_chapter_ids, context)
+            cls._validate_paper_evidence(finding.evidence, context)
+
+    @staticmethod
+    def _validate_chapter_ids(chapter_ids: list[str], context: ReviewContext) -> None:
+        known = {chapter.chapter_id for chapter in context.chapters}
+        unknown = sorted(set(chapter_ids) - known)
+        if unknown:
+            raise ValueError(f"评审结论引用了未知章节：{unknown}")
+
+    @staticmethod
+    def _validate_paper_evidence(
+        evidence_items: list[ReviewEvidence], context: ReviewContext
+    ) -> None:
+        chapters = {chapter.chapter_id: chapter for chapter in context.chapters}
+
+        def normalize(value: str) -> str:
+            return "".join(value.split()).casefold()
+
+        for evidence in evidence_items:
+            if evidence.kind.value != "paper":
+                continue
+            if not evidence.chapter_id or evidence.chapter_id not in chapters:
+                raise ValueError(
+                    f"论文证据 {evidence.evidence_id} 必须引用有效 chapter_id"
+                )
+            quote = normalize(evidence.quote)
+            source = normalize(chapters[evidence.chapter_id].content)
+            if quote not in source:
+                raise ValueError(
+                    f"论文证据 {evidence.evidence_id} 的引文无法在章节原文中定位"
+                )
 
     def run(self, review_input: DebateReviewInput | dict[str, Any]) -> DebateRunResult:
         """同步入口；异步应用请调用 arun。"""
