@@ -22,6 +22,7 @@ from ..schemas import (
 from ..ports import (
     ContextPlanner,
     EvidenceRetriever,
+    HistoricalAdviceRetriever,
     HistoricalScoreRetriever,
     OriginalPipelineAdapter,
     ReviewChair,
@@ -50,6 +51,7 @@ class DebateWorkflowConfig:
     max_concurrency: int = 3
     minimum_independent_reviews: int = 2
     evidence_limit: int = 8
+    historical_advice_limit_per_chapter: int = 5
     historical_case_limit: int = 5
 
     def __post_init__(self) -> None:
@@ -59,6 +61,8 @@ class DebateWorkflowConfig:
             raise ValueError("minimum_independent_reviews 必须位于 1 到 3 之间")
         if self.evidence_limit < 1:
             raise ValueError("evidence_limit 必须至少为 1")
+        if self.historical_advice_limit_per_chapter < 1:
+            raise ValueError("historical_advice_limit_per_chapter 必须至少为 1")
         if self.historical_case_limit < 1:
             raise ValueError("historical_case_limit 必须至少为 1")
 
@@ -70,4 +74,5 @@ class DebateWorkflowServices:
     review_chair: ReviewChair
     original_pipeline: OriginalPipelineAdapter
     evidence_retriever: EvidenceRetriever | None = None
+    historical_advice_retriever: HistoricalAdviceRetriever | None = None
     historical_score_retriever: HistoricalScoreRetriever | None = None

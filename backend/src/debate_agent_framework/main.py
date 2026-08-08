@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.env.loadenv import load_env_file
 
 from .config import DebateWebSettings
-from .routers import health_router, runs_router
+from .routers import health_router, papers_router, runs_router
 
 
 load_env_file(Path(__file__).resolve().parent.parent.parent / ".env")
@@ -32,6 +32,7 @@ def create_app(settings: DebateWebSettings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     application.include_router(health_router, prefix=settings.api_prefix)
+    application.include_router(papers_router, prefix=settings.api_prefix)
     application.include_router(runs_router, prefix=settings.api_prefix)
     return application
 

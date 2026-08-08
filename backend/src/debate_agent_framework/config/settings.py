@@ -12,6 +12,7 @@ class DebateWebSettings:
     api_prefix: str = "/api/debate"
     host: str = "0.0.0.0"
     port: int = 8020
+    mineru_output_dir: str = "backend/src/debate_agent_framework/data/mineru"
     cors_origins: tuple[str, ...] = (
         "http://localhost:3001",
         "http://localhost:5174",
@@ -23,6 +24,9 @@ class DebateWebSettings:
         return cls(
             host=os.getenv("DEBATE_HOST", cls.host),
             port=int(os.getenv("DEBATE_PORT", str(cls.port))),
+            mineru_output_dir=os.getenv(
+                "DEBATE_MINERU_OUTPUT_DIR", cls.mineru_output_dir
+            ),
             cors_origins=(
                 tuple(item.strip() for item in origins.split(",") if item.strip())
                 if origins

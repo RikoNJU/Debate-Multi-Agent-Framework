@@ -1,4 +1,5 @@
 from .api import HealthResponse
+from .ingestion import MinerUParseResponse, MinerUParseResult
 from .domain import (
     ChapterAdvice,
     ChapterInput,
@@ -65,6 +66,8 @@ __all__ = [
     "HistoricalScoreCase",
     "IndependentReview",
     "IssueSeverity",
+    "MinerUParseResult",
+    "MinerUParseResponse",
     "PaperProfile",
     "PaperType",
     "ResolutionStatus",

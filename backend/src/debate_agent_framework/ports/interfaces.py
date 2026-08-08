@@ -17,6 +17,7 @@ from ..schemas import (
     ReviewContext,
     ReviewEvidence,
     ReviewSynthesis,
+    RetrievedAdvice,
     ScoreCalibrationQuery,
     SpecialistRole,
     SummaryAdviceResult,
@@ -84,6 +85,18 @@ class EvidenceRetriever(Protocol):
         context: ReviewContext,
         limit: int,
     ) -> MaybeAwaitable[Sequence[ReviewEvidence]]:
+        ...
+
+
+class HistoricalAdviceRetriever(Protocol):
+    """检索原 Step 3 的历史专家建议，不提供外部事实证据。"""
+
+    def retrieve(
+        self,
+        review_input: DebateReviewInput,
+        *,
+        limit_per_chapter: int,
+    ) -> MaybeAwaitable[Sequence[RetrievedAdvice]]:
         ...
 
 

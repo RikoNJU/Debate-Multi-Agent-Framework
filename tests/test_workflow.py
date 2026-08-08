@@ -27,6 +27,7 @@ from debate_agent_framework.schemas import (
     ReviewEvidence,
     ReviewFinding,
     ReviewSynthesis,
+    RetrievedAdvice,
     SpecialistRole,
 )
 from debate_agent_framework.workflows import (
@@ -75,6 +76,7 @@ def make_services(
     specialists: dict[SpecialistRole, DemoSpecialist] | None = None,
     chair: DemoReviewChair | None = None,
     evidence_retriever: object | None = None,
+    historical_advice_retriever: object | None = None,
     original_pipeline: DemoOriginalPipelineAdapter | None = None,
 ) -> DebateWorkflowServices:
     return DebateWorkflowServices(
@@ -87,8 +89,65 @@ def make_services(
             if evidence_retriever is not None
             else DemoEvidenceRetriever()
         ),  # type: ignore[arg-type]
+        historical_advice_retriever=historical_advice_retriever,  # type: ignore[arg-type]
         historical_score_retriever=DemoHistoricalScoreRetriever(),
         original_pipeline=original_pipeline or DemoOriginalPipelineAdapter(),
+    )
+
+
+class RecordingHistoricalAdviceRetriever:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.limit: int | None = None
+
+    def retrieve(self, review_input, *, limit_per_chapter):  # type: ignore[no-untyped-def]
+        self.limit = limit_per_chapter
+        if self.fail:
+            raise RuntimeError("vector store unavailable")
+        return [
+            {
+                "chapter_id": "C2",
+                "stage": "方法构建",
+                "suggestions": ["补充方法适用边界", "补充复杂度分析"],
+            }
+        ]
+
+
+def test_historical_advice_is_retrieved_before_context_planning() -> None:
+    retriever = RecordingHistoricalAdviceRetriever()
+    review_input = make_input().model_copy(
+        update={
+            "step3_advice": [
+                RetrievedAdvice(
+                    chapter_id="C2",
+                    stage="方法构建",
+                    suggestions=["补充方法适用边界"],
+                )
+            ]
+        }
+    )
+
+    result = DebateWorkflow(
+        make_services(historical_advice_retriever=retriever)
+    ).run(review_input)
+
+    assert retriever.limit == 5
+    assert result.context.step3_advice[0].suggestions == [
+        "补充方法适用边界",
+        "补充复杂度分析",
+    ]
+
+
+def test_historical_advice_failure_degrades_to_existing_input() -> None:
+    retriever = RecordingHistoricalAdviceRetriever(fail=True)
+
+    result = DebateWorkflow(
+        make_services(historical_advice_retriever=retriever)
+    ).run(make_input())
+
+    assert result.context.step3_advice == []
+    assert any(
+        issue.code == "historical_advice_retrieval_failed" for issue in result.issues
     )
 
 
