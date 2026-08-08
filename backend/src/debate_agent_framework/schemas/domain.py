@@ -402,6 +402,9 @@ class ComprehensiveScoreResult(StrictModel):
     overall_evaluation: str = Field(min_length=1)
     calibration_notes: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
+    legacy_raw_scores: list[float] = Field(default_factory=list)
+    legacy_level_scores: list[int] = Field(default_factory=list)
+    scoring_rule: str = "legacy_step7_v1"
 
     @model_validator(mode="after")
     def validate_original_dimensions(self) -> "ComprehensiveScoreResult":
@@ -410,6 +413,13 @@ class ComprehensiveScoreResult(StrictModel):
             raise ValueError("scores 必须包含原 Step 7 的 1 到 12 共十二项")
         if any(not 0.0 <= value <= 100.0 for value in self.scores.values()):
             raise ValueError("scores 中的每项分数必须位于 0 到 100 之间")
+        if self.legacy_raw_scores and len(self.legacy_raw_scores) != 18:
+            raise ValueError("legacy_raw_scores 必须包含 18 项")
+        if self.legacy_level_scores:
+            if len(self.legacy_level_scores) != 18:
+                raise ValueError("legacy_level_scores 必须包含 18 项")
+            if any(value not in {0, 1, 2, 3} for value in self.legacy_level_scores):
+                raise ValueError("legacy_level_scores 每项必须位于 0 到 3")
         return self
 
 

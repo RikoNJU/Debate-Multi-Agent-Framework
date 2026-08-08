@@ -14,32 +14,23 @@ from ..schemas import (
     SummaryAdviceResult,
 )
 from .json_client import complete_json
+from .legacy_scoring import calculate_legacy_score
 
 
 SCORE_DIMENSIONS = {
-    "1": "选题契合度：符合本学科专业培养目标，达到科研和实践能力培养目的",
-    "2": "选题工作量适宜度：满足培养方案要求，工作量适当",
-    "3": "选题学术价值：符合学科发展，具有科技或应用参考价值",
-    "4": "文献检索和分析能力：能够检索、分析、综合并应用中外文献",
-    "5": "知识综合应用和研究深度：目标明确，内容具体并具有一定深度",
-    "6": "专业方法工具运用：能够运用专业方法、手段和工具开展研究",
-    "7": "专业技能和实践能力：掌握专业技能和研究方法并具备实践能力",
-    "8": "技术应用和外语能力：软件、编程或建模能力及外文摘要和文献能力",
-    "9": "创新性：问题、方法、见解或工程设计具有特色或新意",
-    "10": "论证严谨性和科学性：数据可靠、论据充分、分析深入、结论正确",
-    "11": "论文结构和语言表达：完整反映工作，结构严谨、语言通顺",
-    "12": "成果价值：具有学术价值或可运行的实物、系统及复杂原型",
+    "1": "选题契合度：选题符合本学科专业培养目标，达到科学研究和实践能力培养的目的",
+    "2": "选题工作量适宜度：选题满足专业培养方案中对素质、能力和知识结构的要求，工作量适当",
+    "3": "选题学术价值：选题符合本学科专业的发展，具有一定的科技或应用参考价值",
+    "4": "文献检索和分析能力：基本掌握检索中外文献资料的方法，能够分析、综合、归纳并适当应用",
+    "5": "知识综合应用和研究深度：能够综合应用所学知识，研究目标明确、内容具体且具有一定深度",
+    "6": "专业方法工具运用：较熟练运用本专业设计或研究的方法、手段和工具开展研究",
+    "7": "专业技能和实践能力：基本掌握专业技能和研究方法，具有一定实践能力和水平",
+    "8": "技术应用和外语能力：具备软件、编程或建模分析能力，外文摘要和外文文献使用规范",
+    "9": "创新性：提出新问题、新见解，或解决问题的方法、手段、工程思路具有特色或新意",
+    "10": "论证严谨性和科学性：概念清楚、内容正确、数据可靠、论据充分、结论基本正确",
+    "11": "论文结构和语言表达：能够完整反映实际完成的工作，结构较严谨，语言通顺",
+    "12": "成果价值：论文具有一定学术价值，或设计形成实物、可运行系统及复杂原型",
 }
-
-
-def grade_for(total: float) -> str:
-    if total >= 90:
-        return "优秀"
-    if total >= 75:
-        return "良好"
-    if total >= 60:
-        return "及格"
-    return "不合格"
 
 
 class RealOriginalPipelineAdapter:
@@ -128,9 +119,16 @@ class RealOriginalPipelineAdapter:
             temperature=self.temperature,
         )
         score = ComprehensiveScoreResult.model_validate(data)
-        total = round(sum(score.scores.values()) / len(score.scores), 1)
-        score.total_score = total
-        score.grade = grade_for(total)
+        calculation = calculate_legacy_score(
+            semantic_scores=score.scores,
+            structure=synthesis.workload_evaluation.structure_evaluation,
+            references=review_input.references,
+        )
+        score.total_score = calculation.total_score
+        score.grade = calculation.grade
+        score.legacy_raw_scores = calculation.raw_scores
+        score.legacy_level_scores = calculation.level_scores
+        score.scoring_rule = "legacy_step7_v1"
         return score
 
     @staticmethod
@@ -145,9 +143,14 @@ class RealOriginalPipelineAdapter:
     @staticmethod
     def _scoring_prompt() -> str:
         return (
-            "请严格按照 score_dimensions 中给出的十二项定义逐项评分。"
-            "评分依据优先级为：有原文证据的 resolved_findings、各维度评价、章节评价、"
-            "工作量评价和修改建议。historical_score_cases 只用于尺度校准，不得照抄分数。"
-            "分数必须体现维度差异，避免无依据地集中为相同分数。"
+            "请严格按照 score_dimensions 中给出的旧项目十二项定义逐项评分。"
+            "先参考 workload_evaluation：工作量不足时，与工作量和专业能力直接相关的"
+            "评价项不得高于 80 分，但选题契合度、选题工作量适宜度、选题学术价值及"
+            "文献检索和分析能力不受这一上限影响。"
+            "重点依据有原文证据的 resolved_findings、章节评价中的不足及问题严重程度扣分。"
+            "先判断各项属于优秀、良好、一般或较差，再在档位内给出具体分数："
+            "优秀 90-100，良好 80-90，一般 60-80，较差低于 60。"
+            "不得让大部分分数相同，并避免输出 75、80、85 这三个定级边界分数。"
+            "historical_score_cases 只用于尺度校准，不得照抄分数。"
             "同时输出 overall_evaluation、calibration_notes 和 confidence。"
         )

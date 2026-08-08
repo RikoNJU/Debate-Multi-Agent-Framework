@@ -384,6 +384,9 @@ def test_real_workflow_full_chain_with_fake_client() -> None:
     assert result.summary_advice is not None
     assert result.final_score is not None
     assert result.final_score.total_score == 82.0
+    assert len(result.final_score.legacy_raw_scores) == 18
+    assert len(result.final_score.legacy_level_scores) == 18
+    assert result.final_score.scoring_rule == "legacy_step7_v1"
     assert result.historical_score_cases == []
     assert result.external_evidence == []
     assert result.issues == []
@@ -402,7 +405,7 @@ def test_real_workflow_rejects_unlocatable_paper_quotes() -> None:
         workflow.run(make_input())
 
 
-def test_real_scoring_adapter_uses_model_scores_and_derives_total() -> None:
+def test_real_scoring_adapter_uses_legacy_total_rule() -> None:
     context = make_context()
 
     async def collect_reviews() -> list[IndependentReview]:
@@ -432,6 +435,7 @@ def test_real_scoring_adapter_uses_model_scores_and_derives_total() -> None:
     assert result.scores["1"] == 82.0
     assert result.total_score == 82.0
     assert result.grade == "良好"
+    assert len(result.legacy_level_scores) == 18
     assert result.overall_evaluation == "模型给出的综合评语。"
     assert result.confidence == 0.82
     assert client.calls == 1
