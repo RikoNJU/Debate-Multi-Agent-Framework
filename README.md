@@ -91,9 +91,10 @@ python -m debate_agent_framework.cli --runtime real \
   --input examples/review_input.json --output output/result_real.json
 ```
 
-真实模式的模型调用数为 `6 + 定向问题数`：3 份独立初审、1 次争议计划、每个
-定向问题 1 次回应、1 次综合裁决和 1 次 Step 7 评分。同步模型客户端会在线程池中
-并发运行，不阻塞 Web 事件循环。
+真实模式在输入已包含 Step 1/2 结果时，模型调用数为 `6 + 定向问题数`：3 份独立
+初审、1 次争议计划、每个定向问题 1 次回应、1 次综合裁决和 1 次 Step 7 评分。
+MinerU 输入会增加 1 次 Step 2 章节分类；未提供论文类型时再增加 1 次 Step 1 分类。
+同步模型客户端会在线程池中并发运行，不阻塞 Web 事件循环。
 
 ### 复用旧 MinerU 与历史建议库
 
@@ -112,10 +113,11 @@ POST /api/debate/papers/review  解析 PDF、构建结构化论文输入并创�
 GET  /api/debate/runs/{task_id} 查询任务状态和最终结果
 ```
 
-`/papers/review` 使用 multipart 表单上传 `pdf`，并要求明确提供 `paper_type`
-（`理论研究`、`方法创新` 或 `工程实现`）；可选提供 `paper_id` 和 `title`。解析器会从
-MinerU Markdown 提取摘要、关键词、章节、小节和参考文献，未提供 `paper_id` 时根据
-正文哈希生成稳定标识。
+`/papers/review` 使用 multipart 表单上传 `pdf`。`paper_type` 为可选字段，可取
+`理论研究`、`方法创新` 或 `工程实现`；未提供时，真实模式会按旧 Step 1 标准自动分类。
+MinerU 切分出的正文会按分类结果使用旧 Step 2 的对应标签集重新分类。可选提供
+`paper_id` 和 `title`。解析器会从 MinerU Markdown 提取摘要、关键词、章节、小节和
+参考文献，未提供 `paper_id` 时根据正文哈希生成稳定标识。
 
 历史建议 RAG 可以直接读取旧项目运行时 Chroma 库：
 
@@ -140,7 +142,8 @@ user_result_format_collection_cloud_4b
 ## 当前真实工作流
 
 ```text
-历史建议 RAG -> Context Planner -> 三专家并发独立初审 -> Chair 争议计划
+Step 1 论文类型分类 -> Step 2 章节阶段分类 -> 历史建议 RAG -> Context Planner
+-> 三专家并发独立初审 -> Chair 争议计划
 -> 外部证据检索（未配置时显式降级）-> 定向 Debate -> Chair 综合裁决
 -> Step 4/5 兼容装配 -> Step 6 关键建议汇总 -> 历史评分检索（未配置时为空）
 -> Step 7 十二维评分

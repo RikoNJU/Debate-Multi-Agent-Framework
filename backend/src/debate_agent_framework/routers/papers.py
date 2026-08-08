@@ -65,7 +65,7 @@ async def parse_and_review_paper(
     request: Request,
     background_tasks: BackgroundTasks,
     pdf: UploadFile = File(...),
-    paper_type: PaperType = Form(...),
+    paper_type: PaperType | None = Form(None),
     paper_id: str | None = Form(None),
     title: str | None = Form(None),
     service: DebateWorkflowService = Depends(get_debate_workflow_service),

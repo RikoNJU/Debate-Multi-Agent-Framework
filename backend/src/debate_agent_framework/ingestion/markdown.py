@@ -43,7 +43,7 @@ class MarkdownPaperParser:
         self,
         markdown: str,
         *,
-        paper_type: PaperType,
+        paper_type: PaperType | None = None,
         paper_id: str | None = None,
         title: str | None = None,
         source_filename: str | None = None,
@@ -73,7 +73,11 @@ class MarkdownPaperParser:
         resolved_id = paper_id or "paper-" + hashlib.sha256(
             text.encode("utf-8")
         ).hexdigest()[:16]
-        metadata = {"ingestion": "mineru_markdown"}
+        metadata = {
+            "ingestion": "mineru_markdown",
+            "paper_type_source": "provided" if paper_type else "auto_pending",
+            "chapter_stage_source": "markdown_heuristic",
+        }
         if source_filename:
             metadata["source_filename"] = source_filename
         if mineru_batch_id:

@@ -7,6 +7,7 @@ from typing import Protocol, TypeAlias, TypeVar
 
 from ..schemas import (
     ComprehensiveScoreResult,
+    ChapterClassificationResult,
     DebateIssue,
     DebatePlan,
     DebateQuestion,
@@ -14,6 +15,7 @@ from ..schemas import (
     DebateReviewInput,
     HistoricalScoreCase,
     IndependentReview,
+    PaperClassificationResult,
     ReviewContext,
     ReviewEvidence,
     ReviewSynthesis,
@@ -31,6 +33,24 @@ class ContextPlanner(Protocol):
     """决定使用全文还是语义完整内容包。"""
 
     def build(self, review_input: DebateReviewInput) -> MaybeAwaitable[ReviewContext]:
+        ...
+
+
+class PaperClassifier(Protocol):
+    """复用原 Step 1 自动识别论文类型。"""
+
+    def classify_paper(
+        self, review_input: DebateReviewInput
+    ) -> MaybeAwaitable[PaperClassificationResult]:
+        ...
+
+
+class ChapterClassifier(Protocol):
+    """复用原 Step 2 按论文类型识别章节阶段。"""
+
+    def classify_chapters(
+        self, review_input: DebateReviewInput
+    ) -> MaybeAwaitable[ChapterClassificationResult]:
         ...
 
 

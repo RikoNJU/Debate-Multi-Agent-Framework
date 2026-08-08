@@ -20,11 +20,13 @@ from ..schemas import (
     SummaryAdviceResult,
 )
 from ..ports import (
+    ChapterClassifier,
     ContextPlanner,
     EvidenceRetriever,
     HistoricalAdviceRetriever,
     HistoricalScoreRetriever,
     OriginalPipelineAdapter,
+    PaperClassifier,
     ReviewChair,
     SpecialistRegistry,
 )
@@ -73,6 +75,8 @@ class DebateWorkflowServices:
     specialists: SpecialistRegistry
     review_chair: ReviewChair
     original_pipeline: OriginalPipelineAdapter
+    paper_classifier: PaperClassifier | None = None
+    chapter_classifier: ChapterClassifier | None = None
     evidence_retriever: EvidenceRetriever | None = None
     historical_advice_retriever: HistoricalAdviceRetriever | None = None
     historical_score_retriever: HistoricalScoreRetriever | None = None

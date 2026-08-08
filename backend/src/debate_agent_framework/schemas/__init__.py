@@ -3,6 +3,8 @@ from .ingestion import MinerUParseResponse, MinerUParseResult, PaperReviewSubmis
 from .domain import (
     ChapterAdvice,
     ChapterInput,
+    ChapterClassificationResult,
+    ChapterStageClassification,
     CompatibleChapterData,
     CompatibleChapterEnvelope,
     CompatibleStructureEvaluation,
@@ -25,6 +27,7 @@ from .domain import (
     IndependentReview,
     IssueSeverity,
     PaperProfile,
+    PaperClassificationResult,
     PaperType,
     ResolutionStatus,
     ResolvedFinding,
@@ -44,6 +47,8 @@ from .domain import (
 __all__ = [
     "ChapterAdvice",
     "ChapterInput",
+    "ChapterClassificationResult",
+    "ChapterStageClassification",
     "CompatibleChapterData",
     "CompatibleChapterEnvelope",
     "CompatibleStructureEvaluation",
@@ -70,6 +75,7 @@ __all__ = [
     "MinerUParseResponse",
     "PaperReviewSubmission",
     "PaperProfile",
+    "PaperClassificationResult",
     "PaperType",
     "ResolutionStatus",
     "ResolvedFinding",

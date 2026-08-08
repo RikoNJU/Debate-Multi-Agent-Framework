@@ -198,6 +198,7 @@ def chapter_type(stage: str) -> str:
         "相关工作": "related_work",
         "背景知识": "background",
         "数据来源与处理": "data_processing",
+        "数据来源与处理方式": "data_processing",
         "模型与证明": "methodology",
         "方法构建": "methodology",
         "系统设计": "methodology",

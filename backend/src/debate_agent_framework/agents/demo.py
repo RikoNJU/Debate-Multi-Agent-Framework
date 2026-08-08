@@ -80,6 +80,7 @@ class DemoContextPlanner:
             content_packets=packets,
             chapters=review_input.chapters,
             step3_advice=review_input.step3_advice,
+            metadata=review_input.metadata,
         )
 
 

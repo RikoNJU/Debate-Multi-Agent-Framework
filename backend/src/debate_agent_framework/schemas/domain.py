@@ -19,6 +19,28 @@ class PaperType(StrEnum):
     ENGINEERING = "工程实现"
 
 
+class PaperClassificationResult(StrictModel):
+    """旧 Step 1 的严格结构化输出。"""
+
+    paper_type: PaperType
+    rationale: str = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class ChapterStageClassification(StrictModel):
+    """旧 Step 2 对单个章节的分类结果。"""
+
+    chapter_id: str = Field(min_length=1)
+    chapter_name: str = Field(min_length=1)
+    stage: str = Field(min_length=1)
+
+
+class ChapterClassificationResult(StrictModel):
+    """旧 Step 2 的全文章节分类结果。"""
+
+    chapters: list[ChapterStageClassification] = Field(min_length=1)
+
+
 class SpecialistRole(StrEnum):
     SCIENTIFIC_SOUNDNESS = "scientific_soundness"
     EMPIRICAL_EVIDENCE = "empirical_evidence"
@@ -86,7 +108,7 @@ class DebateReviewInput(StrictModel):
     abstract: str = ""
     keywords: list[str] = Field(default_factory=list)
     full_text: str = Field(min_length=1)
-    paper_type: PaperType
+    paper_type: PaperType | None = None
     chapters: list[ChapterInput] = Field(min_length=1)
     step3_advice: list[RetrievedAdvice] = Field(default_factory=list)
     references: list[str] = Field(default_factory=list)
@@ -123,6 +145,7 @@ class ReviewContext(StrictModel):
     content_packets: list[ContentPacket] = Field(default_factory=list)
     chapters: list[ChapterInput] = Field(min_length=1)
     step3_advice: list[RetrievedAdvice] = Field(default_factory=list)
+    metadata: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def require_readable_content(self) -> "ReviewContext":

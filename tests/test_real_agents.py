@@ -393,6 +393,77 @@ def test_real_workflow_full_chain_with_fake_client() -> None:
     assert client.calls == 7
 
 
+def test_real_workflow_runs_legacy_step1_and_step2_before_agents() -> None:
+    step1 = json.dumps(
+        {
+            "paper_type": "方法创新",
+            "rationale": "论文提出多智能体评审方法并进行实验验证",
+            "confidence": 0.91,
+        },
+        ensure_ascii=False,
+    )
+    step2 = json.dumps(
+        {
+            "chapters": [
+                {
+                    "chapter_id": "C1",
+                    "chapter_name": "第一章 绪论",
+                    "stage": "引言/绪论",
+                },
+                {
+                    "chapter_id": "C2",
+                    "chapter_name": "第二章 方法设计",
+                    "stage": "方法构建",
+                },
+                {
+                    "chapter_id": "C3",
+                    "chapter_name": "第三章 实验验证",
+                    "stage": "实验验证",
+                },
+            ]
+        },
+        ensure_ascii=False,
+    )
+    client = FakeModelClient(
+        [
+            step1,
+            step2,
+            REVIEW_JSON,
+            REVIEW_JSON,
+            REVIEW_JSON,
+            PLAN_JSON,
+            RESPONSE_JSON,
+            GLOBAL_REVIEW_JSON,
+            SCORE_JSON,
+        ]
+    )
+    review_input = make_input().model_copy(
+        update={
+            "paper_type": None,
+            "chapters": [
+                chapter.model_copy(update={"stage": "正文"})
+                for chapter in make_input().chapters
+            ],
+            "metadata": {
+                "paper_type_source": "auto_pending",
+                "chapter_stage_source": "markdown_heuristic",
+            },
+        }
+    )
+
+    result = DebateWorkflow.real(model_client=client).run(review_input)
+
+    assert result.context.profile.paper_type is PaperType.METHOD
+    assert [chapter.stage for chapter in result.context.chapters] == [
+        "引言/绪论",
+        "方法构建",
+        "实验验证",
+    ]
+    assert result.context.metadata["paper_type_rule_version"] == "legacy_step1_v1"
+    assert result.context.metadata["chapter_stage_rule_version"] == "legacy_step2_v1"
+    assert client.calls == 9
+
+
 def test_real_workflow_rejects_unlocatable_paper_quotes() -> None:
     bad_review = json.loads(REVIEW_JSON)
     bad_review["findings"][0]["evidence"][0]["quote"] = "原文中不存在的引文"

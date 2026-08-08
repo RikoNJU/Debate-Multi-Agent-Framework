@@ -8,6 +8,12 @@ from .demo import (
     DemoSpecialist,
 )
 from .real_pipeline import RealOriginalPipelineAdapter
+from .legacy_classification import (
+    LegacyStep12ClassificationAdapter,
+    STEP1_RULE_VERSION,
+    STEP2_LABELS,
+    STEP2_RULE_VERSION,
+)
 from .review_chair import DebateReviewChairAgent
 from .specialists import DebateSpecialistAgent
 
@@ -22,4 +28,8 @@ __all__ = [
     "DemoReviewChair",
     "DemoSpecialist",
     "RealOriginalPipelineAdapter",
+    "LegacyStep12ClassificationAdapter",
+    "STEP2_LABELS",
+    "STEP1_RULE_VERSION",
+    "STEP2_RULE_VERSION",
 ]

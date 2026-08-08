@@ -16,6 +16,7 @@ from debate_agent_framework.agents import (
     DemoOriginalPipelineAdapter,
     DemoReviewChair,
     DemoSpecialist,
+    LegacyStep12ClassificationAdapter,
 )
 from debate_agent_framework.schemas import (
     ChapterInput,
@@ -78,6 +79,8 @@ def make_services(
     evidence_retriever: object | None = None,
     historical_advice_retriever: object | None = None,
     original_pipeline: DemoOriginalPipelineAdapter | None = None,
+    paper_classifier: object | None = None,
+    chapter_classifier: object | None = None,
 ) -> DebateWorkflowServices:
     return DebateWorkflowServices(
         context_planner=DemoContextPlanner(),
@@ -92,6 +95,8 @@ def make_services(
         historical_advice_retriever=historical_advice_retriever,  # type: ignore[arg-type]
         historical_score_retriever=DemoHistoricalScoreRetriever(),
         original_pipeline=original_pipeline or DemoOriginalPipelineAdapter(),
+        paper_classifier=paper_classifier,  # type: ignore[arg-type]
+        chapter_classifier=chapter_classifier,  # type: ignore[arg-type]
     )
 
 
@@ -99,9 +104,13 @@ class RecordingHistoricalAdviceRetriever:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.limit: int | None = None
+        self.paper_type: PaperType | None = None
+        self.chapter_stages: list[str] = []
 
     def retrieve(self, review_input, *, limit_per_chapter):  # type: ignore[no-untyped-def]
         self.limit = limit_per_chapter
+        self.paper_type = review_input.paper_type
+        self.chapter_stages = [chapter.stage for chapter in review_input.chapters]
         if self.fail:
             raise RuntimeError("vector store unavailable")
         return [
@@ -136,6 +145,35 @@ def test_historical_advice_is_retrieved_before_context_planning() -> None:
         "补充方法适用边界",
         "补充复杂度分析",
     ]
+
+
+def test_step1_and_step2_run_before_historical_advice() -> None:
+    retriever = RecordingHistoricalAdviceRetriever()
+    classifier = LegacyStep12ClassificationAdapter()
+    review_input = make_input().model_copy(
+        update={
+            "paper_type": None,
+            "chapters": [
+                chapter.model_copy(update={"stage": "正文"})
+                for chapter in make_input().chapters
+            ],
+            "metadata": {
+                "paper_type_source": "auto_pending",
+                "chapter_stage_source": "markdown_heuristic",
+            },
+        }
+    )
+
+    DebateWorkflow(
+        make_services(
+            historical_advice_retriever=retriever,
+            paper_classifier=classifier,
+            chapter_classifier=classifier,
+        )
+    ).run(review_input)
+
+    assert retriever.paper_type is PaperType.METHOD
+    assert retriever.chapter_stages == ["引言/绪论", "方法构建", "实验验证"]
 
 
 def test_historical_advice_failure_degrades_to_existing_input() -> None:
