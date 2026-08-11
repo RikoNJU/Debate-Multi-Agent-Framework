@@ -122,6 +122,7 @@ def test_mineru_client_rejects_zip_slip(tmp_path: Path) -> None:
 
 def test_mineru_config_accepts_legacy_environment_names(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.delenv("DEBATE_MINERU_TOKEN", raising=False)
+    monkeypatch.delenv("DEBATE_MINERU_IS_OCR", raising=False)
     monkeypatch.setenv("MINERU_TOKEN", "legacy-token")
     monkeypatch.setenv("MINERU_IS_OCR", "false")
 

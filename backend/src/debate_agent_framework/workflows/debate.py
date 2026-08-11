@@ -107,8 +107,12 @@ class DebateWorkflow:
         与历史评分服务保持为空，禁止 Demo 数据污染真实评审。
         """
 
+        from ..services.external_evidence import build_evidence_retriever_from_env
         from ..services.historical_advice import (
             build_historical_advice_retriever_from_env,
+        )
+        from ..services.historical_score import (
+            build_historical_score_retriever_from_env,
         )
 
         client = model_client or build_model_client()
@@ -123,11 +127,11 @@ class DebateWorkflow:
                     for role in SpecialistRole
                 },
                 review_chair=DebateReviewChairAgent(model_client=client),
-                evidence_retriever=None,
+                evidence_retriever=build_evidence_retriever_from_env(),
                 historical_advice_retriever=(
                     build_historical_advice_retriever_from_env()
                 ),
-                historical_score_retriever=None,
+                historical_score_retriever=build_historical_score_retriever_from_env(),
                 original_pipeline=RealOriginalPipelineAdapter(model_client=client),
                 workload_evaluator=RealLegacyWorkloadEvaluator(client),
             )
