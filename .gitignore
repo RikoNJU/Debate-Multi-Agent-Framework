@@ -1,4 +1,4 @@
-Thumbs.db
+﻿Thumbs.db
 .DS_Store
 *.tmp
 *.log
@@ -17,3 +17,13 @@ output/
 !backend/.env
 backend/src/*/data/*
 !backend/src/*/data/.gitignore
+
+# Frontend / Node runtime clutter
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+dist/
+.vite/
+coverage/
+

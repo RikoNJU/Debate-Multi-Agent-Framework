@@ -1,4 +1,4 @@
-"""Debate 论文评审 Web 应用配置。"""
+﻿"""Debate 璁烘枃璇勫 Web 搴旂敤閰嶇疆銆?""
 
 from __future__ import annotations
 
@@ -8,12 +8,13 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class DebateWebSettings:
-    app_name: str = "Debate 论文评审 Multi-Agent"
+    app_name: str = "Debate 璁烘枃璇勫 Multi-Agent"
     api_prefix: str = "/api/debate"
     host: str = "0.0.0.0"
     port: int = 8020
     mineru_output_dir: str = "backend/src/debate_agent_framework/data/mineru"
     cors_origins: tuple[str, ...] = (
+        "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:5174",
     )
@@ -33,3 +34,4 @@ class DebateWebSettings:
                 else cls.cors_origins
             ),
         )
+
