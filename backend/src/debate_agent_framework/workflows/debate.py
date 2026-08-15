@@ -395,26 +395,38 @@ class DebateWorkflow:
             role: SpecialistRole,
         ) -> tuple[IndependentReview | None, DebateWorkflowIssue | None]:
             async with semaphore:
-                try:
-                    review = IndependentReview.model_validate(
-                        await _invoke(
-                            lambda: self.services.specialists[role].review(state["context"])
+                last_error: Exception | None = None
+                for attempt in range(
+                    1, self.config.review_attempts + 1
+                ):
+                    try:
+                        review = IndependentReview.model_validate(
+                            await _invoke(
+                                lambda: self.services.specialists[role].review(state["context"])
+                            )
                         )
-                    )
-                    if review.role is not role:
-                        raise ValueError(
-                            f"注册为 {role.value} 的 Agent 返回了 {review.role.value}"
-                        )
-                    self._validate_review_grounding(review, state["context"])
-                    return review, None
-                except Exception as exc:  # 一个视角失败时保留其他独立意见
-                    return None, DebateWorkflowIssue(
-                        node="independent_review",
-                        code="specialist_review_failed",
-                        message=f"{role.value} 独立初审失败：{exc}",
-                        severity=IssueSeverity.WARNING,
-                        role=role,
-                    )
+                        if review.role is not role:
+                            raise ValueError(
+                                f"注册为 {role.value} 的 Agent 返回了 {review.role.value}"
+                            )
+                        self._validate_review_grounding(review, state["context"])
+                        return review, None
+                    except Exception as exc:  # 一个视角失败时保留其他独立意见
+                        last_error = exc
+                        if attempt < self.config.review_attempts:
+                            logger.warning(
+                                "%s 初审校验失败，重试 %d/%d：%s",
+                                role.value, attempt + 1,
+                                self.config.review_attempts, exc,
+                            )
+                assert last_error is not None
+                return None, DebateWorkflowIssue(
+                    node="independent_review",
+                    code="specialist_review_failed",
+                    message=f"{role.value} 独立初审失败：{last_error}",
+                    severity=IssueSeverity.WARNING,
+                    role=role,
+                )
 
         results = await asyncio.gather(*(run_one(role) for role in SpecialistRole))
         reviews = [review for review, _ in results if review is not None]
@@ -782,8 +794,89 @@ class DebateWorkflow:
             raise ValueError(f"评审结论引用了未知章节：{unknown}")
 
     @staticmethod
+    def _fuzzy_anchor(quote: str, content: str) -> str | None:
+        """在章节原文中寻找与引文最相似的片段并回填。
+
+        真实 LLM 形成的引文常是改写或概述，无法逐字匹配。这里用最长公共
+        片段在原文中定位锚点，把 ``quote`` 回填为可追溯的原文片段；找不到
+        足够相似的片段时返回 None，由调用方决定拒绝该条证据。
+        """
+
+        import difflib
+
+        normalize = lambda value: "".join(value.split()).casefold()  # noqa: E731
+        norm_quote = normalize(quote)
+        norm_content = normalize(content)
+        if not norm_quote or not norm_content:
+            return None
+
+        threshold = max(8, min(len(norm_quote), len(norm_content)) // 3)
+        best_match = 0
+        best_fragment: str | None = None
+
+        step = 4000
+        for start in range(0, len(content), step):
+            chunk = content[start : start + step]
+            matcher = difflib.SequenceMatcher(
+                None, norm_quote, normalize(chunk), autojunk=False
+            )
+            for block in matcher.get_matching_blocks():
+                if block.size > best_match:
+                    best_match = block.size
+                    begin = start + block.b
+                    end = begin + block.size
+                    best_fragment = content[begin:end]
+
+        if best_match < threshold or best_fragment is None:
+            return None
+        return best_fragment
+
+    @classmethod
+    def _locate_paper_evidence(
+        cls,
+        evidence: ReviewEvidence,
+        context: ReviewContext,
+    ) -> tuple[str, str] | None:
+        """把证据锚定到章节原文，返回 ``(chapter_id, normalized_quote)``。
+
+        优先使用模型给出的 chapter_id；逐字匹配失败时对候选章节做模糊锚定，
+        命中后把证据的 quote 回填为可追溯的原文片段。
+        """
+
+        def normalize(value: str) -> str:
+            return "".join(value.split()).casefold()
+
+        chapters = {chapter.chapter_id: chapter for chapter in context.chapters}
+        requested = evidence.chapter_id
+        if requested and requested in chapters:
+            candidates = [requested]
+        else:
+            candidates = list(chapters)
+
+        best: tuple[float, str, str] | None = None
+        for chapter_id in candidates:
+            content = chapters[chapter_id].content
+            quote = normalize(evidence.quote)
+            if quote in normalize(content):
+                return chapter_id, quote
+            fragment = cls._fuzzy_anchor(evidence.quote, content)
+            if fragment is None:
+                continue
+            score = len(normalize(fragment)) / max(1, len(quote))
+            if best is None or score > best[0]:
+                best = (score, chapter_id, normalize(fragment))
+        if best is None:
+            return None
+        _, chapter_id, normalized_fragment = best
+        evidence.quote = normalized_fragment
+        evidence.chapter_id = chapter_id
+        return chapter_id, normalized_fragment
+
+    @classmethod
     def _validate_paper_evidence(
-        evidence_items: list[ReviewEvidence], context: ReviewContext
+        cls,
+        evidence_items: list[ReviewEvidence],
+        context: ReviewContext,
     ) -> None:
         chapters = {chapter.chapter_id: chapter for chapter in context.chapters}
         blocks = {
@@ -801,16 +894,12 @@ class DebateWorkflow:
         for evidence in evidence_items:
             if evidence.kind.value != "paper":
                 continue
-            if not evidence.chapter_id or evidence.chapter_id not in chapters:
-                raise ValueError(
-                    f"论文证据 {evidence.evidence_id} 必须引用有效 chapter_id"
-                )
-            quote = normalize(evidence.quote)
-            source = normalize(chapters[evidence.chapter_id].content)
-            if quote not in source:
+            located = cls._locate_paper_evidence(evidence, context)
+            if located is None:
                 raise ValueError(
                     f"论文证据 {evidence.evidence_id} 的引文无法在章节原文中定位"
                 )
+            chapter_id, quote = located
             block = blocks.get(evidence.block_id) if evidence.block_id else None
             if evidence.block_id and block is None:
                 raise ValueError(
@@ -819,14 +908,14 @@ class DebateWorkflow:
             if block is None and blocks:
                 matches = [
                     item for item in blocks.values()
-                    if item.chapter_id == evidence.chapter_id
+                    if item.chapter_id == chapter_id
                     and item.text
                     and quote in normalize(item.text)
                 ]
                 if len(matches) == 1:
                     block = matches[0]
             if block is not None:
-                if block.chapter_id != evidence.chapter_id:
+                if block.chapter_id != chapter_id:
                     raise ValueError(
                         f"论文证据 {evidence.evidence_id} 的 block_id 与 chapter_id 不一致"
                     )

@@ -55,7 +55,9 @@ class DebateSpecialistAgent(SpecialistAgent):
                 "请以本角色视角独立完成论文初审，输出 IndependentReview JSON。"
                 "review_id、paper_summary、strengths、findings、author_questions 和 "
                 "confidence 由你根据论文内容生成；role 必须使用 schema 中给出的枚举。"
-                "findings 中的 evidence 引用论文原文章节，severity 为 fatal/major 的"
+                "findings 中的 evidence 必须逐字引用论文原文：每个 paper 类型的 "
+                "evidence 都要给出 chapter_id，quote 必须是该章节正文中的连续原文，"
+                "禁止改写、概述或用省略号拼接多个位置；severity 为 fatal/major 的"
                 "问题必须附带可追溯的论文证据。存在 structured_document 时，优先填写"
                 "对应的 block_id；系统将校正 chunk_id、page_number 和 bbox。"
             ),

@@ -56,12 +56,15 @@ class DebateWorkflowConfig:
     evidence_limit: int = 8
     historical_advice_limit_per_chapter: int = 5
     historical_case_limit: int = 5
+    review_attempts: int = 2
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_concurrency <= 3:
             raise ValueError("max_concurrency 必须位于 1 到 3 之间")
         if not 1 <= self.minimum_independent_reviews <= 3:
             raise ValueError("minimum_independent_reviews 必须位于 1 到 3 之间")
+        if self.review_attempts < 1:
+            raise ValueError("review_attempts 必须至少为 1")
         if self.evidence_limit < 1:
             raise ValueError("evidence_limit 必须至少为 1")
         if self.historical_advice_limit_per_chapter < 1:

@@ -122,6 +122,8 @@ class RealOriginalPipelineAdapter:
             schema=ComprehensiveScoreResult.model_json_schema(),
             temperature=self.temperature,
         )
+        data.pop("legacy_raw_scores", None)
+        data.pop("legacy_level_scores", None)
         score = ComprehensiveScoreResult.model_validate(data)
         calculation = calculate_legacy_score(
             semantic_scores=score.scores,
@@ -142,6 +144,7 @@ class RealOriginalPipelineAdapter:
             "只能根据输入中的评审事实评分，不能把模板分数或历史案例当作论文事实。"
             "fatal/major 问题必须在相关维度显著扣分；证据不足的结论不得导致确定性重扣。"
             "输出必须严格符合 JSON Schema，scores 覆盖字符串键 '1' 到 '12'，每项 0-100。"
+            "不要输出 legacy_raw_scores 和 legacy_level_scores，这两个字段由系统计算。"
         )
 
     @staticmethod

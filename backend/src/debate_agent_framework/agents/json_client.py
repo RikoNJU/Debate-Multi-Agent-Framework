@@ -11,7 +11,15 @@ from ..schemas import ReviewContext
 
 
 def review_context_payload(context: ReviewContext) -> dict[str, Any]:
-    """序列化评审上下文，避免正文同时出现在 chapters 和内容载体中。"""
+    """序列化评审上下文，避免正文同时出现在 chapters 和内容载体中。
+
+    真实 LLM 需要看到章节正文才能形成可锚定的引文，这里给每个章节附带
+    前 ``CHAPTER_EXCERPT_CHARS`` 字符的正文摘录，并把内容包截断到
+    ``PACKET_EXCERPT_CHARS`` 字符，控制总输入在模型上下文窗口内。
+    """
+
+    chapter_excerpt_chars = 800
+    packet_excerpt_chars = 2500
 
     payload = context.model_dump(mode="json")
     payload["chapters"] = [
@@ -21,11 +29,20 @@ def review_context_payload(context: ReviewContext) -> dict[str, Any]:
             "stage": chapter.stage,
             "section_titles": chapter.section_titles,
             "reviewable": chapter.reviewable,
+            "content_excerpt": chapter.content[:chapter_excerpt_chars],
             "content_chars": len(chapter.content),
             "metadata": chapter.metadata,
         }
         for chapter in context.chapters
     ]
+    if context.content_packets:
+        payload["content_packets"] = [
+            {
+                **packet.model_dump(mode="json"),
+                "content": packet.content[:packet_excerpt_chars],
+            }
+            for packet in context.content_packets
+        ]
     if context.structured_document is not None:
         document = context.structured_document
         indexed_blocks = document.blocks[:250]

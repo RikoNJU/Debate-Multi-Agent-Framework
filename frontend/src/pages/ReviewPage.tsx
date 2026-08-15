@@ -1,6 +1,6 @@
 ﻿import { ChangeEvent, DragEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowRight, Clock3, FileText, FolderOpen, LoaderCircle, Plus, Search, UploadCloud } from 'lucide-react';
+import { ArrowRight, Clock3, CircleAlert, FileText, FolderOpen, LoaderCircle, Plus, Search, UploadCloud } from 'lucide-react';
 
 import { createReviewTask, type TaskRecord } from '../lib/reviewApi';
 
@@ -40,6 +40,7 @@ export default function ReviewPage() {
   const [dragging, setDragging] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [search, setSearch] = useState('');
+  const [errorText, setErrorText] = useState<string | null>(null);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
@@ -72,6 +73,7 @@ export default function ReviewPage() {
     };
 
     setSubmitting(true);
+    setErrorText(null);
     setTasks((previous) => [draft, ...previous]);
 
     try {
@@ -88,6 +90,7 @@ export default function ReviewPage() {
       navigate(`/tasks/${submission.task_id}`);
     } catch (error) {
       console.error('创建评审任务失败', error);
+      setErrorText(error instanceof Error ? error.message : '创建评审任务失败，请稍后重试');
       setTasks((previous) =>
         previous.map((task) =>
           task.id === draft.id ? { ...task, status: 'failed' } : task,
@@ -185,6 +188,13 @@ export default function ReviewPage() {
             </div>
             <p>系统将保留每一项结论的讨论过程与外部证据来源。</p>
           </div>
+
+          {errorText && (
+            <div className="upload-error">
+              <CircleAlert size={15} />
+              <span>{errorText}</span>
+            </div>
+          )}
 
           <button className="primary-button" disabled={!file || submitting} onClick={startReview}>
             {submitting ? <LoaderCircle className="spin" /> : <Plus />}

@@ -1,4 +1,4 @@
-﻿"""Debate 璁烘枃璇勫 Web 搴旂敤閰嶇疆銆?""
+﻿"""Debate 论文评审 Web 应用配置。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class DebateWebSettings:
-    app_name: str = "Debate 璁烘枃璇勫 Multi-Agent"
+    app_name: str = "Debate 论文评审 Multi-Agent"
     api_prefix: str = "/api/debate"
     host: str = "0.0.0.0"
     port: int = 8020
@@ -34,4 +34,3 @@ class DebateWebSettings:
                 else cls.cors_origins
             ),
         )
-
