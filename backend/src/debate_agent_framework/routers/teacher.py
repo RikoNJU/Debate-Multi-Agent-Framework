@@ -1,12 +1,12 @@
 """Teacher paper-reading and human-review endpoints."""
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from ..persistence import PortalRepository
+from ..services.paper_storage import PaperPersistenceService
 from ..schemas import (
     AssignmentResponse,
     HumanReviewResponse,
@@ -14,7 +14,11 @@ from ..schemas import (
     ReviewCriterion,
 )
 from ..services.review_criteria import REVIEW_CRITERIA
-from .dependencies import get_portal_repository, require_roles
+from .dependencies import (
+    get_paper_persistence_service,
+    get_portal_repository,
+    require_roles,
+)
 
 router = APIRouter(prefix="/portal/teacher", tags=["portal-teacher"])
 teacher_or_admin = require_roles("teacher", "admin")
@@ -55,11 +59,15 @@ async def get_assignment_pdf(
     assignment_id: str,
     user: dict[str, Any] = Depends(teacher_or_admin),
     repository: PortalRepository = Depends(get_portal_repository),
+    storage: PaperPersistenceService = Depends(get_paper_persistence_service),
 ) -> FileResponse:
     value = repository.current_pdf_path(assignment_id, reviewer_id=user["id"])
     if value is None:
         raise HTTPException(status_code=404, detail="论文文件不存在")
-    path = Path(value)
+    try:
+        path = storage.resolve_stored_path(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="论文文件不存在") from exc
     if not path.is_file():
         raise HTTPException(status_code=404, detail="论文文件不存在")
     return FileResponse(path, media_type="application/pdf", filename="paper.pdf")

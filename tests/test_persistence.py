@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from sqlalchemy import inspect
 
 from debate_agent_framework.persistence import (
@@ -165,3 +166,7 @@ def test_paper_files_and_artifacts_are_archived_safely(tmp_path: Path) -> None:
     assert first_revision.revision_id != persisted.revision_id
     assert len(paper["revisions"]) == 2
     assert paper["revisions"][0]["artifact_count"] >= 5
+    stored_pdf_path = (persisted.revision_dir / "source.pdf").relative_to(data_dir)
+    assert storage.resolve_stored_path(stored_pdf_path).is_file()
+    with pytest.raises(ValueError, match="超出"):
+        storage.resolve_stored_path("../../outside.pdf")

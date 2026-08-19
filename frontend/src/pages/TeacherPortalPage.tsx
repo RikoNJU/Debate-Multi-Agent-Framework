@@ -28,6 +28,7 @@ export default function TeacherPortalPage() {
   const [search, setSearch] = useState('');
   const [message, setMessage] = useState('');
   const [pdfUrl, setPdfUrl] = useState('');
+  const [pdfMessage, setPdfMessage] = useState('请选择评审任务');
 
   const load = async () => {
     try {
@@ -50,9 +51,22 @@ export default function TeacherPortalPage() {
     setAdvice(detail.human_review?.advice_content || '');
     setComments(detail.human_review?.teacher_comments || '');
     setMessage('');
+    setPdfMessage('正在加载论文 PDF...');
     if (pdfUrl) URL.revokeObjectURL(pdfUrl);
-    const response = await fetch(portalApi.pdfUrl(item.assignment_id), { headers: { Authorization: `Bearer ${getToken()}` } });
-    setPdfUrl(response.ok ? URL.createObjectURL(await response.blob()) : '');
+    try {
+      const response = await fetch(portalApi.pdfUrl(item.assignment_id), { headers: { Authorization: `Bearer ${getToken()}` } });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        setPdfUrl('');
+        setPdfMessage(payload.detail || '论文 PDF 加载失败');
+        return;
+      }
+      setPdfUrl(URL.createObjectURL(await response.blob()));
+      setPdfMessage('');
+    } catch {
+      setPdfUrl('');
+      setPdfMessage('论文 PDF 加载失败，请检查后端服务');
+    }
   };
 
   const total = Math.round(scores.reduce((sum, score) => sum + score, 0) / 54 * 100);
@@ -87,7 +101,7 @@ export default function TeacherPortalPage() {
     </main> : <main className="teacher-review-page">
       <header><button onClick={() => setSelected(null)}><ChevronLeft size={18}/>返回任务</button><div><small>{selected.paper_id}</small><h1>{selected.title}</h1></div><div className="score-comparison"><span>AI 初评 <b>{selected.ai_score ?? '-'}</b></span><span>教师评分 <b>{total}</b></span></div></header>
       <div className="review-workbench">
-        <section className="pdf-pane">{pdfUrl ? <iframe title="论文原文" src={pdfUrl}/> : <div>论文 PDF 暂不可用</div>}</section>
+        <section className="pdf-pane">{pdfUrl ? <iframe title="论文原文" src={pdfUrl}/> : <div>{pdfMessage}</div>}</section>
         <section className="evaluation-pane">
           <div className="ai-note"><Sparkles size={17}/><div><b>多智能体评审摘要</b><p>{selected.ai_result?.synthesis?.global_review?.overall_summary || 'AI 评审尚未完成或暂无摘要。'}</p></div></div>
           <div className="criteria-head"><div><h2>人工评分</h2><p>已载入系统初评分，每项可由教师复核调整</p></div><strong>{total}<small>/100</small></strong></div>

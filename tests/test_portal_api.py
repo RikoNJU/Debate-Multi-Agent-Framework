@@ -27,7 +27,11 @@ def test_teacher_admin_portal_core_workflow(tmp_path) -> None:  # type: ignore[n
         bootstrap_admin_password="strong-admin-password",
         bootstrap_admin_display_name="测试管理员",
     )
-    pdf_path = tmp_path / "paper.pdf"
+    data_dir = tmp_path / "data"
+    pdf_path = (
+        data_dir / "papers" / "paper-portal" / "revision-portal" / "source.pdf"
+    )
+    pdf_path.parent.mkdir(parents=True)
     pdf_path.write_bytes(b"%PDF-1.7\nportal test")
     now = datetime.now(UTC)
 
@@ -51,7 +55,7 @@ def test_teacher_admin_portal_core_workflow(tmp_path) -> None:  # type: ignore[n
                     id="revision-portal",
                     paper_id="paper-portal",
                     sha256="a" * 64,
-                    pdf_path=str(pdf_path),
+                    pdf_path=pdf_path.relative_to(data_dir).as_posix(),
                     structured_input_path=str(tmp_path / "structured.json"),
                     mineru_batch_id="batch-portal",
                     parse_status="succeeded",

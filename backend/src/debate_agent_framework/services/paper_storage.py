@@ -112,6 +112,13 @@ class PaperPersistenceService:
             raise ValueError("持久化文件路径超出 DEBATE_DATA_DIR")
         return resolved.relative_to(self.data_dir).as_posix()
 
+    def resolve_stored_path(self, stored_path: str | Path) -> Path:
+        path = Path(stored_path)
+        resolved = (path if path.is_absolute() else self.data_dir / path).resolve()
+        if self.data_dir not in resolved.parents and resolved != self.data_dir:
+            raise ValueError("持久化文件路径超出 DEBATE_DATA_DIR")
+        return resolved
+
     @staticmethod
     def _artifact_type(relative_path: str) -> str:
         name = Path(relative_path).name
