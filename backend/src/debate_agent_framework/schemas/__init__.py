@@ -1,4 +1,18 @@
 from .api import HealthResponse, PaperDetailResponse, PaperRevisionSummary
+from .portal import (
+    AdminPaperResponse,
+    AssignmentCreateRequest,
+    AssignmentResponse,
+    AuditLogResponse,
+    DashboardStatistics,
+    HumanReviewResponse,
+    HumanReviewUpsert,
+    LoginRequest,
+    LoginResponse,
+    ReviewCriterion,
+    UserCreateRequest,
+    UserResponse,
+)
 from .ingestion import MinerUParseResponse, MinerUParseResult, PaperReviewSubmission
 from .domain import (
     ChapterAdvice,
@@ -52,6 +66,10 @@ from .domain import (
 
 __all__ = [
     "ChapterAdvice",
+    "AdminPaperResponse",
+    "AssignmentCreateRequest",
+    "AssignmentResponse",
+    "AuditLogResponse",
     "BoundingBox",
     "ChapterInput",
     "ChapterClassificationResult",
@@ -75,10 +93,15 @@ __all__ = [
     "FindingSeverity",
     "GlobalReview",
     "HealthResponse",
+    "DashboardStatistics",
+    "HumanReviewResponse",
+    "HumanReviewUpsert",
     "HistoricalScoreCase",
     "IndependentReview",
     "IssueSeverity",
     "MinerUParseResult",
+    "LoginRequest",
+    "LoginResponse",
     "MinerUParseResponse",
     "PaperReviewSubmission",
     "PaperDetailResponse",
@@ -92,6 +115,7 @@ __all__ = [
     "ResolvedFinding",
     "RetrievedAdvice",
     "ReviewContext",
+    "ReviewCriterion",
     "ReviewEvidence",
     "ReviewFinding",
     "ReviewSynthesis",
@@ -104,4 +128,6 @@ __all__ = [
     "StructuredBlock",
     "StructuredPaperDocument",
     "WorkloadItem",
+    "UserCreateRequest",
+    "UserResponse",
 ]

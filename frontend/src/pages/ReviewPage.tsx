@@ -1,5 +1,5 @@
 ﻿import { ChangeEvent, DragEvent, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { ArrowRight, Clock3, CircleAlert, FileText, FolderOpen, LoaderCircle, Plus, Search, UploadCloud } from 'lucide-react';
 
 import { createReviewTask, type TaskRecord } from '../lib/reviewApi';
@@ -119,7 +119,7 @@ export default function ReviewPage() {
         </div>
         <div className="topbar-right">
           <span className="status-dot" /> 系统运行正常
-          <div className="avatar">A</div>
+          <Link className="avatar" title="教师与教务工作台" to="/login">A</Link>
         </div>
       </header>
 

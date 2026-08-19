@@ -1,0 +1,25 @@
+/* Keep portal tabs independent from the sidebar navigation rules. */
+.portal-shell .portal-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0;
+}
+
+@media (max-width: 760px) {
+  .portal-shell > aside nav {
+    display: flex;
+    padding: 0;
+    margin-left: auto;
+  }
+
+  .portal-shell > aside nav > small {
+    display: none;
+  }
+
+  .portal-shell > aside nav a {
+    width: 42px;
+    padding: 0;
+    justify-content: center;
+    font-size: 0;
+  }
+}

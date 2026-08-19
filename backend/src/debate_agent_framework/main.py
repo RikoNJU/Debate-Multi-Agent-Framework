@@ -11,8 +11,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.env.loadenv import load_env_file
 
 from .config import DebateWebSettings
-from .persistence import Database, PaperRepository, SqlAlchemyRunStore
-from .routers import health_router, papers_router, runs_router
+from .persistence import Database, PaperRepository, PortalRepository, SqlAlchemyRunStore
+from .routers import (
+    admin_router,
+    auth_router,
+    health_router,
+    papers_router,
+    runs_router,
+    teacher_router,
+)
 from .services import DebateWorkflowService
 from .services.paper_storage import PaperPersistenceService
 
@@ -32,9 +39,18 @@ def create_app(settings: DebateWebSettings | None = None) -> FastAPI:
         run_store = SqlAlchemyRunStore(database)
         run_store.mark_interrupted()
         paper_repository = PaperRepository(database)
+        portal_repository = PortalRepository(
+            database, session_hours=settings.portal_session_hours
+        )
+        portal_repository.ensure_bootstrap_admin(
+            settings.bootstrap_admin_username,
+            settings.bootstrap_admin_password,
+            settings.bootstrap_admin_display_name,
+        )
         application.state.database = database
         application.state.run_store = run_store
         application.state.paper_repository = paper_repository
+        application.state.portal_repository = portal_repository
         application.state.paper_persistence_service = PaperPersistenceService(
             data_dir, paper_repository
         )
@@ -64,6 +80,9 @@ def create_app(settings: DebateWebSettings | None = None) -> FastAPI:
     application.include_router(health_router, prefix=settings.api_prefix)
     application.include_router(papers_router, prefix=settings.api_prefix)
     application.include_router(runs_router, prefix=settings.api_prefix)
+    application.include_router(auth_router, prefix=settings.api_prefix)
+    application.include_router(teacher_router, prefix=settings.api_prefix)
+    application.include_router(admin_router, prefix=settings.api_prefix)
     return application
 
 
