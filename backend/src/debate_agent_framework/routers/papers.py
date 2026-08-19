@@ -6,7 +6,7 @@ import asyncio
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, Request, UploadFile
 
 from ..ingestion import (
     InvalidPdfError,
@@ -27,7 +27,8 @@ from ..schemas import (
 from ..services import DebateWorkflowService
 from ..services.jobs import RunSnapshot
 from ..services.paper_storage import PaperPersistenceService
-from .dependencies import get_debate_workflow_service, get_paper_persistence_service
+from ..persistence import PortalRepository
+from .dependencies import get_debate_workflow_service, get_paper_persistence_service, get_portal_repository
 
 router = APIRouter(prefix="/papers", tags=["papers"])
 
@@ -79,6 +80,7 @@ async def parse_and_review_paper(
     title: str | None = Form(None),
     service: DebateWorkflowService = Depends(get_debate_workflow_service),
     persistence: PaperPersistenceService = Depends(get_paper_persistence_service),
+    portal: PortalRepository = Depends(get_portal_repository),
 ) -> PaperReviewSubmission:
     """Parse a PDF, build structured input, and enqueue the review workflow."""
 
@@ -127,6 +129,9 @@ async def parse_and_review_paper(
             paper_id=review_input.paper_id,
             revision_id=persisted.revision_id,
         )
+        access_token = portal.issue_student_access(
+            task_id=snapshot.task_id, paper_id=review_input.paper_id
+        )
         background_tasks.add_task(service.execute, snapshot.task_id, review_input)
         return PaperReviewSubmission(
             task_id=snapshot.task_id,
@@ -135,6 +140,7 @@ async def parse_and_review_paper(
             title=review_input.title,
             chapter_count=len(review_input.chapters),
             batch_id=parsed.batch_id,
+            access_token=access_token,
         )
     except InvalidPdfError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -151,7 +157,16 @@ async def parse_and_review_paper(
 
 
 @router.get("/{paper_id}", response_model=PaperDetailResponse)
-async def get_paper(request: Request, paper_id: str) -> PaperDetailResponse:
+async def get_paper(
+    request: Request,
+    paper_id: str,
+    access_token: str | None = Header(None, alias="X-Submission-Token"),
+    portal: PortalRepository = Depends(get_portal_repository),
+) -> PaperDetailResponse:
+    if not access_token:
+        raise HTTPException(status_code=401, detail="需要任务访问码")
+    if not portal.validate_student_paper_access(paper_id, access_token):
+        raise HTTPException(status_code=403, detail="任务访问码无效")
     paper = request.app.state.paper_repository.get_paper(paper_id)
     if paper is None:
         raise HTTPException(status_code=404, detail="论文不存在")
@@ -159,7 +174,16 @@ async def get_paper(request: Request, paper_id: str) -> PaperDetailResponse:
 
 
 @router.get("/{paper_id}/runs", response_model=list[RunSnapshot])
-async def list_paper_runs(request: Request, paper_id: str) -> list[RunSnapshot]:
+async def list_paper_runs(
+    request: Request,
+    paper_id: str,
+    access_token: str | None = Header(None, alias="X-Submission-Token"),
+    portal: PortalRepository = Depends(get_portal_repository),
+) -> list[RunSnapshot]:
+    if not access_token:
+        raise HTTPException(status_code=401, detail="需要任务访问码")
+    if not portal.validate_student_paper_access(paper_id, access_token):
+        raise HTTPException(status_code=403, detail="任务访问码无效")
     paper = request.app.state.paper_repository.get_paper(paper_id)
     if paper is None:
         raise HTTPException(status_code=404, detail="论文不存在")

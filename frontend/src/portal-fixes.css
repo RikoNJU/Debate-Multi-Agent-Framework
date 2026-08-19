@@ -5,6 +5,91 @@
   padding: 0;
 }
 
+.topbar .role-link {
+  margin-left: 8px;
+  padding-left: 12px;
+  border-left: 1px solid #3a4e69;
+  color: #d7e2f0;
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.topbar .role-link:hover { color: #fff; }
+
+.recover-link {
+  display: inline-block;
+  margin: -10px 0 16px;
+  color: #356ba9;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.assignment-line .publish-review {
+  height: 28px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #146c67;
+  border-radius: 4px;
+  background: #fff;
+  color: #146c67;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.access-receipt {
+  min-width: 250px;
+  max-width: 340px;
+  padding: 10px 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 10px;
+  border: 1px solid rgba(255, 255, 255, .28);
+  background: rgba(255, 255, 255, .1);
+  border-radius: 7px;
+}
+
+.access-receipt small { grid-column: 1 / -1; color: #d0dded; }
+.access-receipt code { overflow: hidden; color: #fff; text-overflow: ellipsis; white-space: nowrap; }
+.access-receipt button { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; color: #fff; cursor: pointer; }
+
+.recover-page {
+  min-height: 100vh;
+  background: #f3f6f7;
+  color: #19343a;
+}
+
+.recover-page > header {
+  height: 68px;
+  padding: 0 max(24px, calc((100% - 1080px) / 2));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #fff;
+  border-bottom: 1px solid #dbe3e5;
+}
+
+.recover-page > header a { display: inline-flex; align-items: center; gap: 6px; color: #466067; text-decoration: none; }
+.recover-page > main { width: min(480px, calc(100% - 32px)); margin: 70px auto; }
+.recover-symbol { width: 48px; height: 48px; display: grid; place-items: center; background: #dcefeb; color: #146c67; border-radius: 6px; }
+.recover-page main > small { display: block; margin-top: 20px; color: #5b7c80; font-weight: 800; letter-spacing: 1px; }
+.recover-page h1 { margin: 7px 0 10px; font-size: 30px; letter-spacing: 0; }
+.recover-page main > p, .recover-page aside { color: #65787d; font-size: 13px; line-height: 1.75; }
+.recover-page form { margin: 25px 0 18px; padding: 24px; display: grid; gap: 16px; background: #fff; border: 1px solid #d9e2e4; border-radius: 7px; }
+.recover-page form label { display: grid; gap: 7px; font-size: 12px; font-weight: 800; }
+.recover-page form input { height: 42px; padding: 0 11px; border: 1px solid #c9d5d8; border-radius: 4px; font: inherit; }
+.recover-page form button { height: 42px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 0; border-radius: 4px; background: #146c67; color: #fff; font-weight: 800; }
+.recover-page form button:disabled { opacity: .55; }
+.recover-page aside { padding: 12px 14px; border-left: 3px solid #d4a936; background: #fff9e8; }
+.form-error { color: #a3374b; font-size: 12px; }
+
+@media (max-width: 900px) {
+  .report-title { align-items: stretch; flex-wrap: wrap; gap: 16px; }
+  .access-receipt { order: 3; width: 100%; max-width: none; }
+}
+
 @media (max-width: 760px) {
   .portal-shell > aside nav {
     display: flex;

@@ -25,7 +25,7 @@ export default function TeacherPortalPage() {
       const [current, assignments, criterionList] = await Promise.all([portalApi.me(), portalApi.assignments(), portalApi.criteria()]);
       if (current.role !== 'teacher') return navigate('/admin');
       setUser(current); setItems(assignments); setCriteria(criterionList);
-    } catch { navigate('/login'); }
+    } catch { navigate('/teacher/login'); }
   };
 
   useEffect(() => { load(); }, []);

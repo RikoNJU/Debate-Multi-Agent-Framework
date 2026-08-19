@@ -87,6 +87,20 @@ class ReviewRunRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class StudentTaskAccessRecord(Base):
+    __tablename__ = "student_task_access"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("review_runs.task_id", ondelete="CASCADE"), unique=True, index=True
+    )
+    paper_id: Mapped[str | None] = mapped_column(
+        ForeignKey("papers.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class UserRecord(Base):
     __tablename__ = "users"
 
@@ -159,6 +173,12 @@ class HumanReviewRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     submitted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    published_by_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
 

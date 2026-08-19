@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+
 class PortalModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -65,6 +66,33 @@ class HumanReviewResponse(PortalModel):
     ai_task_id: str | None = None
     updated_at: datetime
     submitted_at: datetime | None = None
+    published_at: datetime | None = None
+
+
+class StudentPublishedReview(PortalModel):
+    review_id: str
+    section_scores: list[int]
+    total_score: int
+    advice_content: str
+    submitted_at: datetime | None = None
+    published_at: datetime
+
+
+class StudentTaskResponse(PortalModel):
+    task_id: str
+    status: Literal["queued", "running", "succeeded", "failed", "interrupted"]
+    created_at: datetime
+    updated_at: datetime
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    paper_id: str | None = None
+    revision_id: str | None = None
+    current_stage: str | None = None
+    published_review: StudentPublishedReview | None = None
+
+
+class RunSubmissionResponse(StudentTaskResponse):
+    access_token: str = Field(min_length=32)
 
 
 class AssignmentResponse(PortalModel):

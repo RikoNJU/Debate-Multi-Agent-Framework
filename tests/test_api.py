@@ -28,8 +28,12 @@ def test_debate_health_and_run_lifecycle() -> None:
         created = client.post("/api/debate/runs", json=load_example())
         assert created.status_code == 202
         task_id = created.json()["task_id"]
+        access_token = created.json()["access_token"]
 
-        result = client.get(f"/api/debate/runs/{task_id}")
+        result = client.get(
+            f"/api/debate/runs/{task_id}",
+            headers={"X-Submission-Token": access_token},
+        )
         assert result.status_code == 200
         assert result.json()["status"] == "succeeded"
         assert result.json()["result"]["final_score"]["total_score"] > 0
@@ -39,7 +43,11 @@ def test_api_validates_input_and_returns_not_found() -> None:
     with TestClient(create_app()) as client:
         invalid = client.post("/api/debate/runs", json={"title": "缺少字段"})
         assert invalid.status_code == 422
-        assert client.get("/api/debate/runs/not-found").status_code == 404
+        assert client.get("/api/debate/runs/not-found").status_code == 401
+        assert client.get(
+            "/api/debate/runs/not-found",
+            headers={"X-Submission-Token": "invalid-token"},
+        ).status_code == 403
 
 
 def test_mineru_parse_endpoint_requires_server_configuration(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -95,21 +103,28 @@ def test_pdf_review_endpoint_parses_and_creates_run(monkeypatch, tmp_path) -> No
         )
         assert created.status_code == 202
         payload = created.json()
+        student_headers = {"X-Submission-Token": payload["access_token"]}
         assert payload["title"] == "测试论文"
         assert payload["chapter_count"] == 1
 
-        paper = client.get(f"/api/debate/papers/{payload['paper_id']}")
+        paper = client.get(
+            f"/api/debate/papers/{payload['paper_id']}",
+            headers=student_headers,
+        )
         assert paper.status_code == 200
         assert paper.json()["current_revision_id"]
         paper_runs = client.get(
-            f"/api/debate/papers/{payload['paper_id']}/runs"
+            f"/api/debate/papers/{payload['paper_id']}/runs",
+            headers=student_headers,
         )
         assert paper_runs.status_code == 200
         assert any(
             item["task_id"] == payload["task_id"] for item in paper_runs.json()
         )
 
-        result = client.get(f"/api/debate/runs/{payload['task_id']}")
+        result = client.get(
+            f"/api/debate/runs/{payload['task_id']}", headers=student_headers
+        )
         assert result.status_code == 200
         assert result.json()["status"] == "succeeded"
         structured = result.json()["result"]["context"]["structured_document"]
@@ -150,7 +165,11 @@ def test_pdf_review_endpoint_auto_classifies_without_paper_type(
             files={"pdf": ("paper.pdf", b"%PDF-1.7\ntest", "application/pdf")},
         )
         assert created.status_code == 202
-        result = client.get(f"/api/debate/runs/{created.json()['task_id']}").json()
+        payload = created.json()
+        result = client.get(
+            f"/api/debate/runs/{payload['task_id']}",
+            headers={"X-Submission-Token": payload["access_token"]},
+        ).json()
 
     assert result["status"] == "succeeded"
     assert result["result"]["context"]["profile"]["paper_type"] == "方法创新"

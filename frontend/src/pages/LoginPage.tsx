@@ -2,9 +2,9 @@ import { FormEvent, useState } from 'react';
 import { ArrowRight, LockKeyhole, UserRound } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
-import { login } from '../lib/portalApi';
+import { login, portalApi } from '../lib/portalApi';
 
-export default function LoginPage() {
+export default function LoginPage({ expectedRole }: { expectedRole: 'teacher' | 'admin' }) {
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -17,7 +17,11 @@ export default function LoginPage() {
     setError('');
     try {
       const user = await login(username.trim(), password);
-      navigate(user.role === 'admin' ? '/admin' : '/teacher');
+      if (user.role !== expectedRole) {
+        await portalApi.logout();
+        throw new Error(expectedRole === 'teacher' ? '该账号不是教师账号' : '该账号不是教务管理员账号');
+      }
+      navigate(expectedRole === 'admin' ? '/admin' : '/teacher');
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : '登录失败');
     } finally {
@@ -37,7 +41,7 @@ export default function LoginPage() {
       </main>
       <section>
         <form onSubmit={submit}>
-          <div><small>SECURE ACCESS</small><h2>登录工作台</h2><p>使用管理员创建的账号登录</p></div>
+          <div><small>SECURE ACCESS</small><h2>{expectedRole === 'teacher' ? '教师端登录' : '教务端登录'}</h2><p>使用教务管理员创建的工作台账号</p></div>
           <label><span>用户名</span><div><UserRound size={18}/><input autoFocus value={username} onChange={(event) => setUsername(event.target.value)} required /></div></label>
           <label><span>密码</span><div><LockKeyhole size={18}/><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></div></label>
           {error && <p className="form-error">{error}</p>}

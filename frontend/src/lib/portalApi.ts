@@ -27,6 +27,7 @@ export type HumanReview = {
   teacher_comments: string;
   updated_at: string;
   submitted_at?: string;
+  published_at?: string;
 };
 
 export type Assignment = {
@@ -119,5 +120,6 @@ export const portalApi = {
   users: () => request<PortalUser[]>('/admin/users'),
   createUser: (body: object) => request<PortalUser>('/admin/users', { method: 'POST', body: JSON.stringify(body) }),
   assign: (paperId: string, reviewerId: string) => request<Assignment>('/admin/assignments', { method: 'POST', body: JSON.stringify({ paper_id: paperId, reviewer_id: reviewerId }) }),
+  publishReview: (reviewId: string) => request<HumanReview>(`/admin/reviews/${encodeURIComponent(reviewId)}/publish`, { method: 'POST' }),
   exportUrl: () => `${API_ROOT}/admin/exports/reviews.csv`,
 };

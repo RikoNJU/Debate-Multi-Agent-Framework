@@ -75,6 +75,20 @@ def test_teacher_admin_portal_core_workflow(tmp_path) -> None:  # type: ignore[n
                     updated_at=now,
                 )
             )
+        student_token = client.app.state.portal_repository.issue_student_access(
+            task_id="run-portal", paper_id="paper-portal"
+        )
+        assert client.get("/api/debate/runs/run-portal").status_code == 401
+        assert client.get(
+            "/api/debate/runs/run-portal",
+            headers={"X-Submission-Token": "wrong-access-code"},
+        ).status_code == 403
+        initial_student_result = client.get(
+            "/api/debate/runs/run-portal",
+            headers={"X-Submission-Token": student_token},
+        )
+        assert initial_student_result.status_code == 200
+        assert initial_student_result.json()["published_review"] is None
 
         login = client.post(
             "/api/debate/portal/auth/login",
@@ -145,6 +159,7 @@ def test_teacher_admin_portal_core_workflow(tmp_path) -> None:  # type: ignore[n
         )
         assert submitted.status_code == 200
         assert submitted.json()["status"] == "submitted"
+        review_id = submitted.json()["review_id"]
         assert client.put(
             f"/api/debate/portal/teacher/assignments/{assignment_id}/review",
             headers=auth(teacher_token),
@@ -156,6 +171,22 @@ def test_teacher_admin_portal_core_workflow(tmp_path) -> None:  # type: ignore[n
         )
         assert statistics.json()["submitted_reviews"] == 1
         assert statistics.json()["average_human_score"] == 100
+        published = client.post(
+            f"/api/debate/portal/admin/reviews/{review_id}/publish",
+            headers=auth(admin_token),
+        )
+        assert published.status_code == 200
+        assert published.json()["published_at"]
+        student_result = client.get(
+            "/api/debate/runs/run-portal",
+            headers={"X-Submission-Token": student_token},
+        ).json()
+        assert student_result["published_review"]["total_score"] == 100
+        assert "teacher_comments" not in student_result["published_review"]
+        assert client.get(
+            "/api/debate/student/tasks/run-portal/pdf",
+            headers={"X-Submission-Token": student_token},
+        ).status_code == 200
         exported = client.get(
             "/api/debate/portal/admin/exports/reviews.csv",
             headers=auth(admin_token),
@@ -170,6 +201,7 @@ def test_teacher_admin_portal_core_workflow(tmp_path) -> None:  # type: ignore[n
             "paper.assigned",
             "review.draft_saved",
             "review.submitted",
+            "review.published",
         }
 
         assert client.post(

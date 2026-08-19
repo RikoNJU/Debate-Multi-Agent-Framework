@@ -20,6 +20,7 @@ from .models import (
     PaperRecord,
     PaperRevisionRecord,
     ReviewRunRecord,
+    StudentTaskAccessRecord,
     UserRecord,
 )
 from ..services.security import hash_password, hash_token, new_session_token, verify_password
@@ -346,6 +347,92 @@ class PortalRepository:
             if auth_session is not None and auth_session.revoked_at is None:
                 auth_session.revoked_at = datetime.now(UTC)
 
+    def issue_student_access(self, *, task_id: str, paper_id: str | None) -> str:
+        token = new_session_token()
+        with self.database.session() as session:
+            existing = session.scalar(
+                select(StudentTaskAccessRecord).where(
+                    StudentTaskAccessRecord.task_id == task_id
+                )
+            )
+            if existing is not None:
+                session.delete(existing)
+                session.flush()
+            session.add(
+                StudentTaskAccessRecord(
+                    id=uuid4().hex,
+                    task_id=task_id,
+                    paper_id=paper_id,
+                    token_hash=hash_token(token),
+                )
+            )
+        return token
+
+    def validate_student_task_access(self, task_id: str, token: str) -> bool:
+        with self.database.session() as session:
+            return (
+                session.scalar(
+                    select(StudentTaskAccessRecord).where(
+                        StudentTaskAccessRecord.task_id == task_id,
+                        StudentTaskAccessRecord.token_hash == hash_token(token),
+                    )
+                )
+                is not None
+            )
+
+    def validate_student_paper_access(self, paper_id: str, token: str) -> bool:
+        with self.database.session() as session:
+            return (
+                session.scalar(
+                    select(StudentTaskAccessRecord).where(
+                        StudentTaskAccessRecord.paper_id == paper_id,
+                        StudentTaskAccessRecord.token_hash == hash_token(token),
+                    )
+                )
+                is not None
+            )
+
+    def student_pdf_path(self, task_id: str, token: str) -> str | None:
+        with self.database.session() as session:
+            access = session.scalar(
+                select(StudentTaskAccessRecord).where(
+                    StudentTaskAccessRecord.task_id == task_id,
+                    StudentTaskAccessRecord.token_hash == hash_token(token),
+                )
+            )
+            if access is None or access.paper_id is None:
+                return None
+            paper = session.get(PaperRecord, access.paper_id)
+            if paper is None:
+                return None
+            revision = session.get(PaperRevisionRecord, paper.current_revision_id)
+            return revision.pdf_path if revision else None
+
+    def get_published_review_for_paper(self, paper_id: str) -> dict[str, Any] | None:
+        with self.database.session() as session:
+            review = session.scalar(
+                select(HumanReviewRecord)
+                .where(
+                    HumanReviewRecord.paper_id == paper_id,
+                    HumanReviewRecord.status == "submitted",
+                    HumanReviewRecord.published_at.is_not(None),
+                )
+                .order_by(HumanReviewRecord.published_at.desc())
+                .limit(1)
+            )
+            if review is None:
+                return None
+            return {
+                "review_id": review.id,
+                "section_scores": review.section_scores,
+                "total_score": review.total_score,
+                "advice_content": review.advice_content,
+                "submitted_at": (
+                    _aware(review.submitted_at) if review.submitted_at else None
+                ),
+                "published_at": _aware(review.published_at),
+            }
+
     def assign_paper(
         self, *, paper_id: str, reviewer_id: str, assigned_by_id: str
     ) -> dict[str, Any]:
@@ -498,6 +585,30 @@ class PortalRepository:
                 )
             return result
 
+    def publish_human_review(
+        self, *, review_id: str, published_by_id: str
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        with self.database.session() as session:
+            review = session.get(HumanReviewRecord, review_id)
+            if review is None:
+                raise KeyError("review")
+            if review.status != "submitted":
+                raise ValueError("只有已提交的终审可以发布")
+            review.published_at = now
+            review.published_by_id = published_by_id
+            review.updated_at = now
+            self._audit(
+                session,
+                actor_id=published_by_id,
+                action="review.published",
+                resource_type="human_review",
+                resource_id=review.id,
+                details={"paper_id": review.paper_id},
+            )
+            session.flush()
+            return self._review_dict(review)
+
     def dashboard_statistics(self) -> dict[str, Any]:
         with self.database.session() as session:
             total_papers = session.scalar(select(func.count()).select_from(PaperRecord)) or 0
@@ -597,6 +708,7 @@ class PortalRepository:
             "ai_task_id": record.ai_task_id,
             "updated_at": _aware(record.updated_at),
             "submitted_at": _aware(record.submitted_at) if record.submitted_at else None,
+            "published_at": _aware(record.published_at) if record.published_at else None,
         }
 
     @staticmethod

@@ -23,7 +23,7 @@ export default function PortalShell({ user, children }: { user: PortalUser; chil
         <div className="portal-account">
           <span>{user.display_name.slice(0, 1)}</span>
           <div><b>{user.display_name}</b><small>{user.role === 'admin' ? '教务管理员' : '评审教师'}</small></div>
-          <button title="退出登录" onClick={async () => { await portalApi.logout(); navigate('/login'); }}><LogOut size={17}/></button>
+          <button title="退出登录" onClick={async () => { await portalApi.logout(); navigate(user.role === 'admin' ? '/admin/login' : '/teacher/login'); }}><LogOut size={17}/></button>
         </div>
       </aside>
       <div className="portal-content">{children}</div>

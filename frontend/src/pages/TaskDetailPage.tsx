@@ -1,8 +1,8 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ChevronDown, ChevronLeft, CheckCircle2, CircleAlert, ExternalLink, FileText, ShieldCheck, UsersRound } from 'lucide-react';
+import { ChevronDown, ChevronLeft, CheckCircle2, CircleAlert, Copy, ExternalLink, FileText, ShieldCheck, UsersRound } from 'lucide-react';
 
-import { getRunSnapshot } from '../lib/reviewApi';
+import { getRunSnapshot, getTaskAccess } from '../lib/reviewApi';
 
 const ROLE_LABELS: Record<string, string> = {
   scientific_soundness: '科学严谨性专家',
@@ -42,6 +42,7 @@ export default function TaskDetailPage() {
   const [snapshot, setSnapshot] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -91,6 +92,8 @@ export default function TaskDetailPage() {
   const result = snapshot?.result ?? null;
   const status = snapshot?.status;
   const score = result?.final_score ?? null;
+  const publishedReview = snapshot?.published_review ?? null;
+  const displayedScore = publishedReview?.total_score ?? score?.total_score;
   const title = result?.context?.profile?.title ?? '论文评审报告';
   const review = result?.synthesis?.global_review ?? null;
   const reviews = result?.independent_reviews ?? [];
@@ -105,11 +108,19 @@ export default function TaskDetailPage() {
   const isFailed = status === 'failed'
     || status === 'interrupted'
     || (status === undefined && error);
+  const accessCode = getTaskAccess(taskId);
+
+  const copyAccessCode = async () => {
+    if (!accessCode) return;
+    await navigator.clipboard.writeText(accessCode);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+  };
 
   return (
     <div className="report-page">
       <header className="report-bar">
-        <Link to="/"><ChevronLeft />返回任务列表</Link>
+        <Link to="/student"><ChevronLeft />返回任务列表</Link>
         <div className="report-brand"><span>RW</span> 睿文智评</div>
         <span>评审报告</span>
       </header>
@@ -123,12 +134,13 @@ export default function TaskDetailPage() {
               <FileText size={15} /> {taskId} · {STATUS_TEXT[status ?? ''] ?? (error ? '加载失败' : '正在加载…')}
             </p>
           </div>
+          {accessCode && <div className="access-receipt"><small>任务访问码</small><code>{accessCode}</code><button onClick={copyAccessCode} title="复制任务访问码"><Copy size={15}/>{copied ? '已复制' : '复制'}</button></div>}
           <div className="score-card">
             <small>最终评分</small>
-            {score ? (
+            {displayedScore !== undefined && displayedScore !== null ? (
               <>
-                <strong>{score.total_score}</strong>
-                <span>{score.grade}</span>
+                <strong>{displayedScore}</strong>
+                <span>{publishedReview ? '人工终审' : score?.grade}</span>
               </>
             ) : (
               <strong className="score-placeholder">—</strong>
@@ -157,6 +169,7 @@ export default function TaskDetailPage() {
               <a href="#global">03 全局评审</a>
               <a href="#compatibility">04 Step 4 / 5 兼容结果</a>
               <a href="#score">05 最终评分</a>
+              {publishedReview && <a href="#human-review">06 人工终审</a>}
             </aside>
 
             <div className="report-body">
@@ -273,6 +286,15 @@ export default function TaskDetailPage() {
                   </div>
                 </Accordion>
               </div>
+              {publishedReview && <div id="human-review">
+                <Accordion title="已发布的人工终审" icon={<CheckCircle2 />} open>
+                  <div className="score-panel">
+                    <div className="score-row"><span>人工终审总分</span><b>{publishedReview.total_score}</b></div>
+                    <p>{publishedReview.advice_content || '教师未填写公开修改建议。'}</p>
+                    <small>发布时间：{new Date(publishedReview.published_at).toLocaleString('zh-CN')}</small>
+                  </div>
+                </Accordion>
+              </div>}
             </div>
           </div>
         )}

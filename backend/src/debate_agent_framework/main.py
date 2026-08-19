@@ -18,6 +18,7 @@ from .routers import (
     health_router,
     papers_router,
     runs_router,
+    student_router,
     teacher_router,
 )
 from .services import DebateWorkflowService
@@ -83,6 +84,7 @@ def create_app(settings: DebateWebSettings | None = None) -> FastAPI:
     application.include_router(auth_router, prefix=settings.api_prefix)
     application.include_router(teacher_router, prefix=settings.api_prefix)
     application.include_router(admin_router, prefix=settings.api_prefix)
+    application.include_router(student_router, prefix=settings.api_prefix)
     return application
 
 

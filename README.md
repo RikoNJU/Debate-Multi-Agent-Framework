@@ -111,7 +111,7 @@ MinerU 可以直接沿用旧项目的 `MINERU_TOKEN`，也可以使用优先级�
 ```text
 POST /api/debate/papers/parse   只解析 PDF，返回 Markdown 和产物列表
 POST /api/debate/papers/review  解析 PDF、构建结构化论文输入并创建评审任务
-GET  /api/debate/runs/{task_id} 查询任务状态和最终结果
+GET  /api/debate/runs/{task_id} 查询任务状态和最终结果（需提交访问码）
 ```
 
 `/papers/review` 使用 multipart 表单上传 `pdf`。`paper_type` 为可选字段，可取
@@ -198,14 +198,27 @@ DEBATE_BOOTSTRAP_ADMIN_DISPLAY_NAME=系统管理员
 ```
 
 管理员创建后应删除密码环境变量。密码使用 PBKDF2-SHA256 加盐存储，登录返回有限期
-不透明会话令牌；教师和管理员接口分别执行服务端角色校验。前端入口为 `/login`、
-`/teacher` 和 `/admin`。
+不透明会话令牌；教师和管理员接口分别执行服务端角色校验。
+
+系统前端按使用者拆为三个入口：
+
+- 学生端 `/student`：无需注册或登录，上传论文后获得任务编号与一次性生成的访问码；
+- 教师端 `/teacher/login`：教师账号登录，查看分配任务并提交人工终审；
+- 教务端 `/admin/login`：管理员登录，管理账号、分配评审和发布终审结果。
+
+学生访问码仅在创建任务时返回明文，数据库只保存 SHA-256 哈希。学生查看任务、结果或
+原始 PDF 时必须同时提供任务编号和访问码；可在 `/student/recover` 找回当前浏览器中的
+任务记录。已有 API 调用方需把创建任务响应中的 `access_token` 保存下来，并在查询
+`/api/debate/runs/{task_id}` 或论文详情时通过 `X-Submission-Token` 请求头发送。
 
 门户 API 位于 `/api/debate/portal`：
 
 - `auth`：登录、当前用户、退出；
 - `teacher`：18 项标准、分配任务、PDF、草稿和终审；
-- `admin`：账号、论文分配、统计、审计记录和 CSV 导出。
+- `admin`：账号、论文分配、终审发布、统计、审计记录和 CSV 导出；
+- `student`：使用任务访问码下载本人提交的论文。
 
 人工总分由后端按 `round(sum(18 项评分) / 54 * 100)` 统一换算。终审提交后锁定，
-每次分配、草稿保存和终审提交都会写入审计日志。
+每次分配、草稿保存、终审提交和教务发布都会写入审计日志。教师提交后结果保持内部
+状态，只有教务显式发布后，学生端才能看到人工总分和公开修改建议；教师内部备注不会
+返回给学生。

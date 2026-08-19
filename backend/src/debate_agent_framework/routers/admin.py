@@ -16,6 +16,7 @@ from ..schemas import (
     DashboardStatistics,
     UserCreateRequest,
     UserResponse,
+    HumanReviewResponse,
 )
 from .dependencies import get_portal_repository, require_roles
 
@@ -86,6 +87,26 @@ async def statistics(
     repository: PortalRepository = Depends(get_portal_repository),
 ) -> DashboardStatistics:
     return DashboardStatistics.model_validate(repository.dashboard_statistics())
+
+
+@router.post(
+    "/reviews/{review_id}/publish", response_model=HumanReviewResponse
+)
+async def publish_review(
+    review_id: str,
+    user: dict[str, Any] = Depends(admin_only),
+    repository: PortalRepository = Depends(get_portal_repository),
+) -> HumanReviewResponse:
+    try:
+        return HumanReviewResponse.model_validate(
+            repository.publish_human_review(
+                review_id=review_id, published_by_id=user["id"]
+            )
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="人工评审不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/audit-logs", response_model=list[AuditLogResponse])

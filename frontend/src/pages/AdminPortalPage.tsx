@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { BarChart3, CheckCircle2, Download, FileText, Plus, Search, UserPlus, UsersRound } from 'lucide-react';
+import { BarChart3, CheckCircle2, Download, FileText, Plus, Search, Send, UserPlus, UsersRound } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 import PortalShell from '../components/PortalShell';
@@ -23,7 +23,7 @@ export default function AdminPortalPage() {
       const [current, statistics, paperList, userList] = await Promise.all([portalApi.me(), portalApi.statistics(), portalApi.papers(), portalApi.users()]);
       if (current.role !== 'admin') return navigate('/teacher');
       setUser(current); setStats(statistics); setPapers(paperList); setUsers(userList);
-    } catch { navigate('/login'); }
+    } catch { navigate('/admin/login'); }
   };
   useEffect(() => { load(); }, []);
 
@@ -34,6 +34,12 @@ export default function AdminPortalPage() {
     if (!reviewerId) return;
     try { await portalApi.assign(paperId, reviewerId); setMessage('教师分配成功'); await load(); }
     catch (exc) { setMessage(exc instanceof Error ? exc.message : '分配失败'); }
+  };
+
+  const publish = async (reviewId: string) => {
+    if (!confirm('发布后学生可查看人工终审分数和修改建议，确认发布吗？')) return;
+    try { await portalApi.publishReview(reviewId); setMessage('人工终审已发布给学生'); await load(); }
+    catch (exc) { setMessage(exc instanceof Error ? exc.message : '发布失败'); }
   };
 
   const exportCsv = async () => {
@@ -70,7 +76,7 @@ export default function AdminPortalPage() {
         <section className="admin-band"><div className="distribution"><h2>人工评分分布</h2>{distribution.map(item => <div key={item[0]}><span>{item[0]}</span><i><em style={{ width: `${item[1] / maxDistribution * 100}%`, background: item[2] }}/></i><b>{item[1]}</b></div>)}</div><div className="recent-papers"><h2>最近论文</h2>{papers.slice(0,5).map(paper => <button onClick={() => { setSearch(paper.paper_id); setTab('papers'); }} key={paper.paper_id}><i><FileText size={17}/></i><span><b>{paper.title}</b><small>{paper.paper_id} · {paper.run_status || '暂无评审'}</small></span><strong>{paper.ai_score ?? '-'}</strong></button>)}</div></section>
       </>}
 
-      {tab === 'papers' && <section className="management-section"><div className="section-tools"><label><Search size={17}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索论文"/></label><span>{filtered.length} 篇论文</span></div><div className="admin-paper-list">{filtered.map(paper => <article key={paper.paper_id}><div className="paper-overview"><i><FileText size={20}/></i><div><h3>{paper.title}</h3><p>{paper.paper_id} · {paper.paper_type || '待分类'} · {paper.source_filename}</p></div><span>AI 评分 <b>{paper.ai_score ?? '-'}</b></span></div><div className="assignment-line"><div>{paper.assignments.length ? paper.assignments.map(item => <span key={item.assignment_id}>{item.reviewer_name}<em className={`status ${item.status}`}>{item.status === 'submitted' ? '已提交' : '进行中'}</em></span>) : <small>尚未分配教师</small>}</div><select defaultValue="" onChange={e => { assign(paper.paper_id, e.target.value); e.target.value = ''; }}><option value="" disabled>分配教师...</option>{teachers.filter(teacher => !paper.assignments.some(a => a.reviewer_id === teacher.id)).map(teacher => <option value={teacher.id} key={teacher.id}>{teacher.display_name}</option>)}</select></div></article>)}</div></section>}
+      {tab === 'papers' && <section className="management-section"><div className="section-tools"><label><Search size={17}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索论文"/></label><span>{filtered.length} 篇论文</span></div><div className="admin-paper-list">{filtered.map(paper => <article key={paper.paper_id}><div className="paper-overview"><i><FileText size={20}/></i><div><h3>{paper.title}</h3><p>{paper.paper_id} · {paper.paper_type || '待分类'} · {paper.source_filename}</p></div><span>AI 评分 <b>{paper.ai_score ?? '-'}</b></span></div><div className="assignment-line"><div>{paper.assignments.length ? paper.assignments.map(item => <span key={item.assignment_id}>{item.reviewer_name}<em className={`status ${item.status}`}>{item.human_review?.published_at ? '已发布' : item.status === 'submitted' ? '待发布' : '进行中'}</em>{item.status === 'submitted' && item.human_review && !item.human_review.published_at && <button className="publish-review" onClick={() => publish(item.human_review!.review_id)}><Send size={14}/>发布</button>}</span>) : <small>尚未分配教师</small>}</div><select defaultValue="" onChange={e => { assign(paper.paper_id, e.target.value); e.target.value = ''; }}><option value="" disabled>分配教师...</option>{teachers.filter(teacher => !paper.assignments.some(a => a.reviewer_id === teacher.id)).map(teacher => <option value={teacher.id} key={teacher.id}>{teacher.display_name}</option>)}</select></div></article>)}</div></section>}
 
       {tab === 'users' && <section className="management-section"><div className="section-tools"><div><h2>工作台账号</h2><p>账号只能由管理员创建</p></div><button className="primary" onClick={() => setNewUserOpen(true)}><UserPlus size={17}/>创建账号</button></div><div className="user-list"><div className="table-head"><span>用户</span><span>用户名</span><span>角色</span><span>状态</span></div>{users.map(item => <div className="user-row" key={item.id}><span><i>{item.display_name.slice(0,1)}</i><b>{item.display_name}</b></span><span>{item.username}</span><span>{item.role === 'admin' ? '管理员' : '教师'}</span><span className="active-user">启用</span></div>)}</div></section>}
     </main>

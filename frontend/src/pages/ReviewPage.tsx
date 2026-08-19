@@ -2,26 +2,11 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowRight, Clock3, CircleAlert, FileText, FolderOpen, LoaderCircle, Plus, Search, UploadCloud } from 'lucide-react';
 
-import { createReviewTask, type TaskRecord } from '../lib/reviewApi';
+import { createReviewTask, rememberTaskAccess, type TaskRecord } from '../lib/reviewApi';
 
 const STORAGE_KEY = 'debate-review-tasks';
 
-const initialTasks: TaskRecord[] = [
-  {
-    id: 'demo-review-001',
-    title: '面向大语言模型的多智能体论文评审框架研究',
-    fileName: 'multi_agent_review.pdf',
-    status: 'completed',
-    createdAt: '今天 10:24',
-  },
-  {
-    id: 'demo-review-002',
-    title: '深度学习在医学图像分割中的应用研究',
-    fileName: 'medical_image.pdf',
-    status: 'completed',
-    createdAt: '昨天 16:42',
-  },
-];
+const initialTasks: TaskRecord[] = [];
 
 function readStoredTasks(): TaskRecord[] {
   try {
@@ -84,10 +69,12 @@ export default function ReviewPage() {
         title: submission.title || draft.title,
         status: submission.status === 'succeeded' ? 'completed' : 'processing',
         paperId: submission.paper_id,
+        accessToken: submission.access_token,
       };
 
+      rememberTaskAccess(submission.task_id, submission.access_token);
       setTasks((previous) => previous.map((task) => (task.id === draft.id ? finalTask : task)));
-      navigate(`/tasks/${submission.task_id}`);
+      navigate(`/student/tasks/${submission.task_id}`);
     } catch (error) {
       console.error('创建评审任务失败', error);
       setErrorText(error instanceof Error ? error.message : '创建评审任务失败，请稍后重试');
@@ -119,7 +106,8 @@ export default function ReviewPage() {
         </div>
         <div className="topbar-right">
           <span className="status-dot" /> 系统运行正常
-          <Link className="avatar" title="教师与教务工作台" to="/login">A</Link>
+          <Link className="role-link" to="/teacher/login">教师端</Link>
+          <Link className="role-link" to="/admin/login">教务端</Link>
         </div>
       </header>
 
@@ -211,6 +199,7 @@ export default function ReviewPage() {
             </div>
             <span className="task-count">{tasks.length}</span>
           </div>
+          <Link className="recover-link" to="/student/recover">使用任务编号和访问码找回</Link>
 
           <label className="task-search">
             <Search size={17} />
@@ -219,7 +208,7 @@ export default function ReviewPage() {
 
           <div className="task-list">
             {filtered.map((task) => (
-              <button className="task-card" key={task.id} onClick={() => navigate(`/tasks/${task.id}`)}>
+              <button className="task-card" key={task.id} onClick={() => navigate(`/student/tasks/${task.id}`)}>
                 <div className="task-file"><FileText size={19} /></div>
                 <div>
                   <strong>{task.title}</strong>
