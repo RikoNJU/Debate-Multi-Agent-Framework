@@ -37,6 +37,9 @@ def test_debate_health_and_run_lifecycle() -> None:
         assert result.status_code == 200
         assert result.json()["status"] == "succeeded"
         assert result.json()["result"]["final_score"]["total_score"] > 0
+        assert len(
+            result.json()["result"]["final_score"]["legacy_level_scores"]
+        ) == 18
 
 
 def test_api_validates_input_and_returns_not_found() -> None:

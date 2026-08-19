@@ -32,6 +32,7 @@ from ..schemas import (
     SummaryAdviceResult,
 )
 from .compat import assemble_review_synthesis
+from .legacy_scoring import calculate_legacy_score
 
 
 class DemoContextPlanner:
@@ -384,16 +385,22 @@ class DemoOriginalPipelineAdapter:
         scores = {str(index): float(84 - (index % 5)) for index in range(1, 13)}
         scores["6"] = 76.0
         scores["9"] = 78.0
-        total = round(sum(scores.values()) / len(scores), 1)
+        calculation = calculate_legacy_score(
+            semantic_scores=scores,
+            structure=synthesis.workload_evaluation.structure_evaluation,
+            references=review_input.references,
+        )
         notes = [
             f"参考案例 {case.case_id}（相似度 {case.similarity:.2f}），仅用于尺度校准"
             for case in historical_cases
         ]
         return ComprehensiveScoreResult(
             scores=scores,
-            total_score=total,
-            grade="良好" if total >= 75 else "一般",
+            total_score=calculation.total_score,
+            grade=calculation.grade,
             overall_evaluation=synthesis.global_review.overall_summary,
             calibration_notes=notes,
             confidence=0.79 if historical_cases else 0.7,
+            legacy_raw_scores=calculation.raw_scores,
+            legacy_level_scores=calculation.level_scores,
         )

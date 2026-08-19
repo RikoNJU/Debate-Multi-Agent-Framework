@@ -691,6 +691,9 @@ class PortalRepository:
             "ai_task_id": latest_run.task_id if latest_run else None,
             "ai_status": latest_run.status if latest_run else None,
             "ai_score": self._ai_score(latest_run.result_json if latest_run else None),
+            "ai_section_scores": self._ai_section_scores(
+                latest_run.result_json if latest_run else None
+            ),
             "human_review": self._review_dict(review) if review else None,
             "created_at": _aware(record.created_at),
             "updated_at": _aware(record.updated_at),
@@ -730,6 +733,19 @@ class PortalRepository:
             return None
         value = result.get("final_score", {}).get("total_score")
         return value if isinstance(value, (int, float)) else None
+
+    @staticmethod
+    def _ai_section_scores(result: dict[str, Any] | None) -> list[int] | None:
+        if not result:
+            return None
+        values = result.get("final_score", {}).get("legacy_level_scores")
+        if (
+            not isinstance(values, list)
+            or len(values) != 18
+            or any(not isinstance(value, int) or value not in {0, 1, 2, 3} for value in values)
+        ):
+            return None
+        return values
 
     @staticmethod
     def _audit(

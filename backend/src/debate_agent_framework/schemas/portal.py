@@ -107,6 +107,7 @@ class AssignmentResponse(PortalModel):
     ai_task_id: str | None = None
     ai_status: str | None = None
     ai_score: float | None = None
+    ai_section_scores: list[int] | None = None
     human_review: HumanReviewResponse | None = None
     ai_result: dict[str, Any] | None = None
     created_at: datetime

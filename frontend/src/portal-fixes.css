@@ -36,6 +36,30 @@
 
 .login-student-link:hover { color: #146c67; }
 
+.upload-zone.batch-files {
+  max-height: 300px;
+  padding: 18px;
+  align-items: stretch;
+  justify-content: flex-start;
+  flex-direction: column;
+  cursor: pointer;
+}
+
+.batch-file-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #385171;
+}
+
+.batch-file-head span { font-size: 11px; color: #77889e; }
+.batch-file-list { display: grid; gap: 7px; overflow-y: auto; padding-right: 3px; }
+.batch-file-list .file-ready { width: 100%; padding: 9px; background: #fff; border: 1px solid #e0e9f4; border-radius: 6px; }
+.batch-file-list .file-ready svg { width: 34px; height: 34px; }
+.batch-file-list .file-ready button { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; }
+.upload-success { margin: 10px 0; padding: 10px 12px; border-left: 3px solid #1d8a63; background: #e9f7f0; color: #176c4d; font-size: 12px; }
+
 .assignment-line .publish-review {
   height: 28px;
   padding: 0 9px;

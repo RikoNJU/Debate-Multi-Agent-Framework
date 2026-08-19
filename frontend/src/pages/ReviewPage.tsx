@@ -1,6 +1,6 @@
 ﻿import { ChangeEvent, DragEvent, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowRight, Clock3, CircleAlert, FileText, FolderOpen, LoaderCircle, Plus, Search, UploadCloud } from 'lucide-react';
+import { ArrowRight, Clock3, CircleAlert, FileText, FolderOpen, LoaderCircle, Plus, Search, UploadCloud, X } from 'lucide-react';
 
 import { createReviewTask, rememberTaskAccess, type TaskRecord } from '../lib/reviewApi';
 
@@ -21,9 +21,11 @@ export default function ReviewPage() {
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const [tasks, setTasks] = useState<TaskRecord[]>(readStoredTasks);
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [batchProgress, setBatchProgress] = useState({ completed: 0, total: 0 });
+  const [batchMessage, setBatchMessage] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [errorText, setErrorText] = useState<string | null>(null);
 
@@ -31,64 +33,85 @@ export default function ReviewPage() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
   }, [tasks]);
 
-  const choose = (candidate?: File) => {
-    if (!candidate) return;
-    setFile(candidate);
+  const choose = (candidates: File[]) => {
+    if (!candidates.length || submitting) return;
+    const accepted = candidates.filter(
+      candidate => candidate.type === 'application/pdf' || candidate.name.toLowerCase().endsWith('.pdf'),
+    ).filter(candidate => candidate.size <= 20 * 1024 * 1024);
+    if (accepted.length !== candidates.length) {
+      setErrorText('已忽略非 PDF 或超过 20MB 的文件');
+    } else {
+      setErrorText(null);
+    }
+    setBatchMessage(null);
+    setFiles(previous => {
+      const known = new Set(previous.map(item => `${item.name}:${item.size}:${item.lastModified}`));
+      return [...previous, ...accepted.filter(item => !known.has(`${item.name}:${item.size}:${item.lastModified}`))];
+    });
   };
 
   const onInput = (event: ChangeEvent<HTMLInputElement>) => {
-    choose(event.target.files?.[0]);
+    choose(Array.from(event.target.files || []));
+    event.target.value = '';
   };
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragging(false);
-    choose(event.dataTransfer.files?.[0]);
+    choose(Array.from(event.dataTransfer.files || []));
   };
 
   const startReview = async () => {
-    if (!file || submitting) return;
-
-    const draft: TaskRecord = {
-      id: `local-${Date.now()}`,
+    if (!files.length || submitting) return;
+    const selectedFiles = [...files];
+    const drafts = selectedFiles.map((file, index): TaskRecord => ({
+      id: `local-${Date.now()}-${index}`,
       title: file.name.replace(/\.[^.]+$/, '') || '未命名论文',
       fileName: file.name,
       status: 'processing',
       createdAt: '刚刚',
-    };
+    }));
 
     setSubmitting(true);
     setErrorText(null);
-    setTasks((previous) => [draft, ...previous]);
+    setBatchMessage(null);
+    setBatchProgress({ completed: 0, total: selectedFiles.length });
+    setTasks(previous => [...drafts, ...previous]);
 
-    try {
-      const submission = await createReviewTask(file, draft.title, draft.id);
-      const finalTask: TaskRecord = {
-        ...draft,
-        id: submission.task_id,
-        title: submission.title || draft.title,
-        status: submission.status === 'succeeded' ? 'completed' : 'processing',
-        paperId: submission.paper_id,
-        accessToken: submission.access_token,
-      };
-
-      rememberTaskAccess(submission.task_id, submission.access_token);
-      setTasks((previous) => previous.map((task) => (task.id === draft.id ? finalTask : task)));
-      navigate(`/student/tasks/${submission.task_id}`);
-    } catch (error) {
-      console.error('创建评审任务失败', error);
-      setErrorText(error instanceof Error ? error.message : '创建评审任务失败，请稍后重试');
-      setTasks((previous) =>
-        previous.map((task) =>
-          task.id === draft.id ? { ...task, status: 'failed' } : task,
-        ),
-      );
-    } finally {
-      setSubmitting(false);
-      setFile(null);
-      if (inputRef.current) {
-        inputRef.current.value = '';
+    let succeeded = 0;
+    let singleTaskId: string | null = null;
+    const failures: string[] = [];
+    for (const [index, file] of selectedFiles.entries()) {
+      const draft = drafts[index];
+      setBatchProgress({ completed: index + 1, total: selectedFiles.length });
+      try {
+        const submission = await createReviewTask(file, draft.title, draft.id);
+        const finalTask: TaskRecord = {
+          ...draft,
+          id: submission.task_id,
+          title: submission.title || draft.title,
+          status: submission.status === 'succeeded' ? 'completed' : 'processing',
+          paperId: submission.paper_id,
+          accessToken: submission.access_token,
+        };
+        rememberTaskAccess(submission.task_id, submission.access_token);
+        setTasks(previous => previous.map(task => task.id === draft.id ? finalTask : task));
+        succeeded += 1;
+        singleTaskId = submission.task_id;
+      } catch (error) {
+        console.error('创建评审任务失败', error);
+        failures.push(`${file.name}：${error instanceof Error ? error.message : '创建失败'}`);
+        setTasks(previous => previous.map(task => task.id === draft.id ? { ...task, status: 'failed' } : task));
       }
+    }
+
+    setSubmitting(false);
+    setFiles([]);
+    setBatchMessage(`已提交 ${succeeded}/${selectedFiles.length} 篇论文`);
+    setErrorText(failures.length ? failures.join('；') : null);
+    if (inputRef.current) inputRef.current.value = '';
+    if (selectedFiles.length === 1 && singleTaskId && !failures.length) {
+      navigate(`/student/tasks/${singleTaskId}`);
     }
   };
 
@@ -135,7 +158,7 @@ export default function ReviewPage() {
           </div>
 
           <div
-            className={`upload-zone ${dragging ? 'dragging' : ''} ${file ? 'has-file' : ''}`}
+            className={`upload-zone ${dragging ? 'dragging' : ''} ${files.length ? 'has-file batch-files' : ''}`}
             onClick={() => inputRef.current?.click()}
             onDragOver={(event) => {
               event.preventDefault();
@@ -144,23 +167,17 @@ export default function ReviewPage() {
             onDragLeave={() => setDragging(false)}
             onDrop={onDrop}
           >
-            <input ref={inputRef} type="file" accept=".pdf" onChange={onInput} />
-            {file ? (
+            <input ref={inputRef} type="file" accept=".pdf,application/pdf" multiple disabled={submitting} onChange={onInput} />
+            {files.length ? (
               <>
-                <div className="file-ready">
-                  <FileText />
-                  <div>
-                    <strong>{file.name}</strong>
-                    <span>{Math.max(1, Math.round(file.size / 1024))} KB · 已准备就绪</span>
-                  </div>
-                </div>
-                <button onClick={(event) => { event.stopPropagation(); setFile(null); }}>重新选择</button>
+                <div className="batch-file-head"><strong>已选择 {files.length} 篇论文</strong><span>点击空白处可继续添加</span></div>
+                <div className="batch-file-list">{files.map((file, index) => <div className="file-ready" key={`${file.name}-${file.lastModified}`}><FileText/><div><strong>{file.name}</strong><span>{Math.max(1, Math.round(file.size / 1024))} KB</span></div><button disabled={submitting} title="移除文件" onClick={event => { event.stopPropagation(); setFiles(current => current.filter((_, itemIndex) => itemIndex !== index)); }}><X size={16}/></button></div>)}</div>
               </>
             ) : (
               <>
                 <div className="upload-round"><UploadCloud size={31} /></div>
-                <strong>拖拽论文至此处，或点击上传</strong>
-                <span>支持 PDF 格式，文件大小不超过 20MB</span>
+                <strong>拖拽多篇论文至此处，或点击批量上传</strong>
+                <span>支持多选 PDF，每个文件不超过 20MB</span>
                 <em>选择论文文件</em>
               </>
             )}
@@ -182,10 +199,11 @@ export default function ReviewPage() {
               <span>{errorText}</span>
             </div>
           )}
+          {batchMessage && <div className="upload-success"><span>{batchMessage}</span></div>}
 
-          <button className="primary-button" disabled={!file || submitting} onClick={startReview}>
+          <button className="primary-button" disabled={!files.length || submitting} onClick={startReview}>
             {submitting ? <LoaderCircle className="spin" /> : <Plus />}
-            {submitting ? '正在创建评审任务…' : '开始智能评审'}
+            {submitting ? `正在提交 ${batchProgress.completed}/${batchProgress.total}` : files.length > 1 ? `批量开始评审（${files.length}）` : '开始智能评审'}
             <ArrowRight size={18} />
           </button>
         </section>

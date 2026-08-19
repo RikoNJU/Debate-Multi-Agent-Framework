@@ -66,7 +66,10 @@ def test_teacher_admin_portal_core_workflow(tmp_path) -> None:  # type: ignore[n
                     status="succeeded",
                     current_stage="completed",
                     result_json={
-                        "final_score": {"total_score": 86},
+                        "final_score": {
+                            "total_score": 86,
+                            "legacy_level_scores": [2] * 18,
+                        },
                         "synthesis": {
                             "global_review": {"overall_summary": "AI 初评摘要"}
                         },
@@ -104,6 +107,7 @@ def test_teacher_admin_portal_core_workflow(tmp_path) -> None:  # type: ignore[n
             json={"paper_id": "paper-portal", "reviewer_id": admin_id},
         )
         assert admin_assignment.status_code == 201
+        assert admin_assignment.json()["ai_section_scores"] == [2] * 18
         assert client.get(
             "/api/debate/portal/teacher/assignments", headers=auth(admin_token)
         ).status_code == 200

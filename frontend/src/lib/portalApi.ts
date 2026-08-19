@@ -43,6 +43,7 @@ export type Assignment = {
   ai_task_id?: string;
   ai_status?: string;
   ai_score?: number;
+  ai_section_scores?: number[];
   ai_result?: any;
   human_review?: HumanReview;
   created_at: string;

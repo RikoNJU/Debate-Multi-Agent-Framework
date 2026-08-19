@@ -7,6 +7,16 @@ import { Assignment, Criterion, getToken, portalApi } from '../lib/portalApi';
 
 const emptyScores = () => Array(18).fill(0);
 
+function scoresFromTotal(total?: number): number[] {
+  if (total === undefined) return emptyScores();
+  let remaining = Math.max(0, Math.min(54, Math.round(total / 100 * 54)));
+  return Array.from({ length: 18 }, () => {
+    const score = Math.min(3, remaining);
+    remaining -= score;
+    return score;
+  });
+}
+
 export default function TeacherPortalPage() {
   const { user } = usePortalAuth();
   const [items, setItems] = useState<Assignment[]>([]);
@@ -32,7 +42,11 @@ export default function TeacherPortalPage() {
   const choose = async (item: Assignment) => {
     const detail = await portalApi.assignment(item.assignment_id);
     setSelected(detail);
-    setScores(detail.human_review?.section_scores || emptyScores());
+    setScores(
+      detail.human_review?.section_scores
+      || detail.ai_section_scores
+      || scoresFromTotal(detail.ai_score),
+    );
     setAdvice(detail.human_review?.advice_content || '');
     setComments(detail.human_review?.teacher_comments || '');
     setMessage('');
@@ -76,7 +90,7 @@ export default function TeacherPortalPage() {
         <section className="pdf-pane">{pdfUrl ? <iframe title="论文原文" src={pdfUrl}/> : <div>论文 PDF 暂不可用</div>}</section>
         <section className="evaluation-pane">
           <div className="ai-note"><Sparkles size={17}/><div><b>多智能体评审摘要</b><p>{selected.ai_result?.synthesis?.global_review?.overall_summary || 'AI 评审尚未完成或暂无摘要。'}</p></div></div>
-          <div className="criteria-head"><div><h2>人工评分</h2><p>每项 0 至 3 分，总分由系统统一换算</p></div><strong>{total}<small>/100</small></strong></div>
+          <div className="criteria-head"><div><h2>人工评分</h2><p>已载入系统初评分，每项可由教师复核调整</p></div><strong>{total}<small>/100</small></strong></div>
           <div className="criteria-list">{criteria.map((item, index) => <div className="criterion" key={item.id}><div><b>{item.id}. {item.name}</b><p>{item.description}</p></div><div className="score-options">{[0,1,2,3].map(value => <button className={scores[index] === value ? 'active' : ''} disabled={selected.status === 'submitted'} onClick={() => setScores(scores.map((score, i) => i === index ? value : score))} key={value}>{value}</button>)}</div></div>)}</div>
           <label className="review-text"><span>修改建议</span><textarea disabled={selected.status === 'submitted'} value={advice} onChange={e => setAdvice(e.target.value)} placeholder="填写可执行的修改建议"/></label>
           <label className="review-text"><span>教师备注</span><textarea disabled={selected.status === 'submitted'} value={comments} onChange={e => setComments(e.target.value)} placeholder="填写内部复核说明"/></label>
