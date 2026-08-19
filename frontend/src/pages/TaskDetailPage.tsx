@@ -15,6 +15,7 @@ const STATUS_TEXT: Record<string, string> = {
   running: '评审进行中',
   succeeded: '评审已完成',
   failed: '评审失败',
+  interrupted: '评审已中断',
 };
 
 function roleLabel(role: string | undefined): string {
@@ -101,7 +102,9 @@ export default function TaskDetailPage() {
   const workloadSummary = result?.synthesis?.workload_evaluation?.summary ?? '';
 
   const isPending = status === 'queued' || status === 'running';
-  const isFailed = status === 'failed' || (status === undefined && error);
+  const isFailed = status === 'failed'
+    || status === 'interrupted'
+    || (status === undefined && error);
 
   return (
     <div className="report-page">

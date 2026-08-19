@@ -16,6 +16,7 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"
 
 
 class RunSnapshot(BaseModel):
@@ -27,6 +28,9 @@ class RunSnapshot(BaseModel):
     updated_at: datetime
     result: dict[str, Any] | None = None
     error: str | None = None
+    paper_id: str | None = None
+    revision_id: str | None = None
+    current_stage: str | None = None
 
 
 class InMemoryRunStore:
@@ -36,20 +40,34 @@ class InMemoryRunStore:
         self._runs: dict[str, RunSnapshot] = {}
         self._lock = RLock()
 
-    def create(self) -> RunSnapshot:
+    def create(
+        self,
+        *,
+        paper_id: str | None = None,
+        revision_id: str | None = None,
+    ) -> RunSnapshot:
         now = datetime.now(UTC)
         snapshot = RunSnapshot(
             task_id=uuid4().hex,
             status=RunStatus.QUEUED,
             created_at=now,
             updated_at=now,
+            paper_id=paper_id,
+            revision_id=revision_id,
+            current_stage="queued",
         )
         with self._lock:
             self._runs[snapshot.task_id] = snapshot
         return snapshot.model_copy(deep=True)
 
     def mark_running(self, task_id: str) -> RunSnapshot:
-        return self._update(task_id, status=RunStatus.RUNNING, result=None, error=None)
+        return self._update(
+            task_id,
+            status=RunStatus.RUNNING,
+            result=None,
+            error=None,
+            current_stage="workflow",
+        )
 
     def mark_succeeded(self, task_id: str, result: dict[str, Any]) -> RunSnapshot:
         return self._update(
@@ -57,6 +75,7 @@ class InMemoryRunStore:
             status=RunStatus.SUCCEEDED,
             result=result,
             error=None,
+            current_stage="completed",
         )
 
     def mark_failed(self, task_id: str, error: str) -> RunSnapshot:
@@ -65,12 +84,21 @@ class InMemoryRunStore:
             status=RunStatus.FAILED,
             result=None,
             error=error,
+            current_stage="failed",
         )
 
     def get(self, task_id: str) -> RunSnapshot | None:
         with self._lock:
             snapshot = self._runs.get(task_id)
             return snapshot.model_copy(deep=True) if snapshot else None
+
+    def list_for_paper(self, paper_id: str) -> list[RunSnapshot]:
+        with self._lock:
+            return [
+                snapshot.model_copy(deep=True)
+                for snapshot in self._runs.values()
+                if snapshot.paper_id == paper_id
+            ]
 
     def _update(self, task_id: str, **changes: Any) -> RunSnapshot:
         with self._lock:

@@ -11,7 +11,7 @@ from .historical_score import (
     ChromaHistoricalScoreRetriever,
     build_historical_score_retriever_from_env,
 )
-from .workflow_service import DebateWorkflowService, get_debate_workflow_service
+from .workflow_service import DebateWorkflowService
 
 __all__ = [
     "ChromaHistoricalScoreRetriever",
@@ -22,5 +22,4 @@ __all__ = [
     "build_evidence_retriever_from_env",
     "build_historical_advice_retriever_from_env",
     "build_historical_score_retriever_from_env",
-    "get_debate_workflow_service",
 ]

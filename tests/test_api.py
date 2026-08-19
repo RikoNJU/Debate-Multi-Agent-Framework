@@ -98,6 +98,17 @@ def test_pdf_review_endpoint_parses_and_creates_run(monkeypatch, tmp_path) -> No
         assert payload["title"] == "测试论文"
         assert payload["chapter_count"] == 1
 
+        paper = client.get(f"/api/debate/papers/{payload['paper_id']}")
+        assert paper.status_code == 200
+        assert paper.json()["current_revision_id"]
+        paper_runs = client.get(
+            f"/api/debate/papers/{payload['paper_id']}/runs"
+        )
+        assert paper_runs.status_code == 200
+        assert any(
+            item["task_id"] == payload["task_id"] for item in paper_runs.json()
+        )
+
         result = client.get(f"/api/debate/runs/{payload['task_id']}")
         assert result.status_code == 200
         assert result.json()["status"] == "succeeded"

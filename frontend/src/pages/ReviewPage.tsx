@@ -82,7 +82,7 @@ export default function ReviewPage() {
         ...draft,
         id: submission.task_id,
         title: submission.title || draft.title,
-        status: 'completed',
+        status: submission.status === 'succeeded' ? 'completed' : 'processing',
         paperId: submission.paper_id,
       };
 

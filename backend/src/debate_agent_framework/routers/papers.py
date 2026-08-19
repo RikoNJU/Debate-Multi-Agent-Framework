@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 from pathlib import Path
 
@@ -17,8 +18,16 @@ from ..ingestion import (
     MinerUError,
     MinerUTimeoutError,
 )
-from ..schemas import MinerUParseResponse, PaperReviewSubmission, PaperType
-from ..services import DebateWorkflowService, get_debate_workflow_service
+from ..schemas import (
+    MinerUParseResponse,
+    PaperDetailResponse,
+    PaperReviewSubmission,
+    PaperType,
+)
+from ..services import DebateWorkflowService
+from ..services.jobs import RunSnapshot
+from ..services.paper_storage import PaperPersistenceService
+from .dependencies import get_debate_workflow_service, get_paper_persistence_service
 
 router = APIRouter(prefix="/papers", tags=["papers"])
 
@@ -31,7 +40,6 @@ async def parse_paper(
 
     if not pdf.filename or not pdf.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="仅支持 PDF 文件")
-
     config = MinerUConfig.from_env()
     output_root = Path(request.app.state.settings.mineru_output_dir)
     try:
@@ -70,11 +78,16 @@ async def parse_and_review_paper(
     paper_id: str | None = Form(None),
     title: str | None = Form(None),
     service: DebateWorkflowService = Depends(get_debate_workflow_service),
+    persistence: PaperPersistenceService = Depends(get_paper_persistence_service),
 ) -> PaperReviewSubmission:
     """Parse a PDF, build structured input, and enqueue the review workflow."""
 
     if not pdf.filename or not pdf.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="仅支持 PDF 文件")
+    if paper_id and (
+        len(paper_id) > 255 or "/" in paper_id or "\\" in paper_id
+    ):
+        raise HTTPException(status_code=422, detail="paper_id 格式不合法")
     config = MinerUConfig.from_env()
     output_root = Path(request.app.state.settings.mineru_output_dir)
     try:
@@ -91,19 +104,29 @@ async def parse_and_review_paper(
                 pdf_path,
                 output_root=output_root,
             )
-        review_input = MarkdownPaperParser().parse(
-            parsed.markdown,
-            paper_type=paper_type,
-            paper_id=paper_id,
-            title=title,
-            source_filename=pdf.filename,
-            mineru_batch_id=parsed.batch_id,
-        )
-        if parsed.content_list_path:
-            review_input = MinerUContentListAdapter().enrich(
-                review_input, parsed.content_list_path
+            review_input = MarkdownPaperParser().parse(
+                parsed.markdown,
+                paper_type=paper_type,
+                paper_id=paper_id,
+                title=title,
+                source_filename=pdf.filename,
+                mineru_batch_id=parsed.batch_id,
             )
-        snapshot = service.create_run()
+            if parsed.content_list_path:
+                review_input = MinerUContentListAdapter().enrich(
+                    review_input, parsed.content_list_path
+                )
+            persisted = await asyncio.to_thread(
+                persistence.persist,
+                review_input=review_input,
+                parsed=parsed,
+                source_pdf=pdf_path,
+                source_filename=pdf.filename,
+            )
+        snapshot = service.create_run(
+            paper_id=review_input.paper_id,
+            revision_id=persisted.revision_id,
+        )
         background_tasks.add_task(service.execute, snapshot.task_id, review_input)
         return PaperReviewSubmission(
             task_id=snapshot.task_id,
@@ -125,3 +148,19 @@ async def parse_and_review_paper(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
         await pdf.close()
+
+
+@router.get("/{paper_id}", response_model=PaperDetailResponse)
+async def get_paper(request: Request, paper_id: str) -> PaperDetailResponse:
+    paper = request.app.state.paper_repository.get_paper(paper_id)
+    if paper is None:
+        raise HTTPException(status_code=404, detail="论文不存在")
+    return PaperDetailResponse.model_validate(paper)
+
+
+@router.get("/{paper_id}/runs", response_model=list[RunSnapshot])
+async def list_paper_runs(request: Request, paper_id: str) -> list[RunSnapshot]:
+    paper = request.app.state.paper_repository.get_paper(paper_id)
+    if paper is None:
+        raise HTTPException(status_code=404, detail="论文不存在")
+    return request.app.state.run_store.list_for_paper(paper_id)

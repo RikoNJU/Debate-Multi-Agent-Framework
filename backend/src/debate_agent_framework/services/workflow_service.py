@@ -2,29 +2,50 @@
 
 from __future__ import annotations
 
-import os
-from functools import lru_cache
+from typing import Protocol
 
 from debate_agent_framework.schemas import DebateReviewInput
 from debate_agent_framework.services.jobs import InMemoryRunStore, RunSnapshot
 from debate_agent_framework.workflows import DebateWorkflow, build_workflow
 
 
+class RunStore(Protocol):
+    def create(
+        self,
+        *,
+        paper_id: str | None = None,
+        revision_id: str | None = None,
+    ) -> RunSnapshot: ...
+
+    def mark_running(self, task_id: str) -> RunSnapshot: ...
+
+    def mark_succeeded(self, task_id: str, result: dict) -> RunSnapshot: ...
+
+    def mark_failed(self, task_id: str, error: str) -> RunSnapshot: ...
+
+    def get(self, task_id: str) -> RunSnapshot | None: ...
+
+    def list_for_paper(self, paper_id: str) -> list[RunSnapshot]: ...
+
+
 class DebateWorkflowService:
     def __init__(
         self,
         workflow: DebateWorkflow | None = None,
-        store: InMemoryRunStore | None = None,
+        store: RunStore | None = None,
         *,
         runtime: str | None = None,
     ) -> None:
-        self.workflow = workflow or build_workflow(
-            runtime or os.getenv("DEBATE_RUNTIME", "demo")
-        )
+        self.workflow = workflow or build_workflow(runtime or "demo")
         self.store = store or InMemoryRunStore()
 
-    def create_run(self) -> RunSnapshot:
-        return self.store.create()
+    def create_run(
+        self,
+        *,
+        paper_id: str | None = None,
+        revision_id: str | None = None,
+    ) -> RunSnapshot:
+        return self.store.create(paper_id=paper_id, revision_id=revision_id)
 
     async def execute(self, task_id: str, review_input: DebateReviewInput) -> None:
         self.store.mark_running(task_id)
@@ -36,8 +57,3 @@ class DebateWorkflowService:
 
     def get_run(self, task_id: str) -> RunSnapshot | None:
         return self.store.get(task_id)
-
-
-@lru_cache(maxsize=1)
-def get_debate_workflow_service() -> DebateWorkflowService:
-    return DebateWorkflowService()

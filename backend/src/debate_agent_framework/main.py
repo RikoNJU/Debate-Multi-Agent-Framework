@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -10,7 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.env.loadenv import load_env_file
 
 from .config import DebateWebSettings
+from .persistence import Database, PaperRepository, SqlAlchemyRunStore
 from .routers import health_router, papers_router, runs_router
+from .services import DebateWorkflowService
+from .services.paper_storage import PaperPersistenceService
 
 
 load_env_file(Path(__file__).resolve().parent.parent.parent / ".env")
@@ -18,10 +22,36 @@ load_env_file(Path(__file__).resolve().parent.parent.parent / ".env")
 
 def create_app(settings: DebateWebSettings | None = None) -> FastAPI:
     settings = settings or DebateWebSettings.from_env()
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):  # type: ignore[no-untyped-def]
+        data_dir = Path(settings.data_dir).resolve()
+        data_dir.mkdir(parents=True, exist_ok=True)
+        database = Database(settings.resolved_database_url())
+        database.migrate()
+        run_store = SqlAlchemyRunStore(database)
+        run_store.mark_interrupted()
+        paper_repository = PaperRepository(database)
+        application.state.database = database
+        application.state.run_store = run_store
+        application.state.paper_repository = paper_repository
+        application.state.paper_persistence_service = PaperPersistenceService(
+            data_dir, paper_repository
+        )
+        application.state.workflow_service = DebateWorkflowService(
+            store=run_store,
+            runtime=settings.runtime,
+        )
+        try:
+            yield
+        finally:
+            database.dispose()
+
     application = FastAPI(
         title=settings.app_name,
         version="0.1.0",
         description="Evidence-grounded debate review workflow API",
+        lifespan=lifespan,
     )
     application.state.settings = settings
     application.add_middleware(
