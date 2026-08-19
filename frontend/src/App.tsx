@@ -5,6 +5,7 @@ import AdminPortalPage from './pages/AdminPortalPage';
 import LoginPage from './pages/LoginPage';
 import TeacherPortalPage from './pages/TeacherPortalPage';
 import StudentRecoverPage from './pages/StudentRecoverPage';
+import { PortalRoute, WorkspaceEntry } from './components/PortalRoute';
 
 export default function App() {
   return (
@@ -13,10 +14,14 @@ export default function App() {
       <Route path="/student" element={<ReviewPage />} />
       <Route path="/student/tasks/:taskId" element={<TaskDetailPage />} />
       <Route path="/student/recover" element={<StudentRecoverPage />} />
-      <Route path="/teacher/login" element={<LoginPage expectedRole="teacher" />} />
-      <Route path="/admin/login" element={<LoginPage expectedRole="admin" />} />
-      <Route path="/teacher" element={<TeacherPortalPage />} />
-      <Route path="/admin" element={<AdminPortalPage />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/workspace" element={<WorkspaceEntry />} />
+      <Route path="/workspace/reviews" element={<PortalRoute><TeacherPortalPage /></PortalRoute>} />
+      <Route path="/workspace/admin" element={<PortalRoute adminOnly><AdminPortalPage /></PortalRoute>} />
+      <Route path="/teacher/login" element={<Navigate to="/login" replace />} />
+      <Route path="/admin/login" element={<Navigate to="/login" replace />} />
+      <Route path="/teacher" element={<Navigate to="/workspace/reviews" replace />} />
+      <Route path="/admin" element={<Navigate to="/workspace/admin" replace />} />
       <Route path="*" element={<Navigate to="/student" replace />} />
     </Routes>
   );

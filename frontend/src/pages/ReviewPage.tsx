@@ -106,8 +106,7 @@ export default function ReviewPage() {
         </div>
         <div className="topbar-right">
           <span className="status-dot" /> 系统运行正常
-          <Link className="role-link" to="/teacher/login">教师端</Link>
-          <Link className="role-link" to="/admin/login">教务端</Link>
+          <Link className="role-link" to="/workspace">工作人员端</Link>
         </div>
       </header>
 

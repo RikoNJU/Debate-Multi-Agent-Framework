@@ -96,6 +96,21 @@ def test_teacher_admin_portal_core_workflow(tmp_path) -> None:  # type: ignore[n
         )
         assert login.status_code == 200
         admin_token = login.json()["access_token"]
+        admin_id = login.json()["user"]["id"]
+
+        admin_assignment = client.post(
+            "/api/debate/portal/admin/assignments",
+            headers=auth(admin_token),
+            json={"paper_id": "paper-portal", "reviewer_id": admin_id},
+        )
+        assert admin_assignment.status_code == 201
+        assert client.get(
+            "/api/debate/portal/teacher/assignments", headers=auth(admin_token)
+        ).status_code == 200
+        assert client.get(
+            f"/api/debate/portal/teacher/assignments/{admin_assignment.json()['assignment_id']}/pdf",
+            headers=auth(admin_token),
+        ).status_code == 200
 
         created_teacher = client.post(
             "/api/debate/portal/admin/users",

@@ -1,15 +1,14 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { BarChart3, CheckCircle2, Download, FileText, Plus, Search, Send, UserPlus, UsersRound } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 
 import PortalShell from '../components/PortalShell';
+import { usePortalAuth } from '../contexts/PortalAuthContext';
 import { AdminPaper, getToken, portalApi, PortalStatistics, PortalUser } from '../lib/portalApi';
 
 type Tab = 'overview' | 'papers' | 'users';
 
 export default function AdminPortalPage() {
-  const navigate = useNavigate();
-  const [user, setUser] = useState<PortalUser | null>(null);
+  const { user } = usePortalAuth();
   const [stats, setStats] = useState<PortalStatistics | null>(null);
   const [papers, setPapers] = useState<AdminPaper[]>([]);
   const [users, setUsers] = useState<PortalUser[]>([]);
@@ -20,14 +19,13 @@ export default function AdminPortalPage() {
 
   const load = async () => {
     try {
-      const [current, statistics, paperList, userList] = await Promise.all([portalApi.me(), portalApi.statistics(), portalApi.papers(), portalApi.users()]);
-      if (current.role !== 'admin') return navigate('/teacher');
-      setUser(current); setStats(statistics); setPapers(paperList); setUsers(userList);
-    } catch { navigate('/admin/login'); }
+      const [statistics, paperList, userList] = await Promise.all([portalApi.statistics(), portalApi.papers(), portalApi.users()]);
+      setStats(statistics); setPapers(paperList); setUsers(userList);
+    } catch (exc) { setMessage(exc instanceof Error ? exc.message : '教务工作台加载失败'); }
   };
   useEffect(() => { load(); }, []);
 
-  const teachers = users.filter(item => item.role === 'teacher' && item.is_active);
+  const teachers = users.filter(item => (item.role === 'teacher' || item.role === 'admin') && item.is_active);
   const filtered = useMemo(() => papers.filter(item => `${item.title} ${item.paper_id}`.toLowerCase().includes(search.toLowerCase())), [papers, search]);
 
   const assign = async (paperId: string, reviewerId: string) => {

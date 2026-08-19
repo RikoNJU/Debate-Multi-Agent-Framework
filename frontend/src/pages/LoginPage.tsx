@@ -1,11 +1,13 @@
 import { FormEvent, useState } from 'react';
-import { ArrowRight, LockKeyhole, UserRound } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { ArrowLeft, ArrowRight, LockKeyhole, UserRound } from 'lucide-react';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 
-import { login, portalApi } from '../lib/portalApi';
+import { usePortalAuth } from '../contexts/PortalAuthContext';
 
-export default function LoginPage({ expectedRole }: { expectedRole: 'teacher' | 'admin' }) {
+export default function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { user, loading: restoring, signIn } = usePortalAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -16,18 +18,18 @@ export default function LoginPage({ expectedRole }: { expectedRole: 'teacher' | 
     setLoading(true);
     setError('');
     try {
-      const user = await login(username.trim(), password);
-      if (user.role !== expectedRole) {
-        await portalApi.logout();
-        throw new Error(expectedRole === 'teacher' ? '该账号不是教师账号' : '该账号不是教务管理员账号');
-      }
-      navigate(expectedRole === 'admin' ? '/admin' : '/teacher');
+      await signIn(username.trim(), password);
+      const requested = (location.state as { from?: string } | null)?.from;
+      navigate(requested?.startsWith('/workspace') ? requested : '/workspace/reviews', { replace: true });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : '登录失败');
     } finally {
       setLoading(false);
     }
   };
+
+  if (restoring) return <div className="portal-loading">正在恢复工作台会话...</div>;
+  if (user) return <Navigate to="/workspace/reviews" replace />;
 
   return (
     <div className="portal-login">
@@ -41,11 +43,12 @@ export default function LoginPage({ expectedRole }: { expectedRole: 'teacher' | 
       </main>
       <section>
         <form onSubmit={submit}>
-          <div><small>SECURE ACCESS</small><h2>{expectedRole === 'teacher' ? '教师端登录' : '教务端登录'}</h2><p>使用教务管理员创建的工作台账号</p></div>
+          <div><small>SECURE ACCESS</small><h2>工作人员登录</h2><p>一次登录即可进入论文评审与教务管理</p></div>
           <label><span>用户名</span><div><UserRound size={18}/><input autoFocus value={username} onChange={(event) => setUsername(event.target.value)} required /></div></label>
           <label><span>密码</span><div><LockKeyhole size={18}/><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></div></label>
           {error && <p className="form-error">{error}</p>}
           <button disabled={loading}>{loading ? '正在登录...' : '登录'}<ArrowRight size={18}/></button>
+          <Link className="login-student-link" to="/student"><ArrowLeft size={15}/>返回学生端</Link>
         </form>
       </section>
     </div>

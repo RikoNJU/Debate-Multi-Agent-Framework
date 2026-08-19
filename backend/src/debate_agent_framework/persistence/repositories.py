@@ -441,7 +441,11 @@ class PortalRepository:
             if session.get(PaperRecord, paper_id) is None:
                 raise KeyError("paper")
             reviewer = session.get(UserRecord, reviewer_id)
-            if reviewer is None or reviewer.role != "teacher" or not reviewer.is_active:
+            if (
+                reviewer is None
+                or reviewer.role not in {"teacher", "admin"}
+                or not reviewer.is_active
+            ):
                 raise KeyError("reviewer")
             record = session.scalar(
                 select(PaperAssignmentRecord).where(

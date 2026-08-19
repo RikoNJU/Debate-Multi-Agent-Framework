@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session, sessionmaker
@@ -54,7 +54,27 @@ class Database:
         config.set_main_option(
             "sqlalchemy.url", str(self.engine.url).replace("%", "%%")
         )
+        legacy_revision = self._infer_unversioned_revision()
+        if legacy_revision is not None:
+            command.stamp(config, legacy_revision)
         command.upgrade(config, "head")
+
+    def _infer_unversioned_revision(self) -> str | None:
+        inspector = inspect(self.engine)
+        tables = set(inspector.get_table_names())
+        if "papers" not in tables or "review_runs" not in tables:
+            return None
+        if "alembic_version" in tables:
+            with self.engine.connect() as connection:
+                if connection.execute(
+                    text("SELECT version_num FROM alembic_version LIMIT 1")
+                ).scalar_one_or_none():
+                    return None
+        if "student_task_access" in tables:
+            return "20260819_0003"
+        if "users" in tables and "human_reviews" in tables:
+            return "20260819_0002"
+        return "20260819_0001"
 
     @contextmanager
     def session(self) -> Iterator[Session]:

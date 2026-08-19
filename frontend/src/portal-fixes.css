@@ -24,6 +24,18 @@
   text-decoration: none;
 }
 
+.login-student-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: #526b71;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.login-student-link:hover { color: #146c67; }
+
 .assignment-line .publish-review {
   height: 28px;
   padding: 0 9px;

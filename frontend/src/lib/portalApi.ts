@@ -1,5 +1,6 @@
 const API_ROOT = '/api/debate/portal';
 const TOKEN_KEY = 'debate-portal-token';
+export const PORTAL_AUTH_INVALID_EVENT = 'debate-portal-auth-invalid';
 
 export type PortalUser = {
   id: string;
@@ -88,7 +89,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    if (response.status === 401) clearToken();
+    if (response.status === 401) {
+      clearToken();
+      window.dispatchEvent(new Event(PORTAL_AUTH_INVALID_EVENT));
+    }
     throw new Error(payload.detail || '请求失败');
   }
   if (response.status === 204) return undefined as T;

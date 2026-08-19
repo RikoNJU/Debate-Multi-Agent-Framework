@@ -17,7 +17,7 @@ class DebateWebSettings:
     data_dir: str = "backend/data"
     database_url: str | None = None
     mineru_output_dir: str = "backend/data/mineru"
-    portal_session_hours: int = 12
+    portal_session_hours: int = 168
     bootstrap_admin_username: str | None = None
     bootstrap_admin_password: str | None = None
     bootstrap_admin_display_name: str = "系统管理员"

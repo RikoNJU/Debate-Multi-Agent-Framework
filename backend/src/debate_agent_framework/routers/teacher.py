@@ -17,7 +17,6 @@ from ..services.review_criteria import REVIEW_CRITERIA
 from .dependencies import get_portal_repository, require_roles
 
 router = APIRouter(prefix="/portal/teacher", tags=["portal-teacher"])
-teacher_only = require_roles("teacher")
 teacher_or_admin = require_roles("teacher", "admin")
 
 
@@ -30,7 +29,7 @@ async def criteria(
 
 @router.get("/assignments", response_model=list[AssignmentResponse])
 async def list_assignments(
-    user: dict[str, Any] = Depends(teacher_only),
+    user: dict[str, Any] = Depends(teacher_or_admin),
     repository: PortalRepository = Depends(get_portal_repository),
 ) -> list[AssignmentResponse]:
     return [
@@ -42,7 +41,7 @@ async def list_assignments(
 @router.get("/assignments/{assignment_id}", response_model=AssignmentResponse)
 async def get_assignment(
     assignment_id: str,
-    user: dict[str, Any] = Depends(teacher_only),
+    user: dict[str, Any] = Depends(teacher_or_admin),
     repository: PortalRepository = Depends(get_portal_repository),
 ) -> AssignmentResponse:
     item = repository.get_assignment(assignment_id, reviewer_id=user["id"])
@@ -54,7 +53,7 @@ async def get_assignment(
 @router.get("/assignments/{assignment_id}/pdf")
 async def get_assignment_pdf(
     assignment_id: str,
-    user: dict[str, Any] = Depends(teacher_only),
+    user: dict[str, Any] = Depends(teacher_or_admin),
     repository: PortalRepository = Depends(get_portal_repository),
 ) -> FileResponse:
     value = repository.current_pdf_path(assignment_id, reviewer_id=user["id"])
@@ -97,7 +96,7 @@ def _save_review(
 async def save_review_draft(
     assignment_id: str,
     payload: HumanReviewUpsert,
-    user: dict[str, Any] = Depends(teacher_only),
+    user: dict[str, Any] = Depends(teacher_or_admin),
     repository: PortalRepository = Depends(get_portal_repository),
 ) -> HumanReviewResponse:
     return _save_review(assignment_id, payload, user, repository, submit=False)
@@ -110,7 +109,7 @@ async def save_review_draft(
 async def submit_review(
     assignment_id: str,
     payload: HumanReviewUpsert,
-    user: dict[str, Any] = Depends(teacher_only),
+    user: dict[str, Any] = Depends(teacher_or_admin),
     repository: PortalRepository = Depends(get_portal_repository),
 ) -> HumanReviewResponse:
     return _save_review(assignment_id, payload, user, repository, submit=True)

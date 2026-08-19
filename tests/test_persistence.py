@@ -5,10 +5,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from sqlalchemy import inspect
+
 from debate_agent_framework.persistence import (
     Database,
     PaperRepository,
     SqlAlchemyRunStore,
+)
+from debate_agent_framework.persistence.models import (
+    Base,
+    PaperArtifactRecord,
+    PaperRecord,
+    PaperRevisionRecord,
+    ReviewRunRecord,
 )
 from debate_agent_framework.schemas import (
     ChapterInput,
@@ -78,6 +87,31 @@ def test_running_task_is_marked_interrupted_after_restart(tmp_path: Path) -> Non
     assert restored.status is RunStatus.INTERRUPTED
     assert restored.current_stage == "interrupted"
     assert "服务重启" in (restored.error or "")
+
+
+def test_migrate_adopts_unversioned_legacy_database(tmp_path: Path) -> None:
+    database = Database(database_url(tmp_path / "legacy.db"))
+    Base.metadata.create_all(
+        database.engine,
+        tables=[
+            PaperRecord.__table__,
+            PaperRevisionRecord.__table__,
+            PaperArtifactRecord.__table__,
+            ReviewRunRecord.__table__,
+        ],
+    )
+
+    database.migrate()
+    inspector = inspect(database.engine)
+    with database.engine.connect() as connection:
+        revision = connection.exec_driver_sql(
+            "SELECT version_num FROM alembic_version"
+        ).scalar_one()
+    tables = set(inspector.get_table_names())
+    database.dispose()
+
+    assert revision == "20260819_0003"
+    assert {"users", "student_task_access"}.issubset(tables)
 
 
 def test_paper_files_and_artifacts_are_archived_safely(tmp_path: Path) -> None:

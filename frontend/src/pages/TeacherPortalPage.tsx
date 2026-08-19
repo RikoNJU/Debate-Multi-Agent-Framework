@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, ChevronLeft, FileText, Save, Search, Send, Sparkles } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 
 import PortalShell from '../components/PortalShell';
-import { Assignment, Criterion, getToken, portalApi, PortalUser } from '../lib/portalApi';
+import { usePortalAuth } from '../contexts/PortalAuthContext';
+import { Assignment, Criterion, getToken, portalApi } from '../lib/portalApi';
 
 const emptyScores = () => Array(18).fill(0);
 
 export default function TeacherPortalPage() {
-  const navigate = useNavigate();
-  const [user, setUser] = useState<PortalUser | null>(null);
+  const { user } = usePortalAuth();
   const [items, setItems] = useState<Assignment[]>([]);
   const [criteria, setCriteria] = useState<Criterion[]>([]);
   const [selected, setSelected] = useState<Assignment | null>(null);
@@ -22,10 +21,9 @@ export default function TeacherPortalPage() {
 
   const load = async () => {
     try {
-      const [current, assignments, criterionList] = await Promise.all([portalApi.me(), portalApi.assignments(), portalApi.criteria()]);
-      if (current.role !== 'teacher') return navigate('/admin');
-      setUser(current); setItems(assignments); setCriteria(criterionList);
-    } catch { navigate('/teacher/login'); }
+      const [assignments, criterionList] = await Promise.all([portalApi.assignments(), portalApi.criteria()]);
+      setItems(assignments); setCriteria(criterionList);
+    } catch (exc) { setMessage(exc instanceof Error ? exc.message : '工作台加载失败'); }
   };
 
   useEffect(() => { load(); }, []);
