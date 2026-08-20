@@ -473,8 +473,8 @@ class DebateWorkflow:
         ) -> tuple[IndependentReview | None, DebateWorkflowIssue | None]:
             stage = f"specialist_{role.value}"
             label = SPECIALIST_LABELS[role]
-            await _emit_progress(stage, label, "running", 30)
             async with semaphore:
+                await _emit_progress(stage, label, "running", 30)
                 last_error: Exception | None = None
                 for attempt in range(
                     1, self.config.review_attempts + 1
