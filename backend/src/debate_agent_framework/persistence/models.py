@@ -87,6 +87,27 @@ class ReviewRunRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class ReviewRunStageRecord(Base):
+    __tablename__ = "review_run_stages"
+    __table_args__ = (
+        UniqueConstraint("task_id", "stage", name="uq_review_run_stage"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("review_runs.task_id", ondelete="CASCADE"), index=True
+    )
+    stage: Mapped[str] = mapped_column(String(64))
+    label: Mapped[str] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    progress_percent: Mapped[int] = mapped_column()
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class StudentTaskAccessRecord(Base):
     __tablename__ = "student_task_access"
 

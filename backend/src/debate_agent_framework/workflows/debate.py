@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import Awaitable
-from typing import Any, TypeVar, cast
+from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
+from typing import Any, Literal, TypeVar, cast
 
 from langgraph.graph import END, START, StateGraph
 from pydantic import ValidationError
@@ -59,6 +60,38 @@ T = TypeVar("T")
 REQUIRED_ROLES = frozenset(SpecialistRole)
 logger = logging.getLogger("debate.workflow")
 
+ProgressStatus = Literal["running", "succeeded", "failed"]
+ProgressCallback = Callable[
+    [str, str, ProgressStatus, int, str | None],
+    None | Awaitable[None],
+]
+_progress_callback: ContextVar[ProgressCallback | None] = ContextVar(
+    "debate_progress_callback", default=None
+)
+
+WORKFLOW_STAGES: dict[str, tuple[str, int, int]] = {
+    "step1_classify_paper": ("识别论文类型", 2, 8),
+    "step2_classify_chapters": ("识别章节阶段", 8, 14),
+    "retrieve_historical_advice": ("检索历史评审建议", 14, 18),
+    "build_context": ("构造评审上下文", 18, 25),
+    "independent_review": ("三位专家并行初审", 25, 55),
+    "plan_debate": ("Chair 识别争议", 55, 63),
+    "retrieve_debate_evidence": ("检索外部证据", 63, 68),
+    "targeted_debate": ("专家定向讨论", 68, 75),
+    "synthesize_review": ("Chair 综合裁决", 75, 83),
+    "step5_workload_evaluation": ("评价论文结构与工作量", 83, 88),
+    "compatibility_gate": ("校验评审结果完整性", 88, 90),
+    "step6_summary_advice": ("汇总关键修改建议", 90, 94),
+    "retrieve_score_cases": ("检索历史评分案例", 94, 96),
+    "step7_scoring": ("生成最终评分", 96, 99),
+}
+
+SPECIALIST_LABELS = {
+    SpecialistRole.SCIENTIFIC_SOUNDNESS: "科学严谨性专家初审",
+    SpecialistRole.EMPIRICAL_EVIDENCE: "实证证据专家初审",
+    SpecialistRole.GLOBAL_QUALITY: "全局质量专家初审",
+}
+
 
 async def _resolve(value: T | Awaitable[T]) -> T:
     """兼容同步 Agent 和异步模型 SDK。"""
@@ -73,6 +106,21 @@ async def _invoke(call: Any) -> Any:
 
     value = await asyncio.to_thread(call)
     return await _resolve(value)
+
+
+async def _emit_progress(
+    stage: str,
+    label: str,
+    status: ProgressStatus,
+    progress_percent: int,
+    detail: str | None = None,
+) -> None:
+    callback = _progress_callback.get()
+    if callback is None:
+        return
+    result = callback(stage, label, status, progress_percent, detail)
+    if inspect.isawaitable(result):
+        await result
 
 
 class DebateWorkflow:
@@ -153,20 +201,24 @@ class DebateWorkflow:
 
     def _build_graph(self) -> Any:
         builder = StateGraph(DebateState)
-        builder.add_node("step1_classify_paper", self._step1_classify_paper)
-        builder.add_node("step2_classify_chapters", self._step2_classify_chapters)
-        builder.add_node("retrieve_historical_advice", self._retrieve_historical_advice)
-        builder.add_node("build_context", self._build_context)
-        builder.add_node("independent_review", self._independent_review)
-        builder.add_node("plan_debate", self._plan_debate)
-        builder.add_node("retrieve_debate_evidence", self._retrieve_debate_evidence)
-        builder.add_node("targeted_debate", self._targeted_debate)
-        builder.add_node("synthesize_review", self._synthesize_review)
-        builder.add_node("step5_workload_evaluation", self._step5_workload_evaluation)
-        builder.add_node("compatibility_gate", self._compatibility_gate)
-        builder.add_node("step6_summary_advice", self._step6_summary_advice)
-        builder.add_node("retrieve_score_cases", self._retrieve_score_cases)
-        builder.add_node("step7_scoring", self._step7_scoring)
+        nodes = {
+            "step1_classify_paper": self._step1_classify_paper,
+            "step2_classify_chapters": self._step2_classify_chapters,
+            "retrieve_historical_advice": self._retrieve_historical_advice,
+            "build_context": self._build_context,
+            "independent_review": self._independent_review,
+            "plan_debate": self._plan_debate,
+            "retrieve_debate_evidence": self._retrieve_debate_evidence,
+            "targeted_debate": self._targeted_debate,
+            "synthesize_review": self._synthesize_review,
+            "step5_workload_evaluation": self._step5_workload_evaluation,
+            "compatibility_gate": self._compatibility_gate,
+            "step6_summary_advice": self._step6_summary_advice,
+            "retrieve_score_cases": self._retrieve_score_cases,
+            "step7_scoring": self._step7_scoring,
+        }
+        for name, handler in nodes.items():
+            builder.add_node(name, self._with_progress(name, handler))
 
         builder.add_edge(START, "step1_classify_paper")
         builder.add_edge("step1_classify_paper", "step2_classify_chapters")
@@ -184,6 +236,28 @@ class DebateWorkflow:
         builder.add_edge("retrieve_score_cases", "step7_scoring")
         builder.add_edge("step7_scoring", END)
         return builder.compile()
+
+    @staticmethod
+    def _with_progress(name: str, handler: Any) -> Any:
+        label, started_progress, completed_progress = WORKFLOW_STAGES[name]
+
+        async def tracked(state: DebateState) -> dict[str, Any]:
+            await _emit_progress(name, label, "running", started_progress)
+            try:
+                result = await _resolve(handler(state))
+            except Exception as exc:
+                await _emit_progress(
+                    name,
+                    label,
+                    "failed",
+                    started_progress,
+                    str(exc)[:1000],
+                )
+                raise
+            await _emit_progress(name, label, "succeeded", completed_progress)
+            return result
+
+        return tracked
 
     async def _step1_classify_paper(self, state: DebateState) -> dict[str, Any]:
         """自动补齐旧 Step 1；显式类型保持不变并记录来源。"""
@@ -361,6 +435,8 @@ class DebateWorkflow:
             try:
                 value = await _invoke(call)
                 return model.model_validate(value)
+            except ModelClientError:
+                raise
             except Exception as exc:
                 last_error = exc
                 if attempt < attempts:
@@ -394,6 +470,9 @@ class DebateWorkflow:
         async def run_one(
             role: SpecialistRole,
         ) -> tuple[IndependentReview | None, DebateWorkflowIssue | None]:
+            stage = f"specialist_{role.value}"
+            label = SPECIALIST_LABELS[role]
+            await _emit_progress(stage, label, "running", 30)
             async with semaphore:
                 last_error: Exception | None = None
                 for attempt in range(
@@ -410,7 +489,11 @@ class DebateWorkflow:
                                 f"注册为 {role.value} 的 Agent 返回了 {review.role.value}"
                             )
                         self._validate_review_grounding(review, state["context"])
+                        await _emit_progress(stage, label, "succeeded", 50)
                         return review, None
+                    except ModelClientError as exc:
+                        last_error = exc
+                        break
                     except Exception as exc:  # 一个视角失败时保留其他独立意见
                         last_error = exc
                         if attempt < self.config.review_attempts:
@@ -420,6 +503,9 @@ class DebateWorkflow:
                                 self.config.review_attempts, exc,
                             )
                 assert last_error is not None
+                await _emit_progress(
+                    stage, label, "failed", 50, str(last_error)[:1000]
+                )
                 return None, DebateWorkflowIssue(
                     node="independent_review",
                     code="specialist_review_failed",
@@ -724,7 +810,10 @@ class DebateWorkflow:
             raise WorkflowExecutionError(f"Step 7 适配器执行失败：{exc}") from exc
 
     async def arun(
-        self, review_input: DebateReviewInput | dict[str, Any]
+        self,
+        review_input: DebateReviewInput | dict[str, Any],
+        *,
+        progress_callback: ProgressCallback | None = None,
     ) -> DebateRunResult:
         """异步执行完整 Debate 评审链路。"""
 
@@ -737,7 +826,11 @@ class DebateWorkflow:
             "historical_score_cases": [],
             "issues": [],
         }
-        final = await self.graph.ainvoke(initial)
+        token = _progress_callback.set(progress_callback)
+        try:
+            final = await self.graph.ainvoke(initial)
+        finally:
+            _progress_callback.reset(token)
         required = {
             "context",
             "debate_plan",

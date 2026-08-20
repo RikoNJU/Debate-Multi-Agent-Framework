@@ -9,7 +9,7 @@ from uuid import uuid4
 from sqlalchemy import func, select
 
 from ..schemas import DebateReviewInput
-from ..services.jobs import RunSnapshot, RunStatus
+from ..services.jobs import RunSnapshot, RunStageEvent, RunStageStatus, RunStatus
 from .database import Database
 from .models import (
     AuditLogRecord,
@@ -20,6 +20,7 @@ from .models import (
     PaperRecord,
     PaperRevisionRecord,
     ReviewRunRecord,
+    ReviewRunStageRecord,
     StudentTaskAccessRecord,
     UserRecord,
 )
@@ -52,16 +53,63 @@ class SqlAlchemyRunStore:
         )
         with self.database.session() as session:
             session.add(record)
-        return self._snapshot(record)
+        return self._snapshot(record, [])
 
     def mark_running(self, task_id: str) -> RunSnapshot:
         return self._update(
             task_id,
             status=RunStatus.RUNNING,
-            current_stage="workflow",
+            current_stage="initializing",
             result_json=None,
             error=None,
         )
+
+    def mark_stage(
+        self,
+        task_id: str,
+        *,
+        stage: str,
+        label: str,
+        status: RunStageStatus,
+        progress_percent: int,
+        detail: str | None = None,
+    ) -> RunSnapshot:
+        now = datetime.now(UTC)
+        with self.database.session() as session:
+            record = session.get(ReviewRunRecord, task_id)
+            if record is None:
+                raise KeyError(task_id)
+            stage_record = session.scalar(
+                select(ReviewRunStageRecord).where(
+                    ReviewRunStageRecord.task_id == task_id,
+                    ReviewRunStageRecord.stage == stage,
+                )
+            )
+            if stage_record is None:
+                stage_record = ReviewRunStageRecord(
+                    id=uuid4().hex,
+                    task_id=task_id,
+                    stage=stage,
+                    label=label,
+                    status=status.value,
+                    progress_percent=progress_percent,
+                    detail=detail,
+                    started_at=now,
+                )
+                session.add(stage_record)
+            else:
+                stage_record.label = label
+                stage_record.status = status.value
+                stage_record.progress_percent = progress_percent
+                stage_record.detail = detail
+            stage_record.completed_at = (
+                now if status is not RunStageStatus.RUNNING else None
+            )
+            record.current_stage = stage
+            record.updated_at = now
+            session.flush()
+            events = self._stage_events(session, task_id)
+            return self._snapshot(record, events)
 
     def mark_succeeded(self, task_id: str, result: dict[str, Any]) -> RunSnapshot:
         return self._update(
@@ -84,7 +132,11 @@ class SqlAlchemyRunStore:
     def get(self, task_id: str) -> RunSnapshot | None:
         with self.database.session() as session:
             record = session.get(ReviewRunRecord, task_id)
-            return self._snapshot(record) if record else None
+            return (
+                self._snapshot(record, self._stage_events(session, task_id))
+                if record
+                else None
+            )
 
     def list_for_paper(self, paper_id: str) -> list[RunSnapshot]:
         with self.database.session() as session:
@@ -93,7 +145,10 @@ class SqlAlchemyRunStore:
                 .where(ReviewRunRecord.paper_id == paper_id)
                 .order_by(ReviewRunRecord.created_at.desc())
             ).all()
-            return [self._snapshot(record) for record in records]
+            return [
+                self._snapshot(record, self._stage_events(session, record.task_id))
+                for record in records
+            ]
 
     def mark_interrupted(self) -> int:
         changed = 0
@@ -130,10 +185,42 @@ class SqlAlchemyRunStore:
             record.error = error
             record.updated_at = datetime.now(UTC)
             session.flush()
-            return self._snapshot(record)
+            return self._snapshot(record, self._stage_events(session, task_id))
 
     @staticmethod
-    def _snapshot(record: ReviewRunRecord) -> RunSnapshot:
+    def _stage_events(session: Any, task_id: str) -> list[ReviewRunStageRecord]:
+        return list(
+            session.scalars(
+                select(ReviewRunStageRecord)
+                .where(ReviewRunStageRecord.task_id == task_id)
+                .order_by(ReviewRunStageRecord.started_at, ReviewRunStageRecord.stage)
+            ).all()
+        )
+
+    @staticmethod
+    def _snapshot(
+        record: ReviewRunRecord,
+        stage_records: list[ReviewRunStageRecord],
+    ) -> RunSnapshot:
+        events = [
+            RunStageEvent(
+                stage=item.stage,
+                label=item.label,
+                status=RunStageStatus(item.status),
+                progress_percent=item.progress_percent,
+                started_at=_aware(item.started_at),
+                completed_at=(
+                    _aware(item.completed_at) if item.completed_at else None
+                ),
+                detail=item.detail,
+            )
+            for item in stage_records
+        ]
+        current_event = next(
+            (item for item in reversed(events) if item.stage == record.current_stage),
+            None,
+        )
+        terminal_progress = 100 if record.status == RunStatus.SUCCEEDED.value else 0
         return RunSnapshot(
             task_id=record.task_id,
             status=RunStatus(record.status),
@@ -144,6 +231,22 @@ class SqlAlchemyRunStore:
             paper_id=record.paper_id,
             revision_id=record.revision_id,
             current_stage=record.current_stage,
+            current_stage_label=(
+                current_event.label
+                if current_event
+                else {
+                    "queued": "等待开始",
+                    "initializing": "正在初始化评审",
+                    "completed": "评审已完成",
+                    "failed": "评审失败",
+                    "interrupted": "评审已中断",
+                }.get(record.current_stage or "")
+            ),
+            progress_percent=(
+                current_event.progress_percent if current_event else terminal_progress
+            ),
+            stage_started_at=current_event.started_at if current_event else None,
+            stage_events=events,
         )
 
 

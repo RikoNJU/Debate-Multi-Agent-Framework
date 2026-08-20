@@ -19,6 +19,24 @@ class RunStatus(StrEnum):
     INTERRUPTED = "interrupted"
 
 
+class RunStageStatus(StrEnum):
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class RunStageEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stage: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    status: RunStageStatus
+    progress_percent: int = Field(ge=0, le=100)
+    started_at: datetime
+    completed_at: datetime | None = None
+    detail: str | None = None
+
+
 class RunSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -31,6 +49,10 @@ class RunSnapshot(BaseModel):
     paper_id: str | None = None
     revision_id: str | None = None
     current_stage: str | None = None
+    current_stage_label: str | None = None
+    progress_percent: int = Field(default=0, ge=0, le=100)
+    stage_started_at: datetime | None = None
+    stage_events: list[RunStageEvent] = Field(default_factory=list)
 
 
 class InMemoryRunStore:
@@ -55,6 +77,8 @@ class InMemoryRunStore:
             paper_id=paper_id,
             revision_id=revision_id,
             current_stage="queued",
+            current_stage_label="等待开始",
+            progress_percent=0,
         )
         with self._lock:
             self._runs[snapshot.task_id] = snapshot
@@ -66,8 +90,63 @@ class InMemoryRunStore:
             status=RunStatus.RUNNING,
             result=None,
             error=None,
-            current_stage="workflow",
+            current_stage="initializing",
+            current_stage_label="正在初始化评审",
+            progress_percent=1,
+            stage_started_at=datetime.now(UTC),
         )
+
+    def mark_stage(
+        self,
+        task_id: str,
+        *,
+        stage: str,
+        label: str,
+        status: RunStageStatus,
+        progress_percent: int,
+        detail: str | None = None,
+    ) -> RunSnapshot:
+        now = datetime.now(UTC)
+        with self._lock:
+            current = self._runs.get(task_id)
+            if current is None:
+                raise KeyError(task_id)
+            events = list(current.stage_events)
+            existing_index = next(
+                (index for index, item in enumerate(events) if item.stage == stage),
+                None,
+            )
+            started_at = (
+                events[existing_index].started_at
+                if existing_index is not None
+                else now
+            )
+            event = RunStageEvent(
+                stage=stage,
+                label=label,
+                status=status,
+                progress_percent=progress_percent,
+                started_at=started_at,
+                completed_at=(now if status is not RunStageStatus.RUNNING else None),
+                detail=detail,
+            )
+            if existing_index is None:
+                events.append(event)
+            else:
+                events[existing_index] = event
+            updated = current.model_copy(
+                update={
+                    "current_stage": stage,
+                    "current_stage_label": label,
+                    "progress_percent": progress_percent,
+                    "stage_started_at": started_at,
+                    "stage_events": events,
+                    "updated_at": now,
+                },
+                deep=True,
+            )
+            self._runs[task_id] = updated
+            return updated.model_copy(deep=True)
 
     def mark_succeeded(self, task_id: str, result: dict[str, Any]) -> RunSnapshot:
         return self._update(
@@ -76,6 +155,9 @@ class InMemoryRunStore:
             result=result,
             error=None,
             current_stage="completed",
+            current_stage_label="评审已完成",
+            progress_percent=100,
+            stage_started_at=None,
         )
 
     def mark_failed(self, task_id: str, error: str) -> RunSnapshot:
@@ -85,6 +167,8 @@ class InMemoryRunStore:
             result=None,
             error=error,
             current_stage="failed",
+            current_stage_label="评审失败",
+            stage_started_at=None,
         )
 
     def get(self, task_id: str) -> RunSnapshot | None:

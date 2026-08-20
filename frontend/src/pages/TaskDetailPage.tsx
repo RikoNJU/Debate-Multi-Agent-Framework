@@ -24,6 +24,14 @@ const STATUS_TEXT: Record<string, string> = {
   interrupted: '评审已中断',
 };
 
+function formatElapsed(startedAt?: string, now = Date.now()): string {
+  if (!startedAt) return '刚刚开始';
+  const elapsedSeconds = Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000));
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = elapsedSeconds % 60;
+  return minutes ? `${minutes} 分 ${seconds.toString().padStart(2, '0')} 秒` : `${seconds} 秒`;
+}
+
 function roleLabel(role: string | undefined): string {
   return (role && ROLE_LABELS[role]) || role || '评审专家';
 }
@@ -52,7 +60,13 @@ export default function TaskDetailPage() {
   const [copied, setCopied] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [clock, setClock] = useState(Date.now());
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -118,6 +132,12 @@ export default function TaskDetailPage() {
     || status === 'interrupted'
     || (status === undefined && error);
   const accessCode = getTaskAccess(taskId);
+  const progress = Math.max(0, Math.min(100, snapshot?.progress_percent ?? 0));
+  const stageEvents = snapshot?.stage_events ?? [];
+  const elapsed = formatElapsed(snapshot?.created_at, clock);
+  const quietSeconds = snapshot?.updated_at
+    ? Math.max(0, Math.floor((clock - new Date(snapshot.updated_at).getTime()) / 1000))
+    : 0;
 
   const copyAccessCode = async () => {
     if (!accessCode) return;
@@ -173,9 +193,31 @@ export default function TaskDetailPage() {
         </div>
 
         {loading || (isPending && !result) ? (
-          <div className="report-loading">
-            正在读取评审结果…（实时评审较慢，通常需要 10 分钟以上，页面会自动刷新）
-            {status === 'running' || status === 'queued' ? ` 当前状态：${STATUS_TEXT[status]}` : ''}
+          <div className="report-loading progress-view">
+            <div className="progress-heading">
+              <div>
+                <small>评审已进行 {elapsed}</small>
+                <strong>{snapshot?.current_stage_label || (loading ? '正在读取任务状态' : STATUS_TEXT[status])}</strong>
+              </div>
+              <b>{progress}%</b>
+            </div>
+            <div className="progress-track" aria-label={`评审进度 ${progress}%`}>
+              <i style={{ width: `${progress}%` }} />
+            </div>
+            {quietSeconds >= 180 && status === 'running' && (
+              <p className="progress-warning">
+                当前步骤已等待 {formatElapsed(snapshot?.updated_at, clock)}，模型服务可能正在排队或重试，页面会继续自动刷新。
+              </p>
+            )}
+            <div className="stage-timeline">
+              {stageEvents.length ? stageEvents.map((event: any) => (
+                <div className={`stage-item ${event.status}`} key={event.stage}>
+                  {event.status === 'succeeded' ? <CheckCircle2 size={16} /> : event.status === 'failed' ? <CircleAlert size={16} /> : <span className="stage-spinner" />}
+                  <span>{event.label}</span>
+                  <small>{event.status === 'running' ? '进行中' : event.status === 'succeeded' ? '已完成' : '失败'}</small>
+                </div>
+              )) : <p>任务已进入评审队列，正在等待第一个阶段开始。</p>}
+            </div>
           </div>
         ) : isFailed || error ? (
           <div className="report-error">

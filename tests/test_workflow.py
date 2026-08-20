@@ -100,6 +100,30 @@ def make_services(
     )
 
 
+def test_workflow_reports_node_and_specialist_progress() -> None:
+    events: list[tuple[str, str, int]] = []
+
+    async def record(
+        stage: str,
+        _label: str,
+        status: str,
+        progress: int,
+        _detail: str | None,
+    ) -> None:
+        events.append((stage, status, progress))
+
+    asyncio.run(
+        DebateWorkflow(make_services()).arun(
+            make_input(), progress_callback=record
+        )
+    )
+
+    assert ("step1_classify_paper", "running", 2) in events
+    assert ("step7_scoring", "succeeded", 99) in events
+    for role in SpecialistRole:
+        assert (f"specialist_{role.value}", "succeeded", 50) in events
+
+
 class RecordingHistoricalAdviceRetriever:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail

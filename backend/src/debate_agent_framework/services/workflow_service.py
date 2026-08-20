@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Protocol
 
 from debate_agent_framework.schemas import DebateReviewInput
-from debate_agent_framework.services.jobs import InMemoryRunStore, RunSnapshot
+from debate_agent_framework.services.jobs import (
+    InMemoryRunStore,
+    RunSnapshot,
+    RunStageStatus,
+)
 from debate_agent_framework.workflows import DebateWorkflow, build_workflow
 
 
@@ -18,6 +23,17 @@ class RunStore(Protocol):
     ) -> RunSnapshot: ...
 
     def mark_running(self, task_id: str) -> RunSnapshot: ...
+
+    def mark_stage(
+        self,
+        task_id: str,
+        *,
+        stage: str,
+        label: str,
+        status: RunStageStatus,
+        progress_percent: int,
+        detail: str | None = None,
+    ) -> RunSnapshot: ...
 
     def mark_succeeded(self, task_id: str, result: dict) -> RunSnapshot: ...
 
@@ -49,8 +65,28 @@ class DebateWorkflowService:
 
     async def execute(self, task_id: str, review_input: DebateReviewInput) -> None:
         self.store.mark_running(task_id)
+
+        async def record_progress(
+            stage: str,
+            label: str,
+            stage_status: str,
+            progress_percent: int,
+            detail: str | None,
+        ) -> None:
+            await asyncio.to_thread(
+                self.store.mark_stage,
+                task_id,
+                stage=stage,
+                label=label,
+                status=RunStageStatus(stage_status),
+                progress_percent=progress_percent,
+                detail=detail,
+            )
+
         try:
-            result = await self.workflow.arun(review_input)
+            result = await self.workflow.arun(
+                review_input, progress_callback=record_progress
+            )
             self.store.mark_succeeded(task_id, result.model_dump(mode="json"))
         except Exception as exc:
             self.store.mark_failed(task_id, str(exc))

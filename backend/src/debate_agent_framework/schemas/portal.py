@@ -88,6 +88,10 @@ class StudentTaskResponse(PortalModel):
     paper_id: str | None = None
     revision_id: str | None = None
     current_stage: str | None = None
+    current_stage_label: str | None = None
+    progress_percent: int = Field(default=0, ge=0, le=100)
+    stage_started_at: datetime | None = None
+    stage_events: list[dict[str, Any]] = Field(default_factory=list)
     published_review: StudentPublishedReview | None = None
 
 

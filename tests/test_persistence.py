@@ -26,7 +26,7 @@ from debate_agent_framework.schemas import (
     MinerUParseResult,
     PaperType,
 )
-from debate_agent_framework.services.jobs import RunStatus
+from debate_agent_framework.services.jobs import RunStageStatus, RunStatus
 from debate_agent_framework.services.paper_storage import PaperPersistenceService
 
 
@@ -73,6 +73,41 @@ def test_run_and_result_survive_database_reopen(tmp_path: Path) -> None:
     assert restored.result == {"final_score": {"total_score": 88}}
 
 
+def test_run_stage_progress_survives_database_reopen(tmp_path: Path) -> None:
+    url = database_url(tmp_path / "progress.db")
+    database = Database(url)
+    database.create_schema()
+    store = SqlAlchemyRunStore(database)
+    created = store.create()
+    store.mark_running(created.task_id)
+    store.mark_stage(
+        created.task_id,
+        stage="independent_review",
+        label="三位专家并行初审",
+        status=RunStageStatus.RUNNING,
+        progress_percent=25,
+    )
+    store.mark_stage(
+        created.task_id,
+        stage="independent_review",
+        label="三位专家并行初审",
+        status=RunStageStatus.SUCCEEDED,
+        progress_percent=55,
+    )
+    database.dispose()
+
+    reopened = Database(url)
+    restored = SqlAlchemyRunStore(reopened).get(created.task_id)
+    reopened.dispose()
+
+    assert restored is not None
+    assert restored.current_stage_label == "三位专家并行初审"
+    assert restored.progress_percent == 55
+    assert len(restored.stage_events) == 1
+    assert restored.stage_events[0].status is RunStageStatus.SUCCEEDED
+    assert restored.stage_events[0].completed_at is not None
+
+
 def test_running_task_is_marked_interrupted_after_restart(tmp_path: Path) -> None:
     database = Database(database_url(tmp_path / "interrupted.db"))
     database.create_schema()
@@ -111,8 +146,8 @@ def test_migrate_adopts_unversioned_legacy_database(tmp_path: Path) -> None:
     tables = set(inspector.get_table_names())
     database.dispose()
 
-    assert revision == "20260819_0003"
-    assert {"users", "student_task_access"}.issubset(tables)
+    assert revision == "20260820_0004"
+    assert {"users", "student_task_access", "review_run_stages"}.issubset(tables)
 
 
 def test_paper_files_and_artifacts_are_archived_safely(tmp_path: Path) -> None:

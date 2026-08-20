@@ -37,6 +37,12 @@ def test_debate_health_and_run_lifecycle() -> None:
         )
         assert result.status_code == 200
         assert result.json()["status"] == "succeeded"
+        assert result.json()["progress_percent"] == 100
+        assert result.json()["current_stage_label"] == "评审已完成"
+        assert any(
+            event["stage"] == "independent_review"
+            for event in result.json()["stage_events"]
+        )
         assert result.json()["result"]["final_score"]["total_score"] > 0
         assert len(
             result.json()["result"]["final_score"]["legacy_level_scores"]
