@@ -285,7 +285,7 @@ if actual_keys != expected_keys:
 ## 九、模型调用层 `backend/env/model_client.py`
 
 - 环境变量优先级：`DEBATE_*` > `LLM_*` > 默认值（`from_env` 的 `read()` 函数，53-57行）
-- `ModelRuntimeConfig` 默认值：gpt-4.1-mini、temp 0.2、超时 60s
+- `ModelRuntimeConfig` 默认值：DeepSeek-V4-Pro、temp 0.2、超时 60s
 - `OpenAICompatibleChatClient` 用标准库 `urllib.request` 发请求（不依赖 requests），解析 `choices[0].message.content`
 - `acomplete` 用 `asyncio.to_thread` 包同步调用——所以异步工作流里同步模型也能用
 - 有个 `ModelClientError` 专门区分模型错误

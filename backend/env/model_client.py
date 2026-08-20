@@ -50,8 +50,8 @@ class ModelResponse:
 @dataclass(frozen=True)
 class ModelRuntimeConfig:
     provider: str = "openai_compatible"
-    model: str = "gpt-4.1-mini"
-    base_url: str = "https://api.openai.com/v1"
+    model: str = "deepseek-ai/DeepSeek-V4-Pro"
+    base_url: str = "https://api.siliconflow.cn/v1"
     api_key: str | None = None
     default_temperature: float = 0.2
     default_timeout_seconds: float = 60.0
