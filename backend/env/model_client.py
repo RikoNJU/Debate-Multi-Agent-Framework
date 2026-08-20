@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import random
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
@@ -17,6 +20,10 @@ from typing import Any, Protocol
 
 class ModelClientError(RuntimeError):
     """模型客户端调用失败。"""
+
+
+logger = logging.getLogger("debate.model_client")
+TRANSIENT_HTTP_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
 
 @dataclass(frozen=True)
@@ -48,6 +55,17 @@ class ModelRuntimeConfig:
     api_key: str | None = None
     default_temperature: float = 0.2
     default_timeout_seconds: float = 60.0
+    max_retries: int = 2
+    retry_base_seconds: float = 1.0
+    retry_max_seconds: float = 8.0
+
+    def __post_init__(self) -> None:
+        if self.max_retries < 0:
+            raise ValueError("max_retries 不能小于 0")
+        if self.retry_base_seconds < 0:
+            raise ValueError("retry_base_seconds 不能小于 0")
+        if self.retry_max_seconds < self.retry_base_seconds:
+            raise ValueError("retry_max_seconds 不能小于 retry_base_seconds")
 
     @classmethod
     def from_env(cls, prefix: str = "DEBATE") -> "ModelRuntimeConfig":
@@ -58,6 +76,9 @@ class ModelRuntimeConfig:
 
         temperature = read("TEMPERATURE")
         timeout = read("TIMEOUT_SECONDS")
+        max_retries = read("MAX_RETRIES")
+        retry_base = read("RETRY_BASE_SECONDS")
+        retry_max = read("RETRY_MAX_SECONDS")
         return cls(
             provider=read("PROVIDER", cls.provider) or cls.provider,
             model=read("MODEL", cls.model) or cls.model,
@@ -68,6 +89,13 @@ class ModelRuntimeConfig:
             ),
             default_timeout_seconds=(
                 float(timeout) if timeout else cls.default_timeout_seconds
+            ),
+            max_retries=int(max_retries) if max_retries else cls.max_retries,
+            retry_base_seconds=(
+                float(retry_base) if retry_base else cls.retry_base_seconds
+            ),
+            retry_max_seconds=(
+                float(retry_max) if retry_max else cls.retry_max_seconds
             ),
         )
 
@@ -139,14 +167,37 @@ class OpenAICompatibleChatClient:
             method="POST",
         )
 
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                raw = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise ModelClientError(f"模型 HTTP 调用失败: {exc.code} {detail}") from exc
-        except OSError as exc:
-            raise ModelClientError(f"模型网络调用失败: {exc}") from exc
+        raw: Mapping[str, Any] | None = None
+        for attempt in range(self.config.max_retries + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    raw = json.loads(response.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                if (
+                    exc.code in TRANSIENT_HTTP_STATUS_CODES
+                    and attempt < self.config.max_retries
+                ):
+                    self._wait_before_retry(
+                        attempt,
+                        reason=f"HTTP {exc.code}",
+                        retry_after=(
+                            exc.headers.get("Retry-After") if exc.headers else None
+                        ),
+                    )
+                    continue
+                raise ModelClientError(
+                    f"模型 HTTP 调用失败: {exc.code} {detail}"
+                ) from exc
+            except OSError as exc:
+                if attempt < self.config.max_retries:
+                    self._wait_before_retry(attempt, reason=str(exc))
+                    continue
+                raise ModelClientError(f"模型网络调用失败: {exc}") from exc
+
+        if raw is None:
+            raise ModelClientError("模型调用未返回结果")
 
         try:
             content = raw["choices"][0]["message"]["content"]
@@ -158,6 +209,35 @@ class OpenAICompatibleChatClient:
             raw=raw,
             usage=raw.get("usage", {}),
         )
+
+    def _wait_before_retry(
+        self,
+        attempt: int,
+        *,
+        reason: str,
+        retry_after: str | None = None,
+    ) -> None:
+        delay = min(
+            self.config.retry_max_seconds,
+            self.config.retry_base_seconds * (2**attempt)
+            + random.uniform(0, self.config.retry_base_seconds),
+        )
+        if retry_after:
+            try:
+                delay = min(
+                    self.config.retry_max_seconds,
+                    max(delay, float(retry_after)),
+                )
+            except ValueError:
+                pass
+        logger.warning(
+            "模型调用出现瞬时错误，第 %d/%d 次重试将在 %.2f 秒后进行：%s",
+            attempt + 1,
+            self.config.max_retries,
+            delay,
+            reason,
+        )
+        time.sleep(delay)
 
     async def acomplete(
         self,

@@ -310,6 +310,21 @@ def test_one_specialist_failure_preserves_two_other_reviews() -> None:
     assert result.final_score is not None
 
 
+def test_two_specialist_failures_report_role_details() -> None:
+    specialists = {role: DemoSpecialist(role) for role in SpecialistRole}
+    for role in (
+        SpecialistRole.SCIENTIFIC_SOUNDNESS,
+        SpecialistRole.GLOBAL_QUALITY,
+    ):
+        specialists[role] = FailingSpecialist(role)
+
+    with pytest.raises(
+        WorkflowExecutionError,
+        match="失败详情.*scientific_soundness.*global_quality",
+    ):
+        DebateWorkflow(make_services(specialists=specialists)).run(make_input())
+
+
 class BrokenCompatibilityChair(DemoReviewChair):
     def synthesize(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         result = super().synthesize(*args, **kwargs)

@@ -1,8 +1,14 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { ChevronDown, ChevronLeft, CheckCircle2, CircleAlert, Copy, ExternalLink, FileText, ShieldCheck, UsersRound } from 'lucide-react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ChevronDown, ChevronLeft, CheckCircle2, CircleAlert, Copy, ExternalLink, FileText, RotateCcw, ShieldCheck, UsersRound } from 'lucide-react';
 
-import { getRunSnapshot, getTaskAccess } from '../lib/reviewApi';
+import {
+  getRunSnapshot,
+  getTaskAccess,
+  rememberTaskAccess,
+  replaceRetriedTask,
+  retryReviewTask,
+} from '../lib/reviewApi';
 
 const ROLE_LABELS: Record<string, string> = {
   scientific_soundness: '科学严谨性专家',
@@ -39,10 +45,13 @@ function Accordion({ title, icon, children, open = false }: { title: string; ico
 
 export default function TaskDetailPage() {
   const { taskId = '' } = useParams();
+  const navigate = useNavigate();
   const [snapshot, setSnapshot] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -117,6 +126,21 @@ export default function TaskDetailPage() {
     window.setTimeout(() => setCopied(false), 1800);
   };
 
+  const retry = async () => {
+    if (!taskId || retrying) return;
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      const submission = await retryReviewTask(taskId);
+      rememberTaskAccess(submission.task_id, submission.access_token);
+      replaceRetriedTask(taskId, submission);
+      navigate(`/student/tasks/${submission.task_id}`, { replace: true });
+    } catch (exc) {
+      setRetryError(exc instanceof Error ? exc.message : '重新评审失败');
+      setRetrying(false);
+    }
+  };
+
   return (
     <div className="report-page">
       <header className="report-bar">
@@ -158,7 +182,13 @@ export default function TaskDetailPage() {
             <CircleAlert size={22} />
             <b>评审失败</b>
             <p>{snapshot?.error || error || '未知错误，请稍后重试。'}</p>
-            <Link to="/">返回任务列表</Link>
+            {retryError && <p>{retryError}</p>}
+            {(status === 'failed' || status === 'interrupted') && accessCode && (
+              <button onClick={retry} disabled={retrying}>
+                <RotateCcw size={16}/>{retrying ? '正在重新提交...' : '重新评审'}
+              </button>
+            )}
+            <Link to="/student">返回任务列表</Link>
           </div>
         ) : (
           <div className="report-grid">

@@ -168,5 +168,8 @@ def test_paper_files_and_artifacts_are_archived_safely(tmp_path: Path) -> None:
     assert paper["revisions"][0]["artifact_count"] >= 5
     stored_pdf_path = (persisted.revision_dir / "source.pdf").relative_to(data_dir)
     assert storage.resolve_stored_path(stored_pdf_path).is_file()
+    restored_input = storage.load_review_input(persisted.revision_id)
+    assert restored_input.paper_id == "../../unsafe-paper-id"
+    assert restored_input.title == "持久化测试论文"
     with pytest.raises(ValueError, match="超出"):
         storage.resolve_stored_path("../../outside.pdf")

@@ -2,15 +2,18 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowRight, Clock3, CircleAlert, FileText, FolderOpen, LoaderCircle, Plus, Search, UploadCloud, X } from 'lucide-react';
 
-import { createReviewTask, rememberTaskAccess, type TaskRecord } from '../lib/reviewApi';
-
-const STORAGE_KEY = 'debate-review-tasks';
+import {
+  createReviewTask,
+  rememberTaskAccess,
+  TASK_STORAGE_KEY,
+  type TaskRecord,
+} from '../lib/reviewApi';
 
 const initialTasks: TaskRecord[] = [];
 
 function readStoredTasks(): TaskRecord[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(TASK_STORAGE_KEY);
     return raw ? (JSON.parse(raw) as TaskRecord[]) : initialTasks;
   } catch {
     return initialTasks;
@@ -30,7 +33,7 @@ export default function ReviewPage() {
   const [errorText, setErrorText] = useState<string | null>(null);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+    localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(tasks));
   }, [tasks]);
 
   const choose = (candidates: File[]) => {

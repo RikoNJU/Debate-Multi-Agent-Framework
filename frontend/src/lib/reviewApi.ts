@@ -21,6 +21,7 @@ export type ReviewSubmission = {
 };
 
 const ACCESS_KEY = 'debate-student-task-access';
+export const TASK_STORAGE_KEY = 'debate-review-tasks';
 
 function readAccessMap(): Record<string, string> {
   try {
@@ -88,4 +89,45 @@ export async function recoverTask(taskId: string, accessToken: string) {
   const snapshot = await getRunSnapshot(taskId, accessToken);
   rememberTaskAccess(taskId, accessToken);
   return snapshot;
+}
+
+export async function retryReviewTask(taskId: string): Promise<ReviewSubmission> {
+  const accessToken = getTaskAccess(taskId);
+  if (!accessToken) throw new Error('当前浏览器没有该任务的访问码，无法重新评审');
+  const response = await fetch(
+    `/api/debate/runs/${encodeURIComponent(taskId)}/retry`,
+    {
+      method: 'POST',
+      headers: { 'X-Submission-Token': accessToken },
+    },
+  );
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload?.detail || '重新评审失败');
+  }
+  return response.json();
+}
+
+export function replaceRetriedTask(
+  previousTaskId: string,
+  submission: ReviewSubmission,
+): void {
+  try {
+    const tasks = JSON.parse(
+      localStorage.getItem(TASK_STORAGE_KEY) || '[]',
+    ) as TaskRecord[];
+    localStorage.setItem(
+      TASK_STORAGE_KEY,
+      JSON.stringify(tasks.map(task => task.id === previousTaskId ? {
+        ...task,
+        id: submission.task_id,
+        paperId: submission.paper_id,
+        accessToken: submission.access_token,
+        status: 'processing',
+        createdAt: '刚刚重试',
+      } : task)),
+    );
+  } catch {
+    // The new task remains accessible by URL even if the local task list is damaged.
+  }
 }

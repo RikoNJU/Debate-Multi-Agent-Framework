@@ -432,9 +432,10 @@ class DebateWorkflow:
         reviews = [review for review, _ in results if review is not None]
         issues = [issue for _, issue in results if issue is not None]
         if len(reviews) < self.config.minimum_independent_reviews:
+            failure_details = "；".join(issue.message for issue in issues)
             raise WorkflowExecutionError(
                 f"仅获得 {len(reviews)} 份独立初审，低于最低要求 "
-                f"{self.config.minimum_independent_reviews}"
+                f"{self.config.minimum_independent_reviews}。失败详情：{failure_details}"
             )
         logger.info(
             "独立初审完成，成功=%d，失败=%d", len(reviews), len(issues)

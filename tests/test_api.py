@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from debate_agent_framework.main import create_app
+from debate_agent_framework.persistence.models import ReviewRunRecord
 from debate_agent_framework.schemas import MinerUParseResult
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -133,6 +134,33 @@ def test_pdf_review_endpoint_parses_and_creates_run(monkeypatch, tmp_path) -> No
         structured = result.json()["result"]["context"]["structured_document"]
         assert structured["page_count"] == 2
         assert structured["blocks"][1]["chapter_id"] == "C1"
+
+        assert client.post(
+            f"/api/debate/runs/{payload['task_id']}/retry",
+            headers=student_headers,
+        ).status_code == 409
+        with client.app.state.database.session() as session:
+            failed = session.get(ReviewRunRecord, payload["task_id"])
+            assert failed is not None
+            failed.status = "failed"
+            failed.current_stage = "failed"
+            failed.error = "transient model network failure"
+
+        retried = client.post(
+            f"/api/debate/runs/{payload['task_id']}/retry",
+            headers=student_headers,
+        )
+        assert retried.status_code == 202
+        retried_payload = retried.json()
+        assert retried_payload["task_id"] != payload["task_id"]
+        assert retried_payload["paper_id"] == payload["paper_id"]
+        assert retried_payload["revision_id"] == result.json()["revision_id"]
+        retried_result = client.get(
+            f"/api/debate/runs/{retried_payload['task_id']}",
+            headers={"X-Submission-Token": retried_payload["access_token"]},
+        )
+        assert retried_result.status_code == 200
+        assert retried_result.json()["status"] == "succeeded"
 
 
 def test_pdf_review_endpoint_auto_classifies_without_paper_type(

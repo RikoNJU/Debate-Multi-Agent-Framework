@@ -124,6 +124,12 @@ MinerU 切分出的正文会按分类结果使用旧 Step 2 的对应标签集�
 
 学生端支持一次选择或拖拽多篇 PDF。前端按顺序调用 `/papers/review`，为每篇论文
 分别创建任务、保存访问码并显示提交进度，避免并发请求压垮 MinerU 服务。
+单篇上传仍创建一个独立任务，并在任务内部调用三位 Specialist。失败或中断的任务可
+复用已持久化的 MinerU 结构化输入重新评审，无需再次上传和解析 PDF。
+
+模型调用会对断连、超时、限流和服务端瞬时错误执行有上限的指数退避重试；参数、
+鉴权等普通客户端错误会立即返回。可通过 `DEBATE_MAX_RETRIES`、
+`DEBATE_RETRY_BASE_SECONDS` 和 `DEBATE_RETRY_MAX_SECONDS` 调整重试策略。
 
 历史建议 RAG 可以直接读取旧项目运行时 Chroma 库：
 

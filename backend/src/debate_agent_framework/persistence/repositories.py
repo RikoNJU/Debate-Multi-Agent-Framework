@@ -247,6 +247,19 @@ class PaperRepository:
                 ],
             }
 
+    def get_revision(self, revision_id: str) -> dict[str, Any] | None:
+        with self.database.session() as session:
+            revision = session.get(PaperRevisionRecord, revision_id)
+            if revision is None:
+                return None
+            return {
+                "revision_id": revision.id,
+                "paper_id": revision.paper_id,
+                "pdf_path": revision.pdf_path,
+                "structured_input_path": revision.structured_input_path,
+                "parse_status": revision.parse_status,
+            }
+
 
 class PortalRepository:
     """Persistence boundary for authentication and human-review workflows."""

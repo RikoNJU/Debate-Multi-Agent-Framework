@@ -119,6 +119,15 @@ class PaperPersistenceService:
             raise ValueError("持久化文件路径超出 DEBATE_DATA_DIR")
         return resolved
 
+    def load_review_input(self, revision_id: str) -> DebateReviewInput:
+        revision = self.repository.get_revision(revision_id)
+        if revision is None:
+            raise FileNotFoundError("论文版本不存在")
+        path = self.resolve_stored_path(revision["structured_input_path"])
+        if not path.is_file():
+            raise FileNotFoundError("论文结构化输入不存在")
+        return DebateReviewInput.model_validate_json(path.read_text(encoding="utf-8"))
+
     @staticmethod
     def _artifact_type(relative_path: str) -> str:
         name = Path(relative_path).name

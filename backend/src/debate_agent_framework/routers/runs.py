@@ -1,14 +1,20 @@
 """Debate 论文评审任务 API。"""
 
+import asyncio
+
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
 
 from debate_agent_framework.schemas import DebateReviewInput, RunSubmissionResponse, StudentTaskResponse
-from debate_agent_framework.services.jobs import RunSnapshot
+from debate_agent_framework.services.jobs import RunSnapshot, RunStatus
 
-from ..services import DebateWorkflowService
-from .dependencies import get_debate_workflow_service
 from ..persistence import PortalRepository
-from .dependencies import get_portal_repository
+from ..services import DebateWorkflowService
+from ..services.paper_storage import PaperPersistenceService
+from .dependencies import (
+    get_debate_workflow_service,
+    get_paper_persistence_service,
+    get_portal_repository,
+)
 
 router = APIRouter(prefix="/runs", tags=["debate-runs"])
 
@@ -25,6 +31,55 @@ async def create_run(
     background_tasks.add_task(service.execute, snapshot.task_id, review_input)
     return RunSubmissionResponse(
         **snapshot.model_dump(), access_token=access_token, published_review=None
+    )
+
+
+@router.post(
+    "/{task_id}/retry",
+    response_model=RunSubmissionResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_run(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    access_token: str | None = Header(None, alias="X-Submission-Token"),
+    service: DebateWorkflowService = Depends(get_debate_workflow_service),
+    persistence: PaperPersistenceService = Depends(get_paper_persistence_service),
+    portal: PortalRepository = Depends(get_portal_repository),
+) -> RunSubmissionResponse:
+    if not access_token:
+        raise HTTPException(status_code=401, detail="需要任务访问码")
+    if not portal.validate_student_task_access(task_id, access_token):
+        raise HTTPException(status_code=403, detail="任务访问码无效")
+    failed = service.get_run(task_id)
+    if failed is None:
+        raise HTTPException(status_code=404, detail="Debate 评审任务不存在")
+    if failed.status not in {RunStatus.FAILED, RunStatus.INTERRUPTED}:
+        raise HTTPException(status_code=409, detail="只有失败或中断的任务可以重新评审")
+    if not failed.paper_id or not failed.revision_id:
+        raise HTTPException(status_code=409, detail="该任务没有可复用的论文结构化数据")
+    try:
+        review_input = await asyncio.to_thread(
+            persistence.load_review_input, failed.revision_id
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if review_input.paper_id != failed.paper_id:
+        raise HTTPException(status_code=409, detail="论文结构化数据与任务不一致")
+
+    snapshot = service.create_run(
+        paper_id=failed.paper_id,
+        revision_id=failed.revision_id,
+    )
+    new_access_token = portal.issue_student_access(
+        task_id=snapshot.task_id,
+        paper_id=failed.paper_id,
+    )
+    background_tasks.add_task(service.execute, snapshot.task_id, review_input)
+    return RunSubmissionResponse(
+        **snapshot.model_dump(),
+        access_token=new_access_token,
+        published_review=None,
     )
 
 
