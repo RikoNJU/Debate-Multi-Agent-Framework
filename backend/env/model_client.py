@@ -38,6 +38,8 @@ class ModelCallOptions:
     max_tokens: int | None = None
     timeout_seconds: float | None = None
     response_format: Mapping[str, Any] | None = None
+    stream: bool = False
+    thinking_budget: int | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,7 @@ class ModelRuntimeConfig:
     max_retries: int = 2
     retry_base_seconds: float = 1.0
     retry_max_seconds: float = 8.0
+    default_thinking_budget: int | None = None
 
     def __post_init__(self) -> None:
         if self.max_retries < 0:
@@ -66,6 +69,11 @@ class ModelRuntimeConfig:
             raise ValueError("retry_base_seconds 不能小于 0")
         if self.retry_max_seconds < self.retry_base_seconds:
             raise ValueError("retry_max_seconds 不能小于 retry_base_seconds")
+        if (
+            self.default_thinking_budget is not None
+            and not 128 <= self.default_thinking_budget <= 32768
+        ):
+            raise ValueError("default_thinking_budget 必须位于 128 到 32768 之间")
 
     @classmethod
     def from_env(cls, prefix: str = "DEBATE") -> "ModelRuntimeConfig":
@@ -79,6 +87,7 @@ class ModelRuntimeConfig:
         max_retries = read("MAX_RETRIES")
         retry_base = read("RETRY_BASE_SECONDS")
         retry_max = read("RETRY_MAX_SECONDS")
+        thinking_budget = read("THINKING_BUDGET")
         return cls(
             provider=read("PROVIDER", cls.provider) or cls.provider,
             model=read("MODEL", cls.model) or cls.model,
@@ -96,6 +105,11 @@ class ModelRuntimeConfig:
             ),
             retry_max_seconds=(
                 float(retry_max) if retry_max else cls.retry_max_seconds
+            ),
+            default_thinking_budget=(
+                int(thinking_budget)
+                if thinking_budget
+                else cls.default_thinking_budget
             ),
         )
 
@@ -150,6 +164,15 @@ class OpenAICompatibleChatClient:
             payload["max_tokens"] = call_options.max_tokens
         if call_options.response_format is not None:
             payload["response_format"] = dict(call_options.response_format)
+        if call_options.stream:
+            payload["stream"] = True
+        thinking_budget = (
+            call_options.thinking_budget
+            if call_options.thinking_budget is not None
+            else self.config.default_thinking_budget
+        )
+        if thinking_budget is not None:
+            payload["thinking_budget"] = thinking_budget
 
         endpoint = f"{self.config.base_url.rstrip('/')}/chat/completions"
         timeout = (
@@ -171,6 +194,8 @@ class OpenAICompatibleChatClient:
         for attempt in range(self.config.max_retries + 1):
             try:
                 with urllib.request.urlopen(request, timeout=timeout) as response:
+                    if call_options.stream:
+                        return self._read_stream(response)
                     raw = json.loads(response.read().decode("utf-8"))
                 break
             except urllib.error.HTTPError as exc:
@@ -208,6 +233,44 @@ class OpenAICompatibleChatClient:
             content=content,
             raw=raw,
             usage=raw.get("usage", {}),
+        )
+
+    @staticmethod
+    def _read_stream(response: Any) -> ModelResponse:
+        """Consume an OpenAI-compatible SSE response without buffering it whole."""
+
+        content_parts: list[str] = []
+        usage: Mapping[str, Any] = {}
+        chunk_count = 0
+        for raw_line in response:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line or line.startswith(":") or not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError as exc:
+                raise ModelClientError("模型流式响应包含非法 JSON 数据") from exc
+            chunk_count += 1
+            if chunk.get("usage"):
+                usage = chunk["usage"]
+            choices = chunk.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            content = delta.get("content")
+            if content:
+                content_parts.append(content)
+
+        content = "".join(content_parts)
+        if not content:
+            raise ModelClientError("模型流式调用未返回正文内容")
+        return ModelResponse(
+            content=content,
+            raw={"streamed": True, "chunk_count": chunk_count},
+            usage=usage,
         )
 
     def _wait_before_retry(

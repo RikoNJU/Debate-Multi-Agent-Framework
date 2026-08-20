@@ -74,7 +74,7 @@ WORKFLOW_STAGES: dict[str, tuple[str, int, int]] = {
     "step2_classify_chapters": ("识别章节阶段", 8, 14),
     "retrieve_historical_advice": ("检索历史评审建议", 14, 18),
     "build_context": ("构造评审上下文", 18, 25),
-    "independent_review": ("三位专家并行初审", 25, 55),
+    "independent_review": ("三位专家独立初审", 25, 55),
     "plan_debate": ("Chair 识别争议", 55, 63),
     "retrieve_debate_evidence": ("检索外部证据", 63, 68),
     "targeted_debate": ("专家定向讨论", 68, 75),
@@ -182,7 +182,8 @@ class DebateWorkflow:
                 historical_score_retriever=build_historical_score_retriever_from_env(),
                 original_pipeline=RealOriginalPipelineAdapter(model_client=client),
                 workload_evaluator=RealLegacyWorkloadEvaluator(client),
-            )
+            ),
+            config=DebateWorkflowConfig.from_env(),
         )
 
     def __init__(

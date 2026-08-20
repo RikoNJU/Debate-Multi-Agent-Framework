@@ -6,6 +6,7 @@ import pytest
 
 from backend.env import (
     ChatMessage,
+    ModelCallOptions,
     ModelClientError,
     ModelRuntimeConfig,
     OpenAICompatibleChatClient,
@@ -20,6 +21,7 @@ def test_model_runtime_config_prefers_project_env(monkeypatch):
     monkeypatch.setenv("DEBATE_MAX_RETRIES", "4")
     monkeypatch.setenv("DEBATE_RETRY_BASE_SECONDS", "0.5")
     monkeypatch.setenv("DEBATE_RETRY_MAX_SECONDS", "3")
+    monkeypatch.setenv("DEBATE_THINKING_BUDGET", "1024")
 
     config = ModelRuntimeConfig.from_env("DEBATE")
 
@@ -29,6 +31,7 @@ def test_model_runtime_config_prefers_project_env(monkeypatch):
     assert config.max_retries == 4
     assert config.retry_base_seconds == 0.5
     assert config.retry_max_seconds == 3
+    assert config.default_thinking_budget == 1024
 
 
 class FakeResponse:
@@ -43,6 +46,20 @@ class FakeResponse:
 
     def read(self) -> bytes:
         return json.dumps(self.payload).encode("utf-8")
+
+
+class FakeStreamResponse:
+    def __init__(self, lines: list[bytes]) -> None:
+        self.lines = lines
+
+    def __enter__(self):  # type: ignore[no-untyped-def]
+        return self
+
+    def __exit__(self, *args):  # type: ignore[no-untyped-def]
+        return None
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        return iter(self.lines)
 
 
 def test_model_client_retries_transient_network_errors(monkeypatch) -> None:
@@ -95,3 +112,40 @@ def test_model_client_does_not_retry_non_transient_http_error(monkeypatch) -> No
         client.complete([ChatMessage(role="user", content="test")])
 
     assert attempts == 1
+
+
+def test_model_client_reassembles_streamed_content(monkeypatch) -> None:
+    captured_payload: dict = {}
+
+    def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+        captured_payload.update(json.loads(request.data.decode("utf-8")))
+        return FakeStreamResponse(
+            [
+                b'data: {"choices":[{"delta":{"reasoning_content":"checking"}}]}\n',
+                b'data: {"choices":[{"delta":{"content":"{\\"ok\\":"}}]}\n',
+                b'data: {"choices":[{"delta":{"content":"true}"}}]}\n',
+                b'data: {"choices":[],"usage":{"total_tokens":12}}\n',
+                b'data: [DONE]\n',
+            ]
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleChatClient(
+        ModelRuntimeConfig(
+            api_key="test-key",
+            max_retries=0,
+            default_thinking_budget=2048,
+        )
+    )
+
+    response = client.complete(
+        [ChatMessage(role="user", content="test")],
+        options=ModelCallOptions(stream=True, max_tokens=4096),
+    )
+
+    assert captured_payload["stream"] is True
+    assert captured_payload["max_tokens"] == 4096
+    assert captured_payload["thinking_budget"] == 2048
+    assert response.content == '{"ok":true}'
+    assert response.raw == {"streamed": True, "chunk_count": 4}
+    assert response.usage == {"total_tokens": 12}

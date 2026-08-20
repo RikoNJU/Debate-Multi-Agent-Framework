@@ -78,6 +78,7 @@ def complete_json(
     payload: dict[str, Any],
     schema: dict[str, Any],
     temperature: float = 0.2,
+    max_tokens: int = 4096,
 ) -> dict[str, Any]:
     """调用统一模型客户端，并把回复解析为 JSON dict。
 
@@ -101,7 +102,9 @@ def complete_json(
         ],
         options=ModelCallOptions(
             temperature=temperature,
+            max_tokens=max_tokens,
             response_format={"type": "json_object"},
+            stream=True,
         ),
     )
     try:

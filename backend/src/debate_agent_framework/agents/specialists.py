@@ -60,6 +60,8 @@ class DebateSpecialistAgent(SpecialistAgent):
                 "禁止改写、概述或用省略号拼接多个位置；severity 为 fatal/major 的"
                 "问题必须附带可追溯的论文证据。存在 structured_document 时，优先填写"
                 "对应的 block_id；系统将校正 chunk_id、page_number 和 bbox。"
+                "输出保持精炼：strengths 不超过 3 条，findings 保留最重要的 3 至 4 条，"
+                "author_questions 不超过 3 条，避免重复论述。"
             ),
             payload=payload,
             schema=IndependentReview.model_json_schema(),

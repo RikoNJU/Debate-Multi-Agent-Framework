@@ -124,6 +124,14 @@ def test_workflow_reports_node_and_specialist_progress() -> None:
         assert (f"specialist_{role.value}", "succeeded", 50) in events
 
 
+def test_real_workflow_config_uses_controlled_specialist_concurrency(monkeypatch) -> None:
+    monkeypatch.setenv("DEBATE_SPECIALIST_CONCURRENCY", "2")
+
+    config = DebateWorkflowConfig.from_env()
+
+    assert config.max_concurrency == 2
+
+
 class RecordingHistoricalAdviceRetriever:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail

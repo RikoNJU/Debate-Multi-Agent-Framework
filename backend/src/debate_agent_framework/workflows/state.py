@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from operator import add
 from typing import Annotated, TypedDict
@@ -57,6 +58,15 @@ class DebateWorkflowConfig:
     historical_advice_limit_per_chapter: int = 5
     historical_case_limit: int = 5
     review_attempts: int = 2
+
+    @classmethod
+    def from_env(cls) -> "DebateWorkflowConfig":
+        concurrency = os.getenv("DEBATE_SPECIALIST_CONCURRENCY")
+        return cls(
+            max_concurrency=(
+                int(concurrency) if concurrency is not None else 1
+            )
+        )
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_concurrency <= 3:
