@@ -84,18 +84,7 @@ def test_teacher_admin_portal_core_workflow(tmp_path) -> None:  # type: ignore[n
                     updated_at=now,
                 )
             )
-        student_token = client.app.state.portal_repository.issue_student_access(
-            task_id="run-portal", paper_id="paper-portal"
-        )
-        assert client.get("/api/debate/runs/run-portal").status_code == 401
-        assert client.get(
-            "/api/debate/runs/run-portal",
-            headers={"X-Submission-Token": "wrong-access-code"},
-        ).status_code == 403
-        initial_student_result = client.get(
-            "/api/debate/runs/run-portal",
-            headers={"X-Submission-Token": student_token},
-        )
+        initial_student_result = client.get("/api/debate/runs/run-portal")
         assert initial_student_result.status_code == 200
         assert initial_student_result.json()["published_review"] is None
 
@@ -202,15 +191,11 @@ def test_teacher_admin_portal_core_workflow(tmp_path) -> None:  # type: ignore[n
         )
         assert published.status_code == 200
         assert published.json()["published_at"]
-        student_result = client.get(
-            "/api/debate/runs/run-portal",
-            headers={"X-Submission-Token": student_token},
-        ).json()
+        student_result = client.get("/api/debate/runs/run-portal").json()
         assert student_result["published_review"]["total_score"] == 100
         assert "teacher_comments" not in student_result["published_review"]
         assert client.get(
             "/api/debate/student/tasks/run-portal/pdf",
-            headers={"X-Submission-Token": student_token},
         ).status_code == 200
         exported = client.get(
             "/api/debate/portal/admin/exports/reviews.csv",
@@ -394,16 +379,12 @@ def test_review_table_export_endpoints(tmp_path) -> None:  # type: ignore[no-unt
         ].read_text(encoding="utf-8")
 
         # 学生端在人工终审发布前可导出 AI 预审版评审表
-        student_token = client.app.state.portal_repository.issue_student_access(
-            task_id="run-export", paper_id="paper-export"
-        )
         with patch(
             "debate_agent_framework.routers.student.compile_review_table_pdf",
             side_effect=_fake_compile,
         ):
             before_publish = client.get(
                 "/api/debate/student/tasks/run-export/review-table",
-                headers={"X-Submission-Token": student_token},
             )
         assert before_publish.status_code == 200
         assert before_publish.headers["content-type"] == "application/pdf"
@@ -434,7 +415,6 @@ def test_review_table_export_endpoints(tmp_path) -> None:  # type: ignore[no-unt
         ):
             student_export = client.get(
                 "/api/debate/student/tasks/run-export/review-table",
-                headers={"X-Submission-Token": student_token},
             )
         assert student_export.status_code == 200
         assert student_export.headers["content-type"] == "application/pdf"

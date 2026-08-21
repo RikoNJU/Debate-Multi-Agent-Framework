@@ -146,8 +146,9 @@ def test_migrate_adopts_unversioned_legacy_database(tmp_path: Path) -> None:
     tables = set(inspector.get_table_names())
     database.dispose()
 
-    assert revision == "20260820_0004"
-    assert {"users", "student_task_access", "review_run_stages"}.issubset(tables)
+    assert revision == "20260821_0005"
+    assert {"users", "review_run_stages"}.issubset(tables)
+    assert "student_task_access" not in tables
 
 
 def test_paper_files_and_artifacts_are_archived_safely(tmp_path: Path) -> None:

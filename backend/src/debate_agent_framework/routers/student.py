@@ -2,7 +2,7 @@
 
 import asyncio
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from ..persistence import PortalRepository
@@ -25,23 +25,20 @@ router = APIRouter(prefix="/student", tags=["student"])
 @router.get("/tasks/{task_id}/pdf")
 async def get_student_pdf(
     task_id: str,
-    access_token: str | None = Header(None, alias="X-Submission-Token"),
     repository: PortalRepository = Depends(get_portal_repository),
     storage: PaperPersistenceService = Depends(get_paper_persistence_service),
 ) -> FileResponse:
-    if not access_token:
-        raise HTTPException(status_code=401, detail="需要任务访问码")
-    value = repository.student_pdf_path(task_id, access_token)
+    value = repository.pdf_path_for_task(task_id)
     if value is None:
-        raise HTTPException(status_code=404, detail="论文文件不存在或访问码无效")
+        raise HTTPException(status_code=404, detail="论文文件不存在")
     try:
         path = storage.resolve_stored_path(value)
     except ValueError as exc:
         raise HTTPException(
-            status_code=404, detail="论文文件不存在或访问码无效"
+            status_code=404, detail="论文文件不存在"
         ) from exc
     if not path.is_file():
-        raise HTTPException(status_code=404, detail="论文文件不存在或访问码无效")
+        raise HTTPException(status_code=404, detail="论文文件不存在")
     return FileResponse(path, media_type="application/pdf", filename="paper.pdf")
 
 
@@ -49,7 +46,6 @@ async def get_student_pdf(
 async def get_review_table(
     task_id: str,
     request: Request,
-    access_token: str | None = Header(None, alias="X-Submission-Token"),
     repository: PortalRepository = Depends(get_portal_repository),
     storage: PaperPersistenceService = Depends(get_paper_persistence_service),
     service: DebateWorkflowService = Depends(get_debate_workflow_service),
@@ -58,10 +54,6 @@ async def get_review_table(
 
     教师终审已发布时以教师评分为准；否则回退到 AI 预审评分生成预览版。
     """
-    if not access_token:
-        raise HTTPException(status_code=401, detail="需要任务访问码")
-    if not repository.validate_student_task_access(task_id, access_token):
-        raise HTTPException(status_code=403, detail="任务访问码无效")
     snapshot = service.get_run(task_id)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Debate 评审任务不存在")

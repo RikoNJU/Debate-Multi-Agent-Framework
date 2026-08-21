@@ -34,7 +34,7 @@ export default function LoginPage() {
   return (
     <div className="portal-login">
       <main>
-        <div className="login-brand"><span>RW</span><div><b>睿文智评</b><small>评审工作台</small></div></div>
+        <div className="login-brand"><span>南京大学</span><div><b>睿文智评</b><small>评审工作台</small></div></div>
         <div className="login-copy">
           <p>HUMAN REVIEW PORTAL</p>
           <h1>人工复核，让每个结论都有责任边界。</h1>

@@ -19,7 +19,7 @@ export default function PortalShell({ user, children }: { user: PortalUser; chil
   return (
     <div className="portal-shell">
       <aside>
-        <Link className="portal-brand" to="/workspace"><span>RW</span><div><b>睿文智评</b><small>Review Console</small></div></Link>
+        <Link className="portal-brand" to="/workspace"><span>南京大学</span><div><b>睿文智评</b><small>Review Console</small></div></Link>
         <nav>
           <small>工作空间</small>
           {items.map((item) => <Link className={location.pathname === item.to ? 'active' : ''} to={item.to} key={item.to}><item.icon size={18}/>{item.label}</Link>)}

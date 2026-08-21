@@ -29,12 +29,8 @@ def test_debate_health_and_run_lifecycle() -> None:
         created = client.post("/api/debate/runs", json=load_example())
         assert created.status_code == 202
         task_id = created.json()["task_id"]
-        access_token = created.json()["access_token"]
 
-        result = client.get(
-            f"/api/debate/runs/{task_id}",
-            headers={"X-Submission-Token": access_token},
-        )
+        result = client.get(f"/api/debate/runs/{task_id}")
         assert result.status_code == 200
         assert result.json()["status"] == "succeeded"
         assert result.json()["progress_percent"] == 100
@@ -53,11 +49,7 @@ def test_api_validates_input_and_returns_not_found() -> None:
     with TestClient(create_app()) as client:
         invalid = client.post("/api/debate/runs", json={"title": "缺少字段"})
         assert invalid.status_code == 422
-        assert client.get("/api/debate/runs/not-found").status_code == 401
-        assert client.get(
-            "/api/debate/runs/not-found",
-            headers={"X-Submission-Token": "invalid-token"},
-        ).status_code == 403
+        assert client.get("/api/debate/runs/not-found").status_code == 404
 
 
 def test_mineru_parse_endpoint_requires_server_configuration(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -113,28 +105,21 @@ def test_pdf_review_endpoint_parses_and_creates_run(monkeypatch, tmp_path) -> No
         )
         assert created.status_code == 202
         payload = created.json()
-        student_headers = {"X-Submission-Token": payload["access_token"]}
         assert payload["title"] == "测试论文"
         assert payload["chapter_count"] == 1
 
-        paper = client.get(
-            f"/api/debate/papers/{payload['paper_id']}",
-            headers=student_headers,
-        )
+        paper = client.get(f"/api/debate/papers/{payload['paper_id']}")
         assert paper.status_code == 200
         assert paper.json()["current_revision_id"]
         paper_runs = client.get(
             f"/api/debate/papers/{payload['paper_id']}/runs",
-            headers=student_headers,
         )
         assert paper_runs.status_code == 200
         assert any(
             item["task_id"] == payload["task_id"] for item in paper_runs.json()
         )
 
-        result = client.get(
-            f"/api/debate/runs/{payload['task_id']}", headers=student_headers
-        )
+        result = client.get(f"/api/debate/runs/{payload['task_id']}")
         assert result.status_code == 200
         assert result.json()["status"] == "succeeded"
         structured = result.json()["result"]["context"]["structured_document"]
@@ -143,7 +128,6 @@ def test_pdf_review_endpoint_parses_and_creates_run(monkeypatch, tmp_path) -> No
 
         assert client.post(
             f"/api/debate/runs/{payload['task_id']}/retry",
-            headers=student_headers,
         ).status_code == 409
         with client.app.state.database.session() as session:
             failed = session.get(ReviewRunRecord, payload["task_id"])
@@ -154,7 +138,6 @@ def test_pdf_review_endpoint_parses_and_creates_run(monkeypatch, tmp_path) -> No
 
         retried = client.post(
             f"/api/debate/runs/{payload['task_id']}/retry",
-            headers=student_headers,
         )
         assert retried.status_code == 202
         retried_payload = retried.json()
@@ -163,7 +146,6 @@ def test_pdf_review_endpoint_parses_and_creates_run(monkeypatch, tmp_path) -> No
         assert retried_payload["revision_id"] == result.json()["revision_id"]
         retried_result = client.get(
             f"/api/debate/runs/{retried_payload['task_id']}",
-            headers={"X-Submission-Token": retried_payload["access_token"]},
         )
         assert retried_result.status_code == 200
         assert retried_result.json()["status"] == "succeeded"
@@ -205,7 +187,6 @@ def test_pdf_review_endpoint_auto_classifies_without_paper_type(
         payload = created.json()
         result = client.get(
             f"/api/debate/runs/{payload['task_id']}",
-            headers={"X-Submission-Token": payload["access_token"]},
         ).json()
 
     assert result["status"] == "succeeded"

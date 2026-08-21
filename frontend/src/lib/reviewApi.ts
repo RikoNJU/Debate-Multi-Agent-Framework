@@ -7,7 +7,6 @@ export type TaskRecord = {
   status: TaskStatus;
   createdAt: string;
   paperId?: string;
-  accessToken?: string;
 };
 
 export type ReviewSubmission = {
@@ -17,7 +16,6 @@ export type ReviewSubmission = {
   title: string;
   chapter_count: number;
   batch_id: string;
-  access_token: string;
 };
 
 export type RunSnapshot = {
@@ -28,29 +26,10 @@ export type RunSnapshot = {
   result?: Record<string, any> | null;
   error?: string | null;
   paper_id?: string | null;
+  paper_title?: string | null;
 };
 
-const ACCESS_KEY = 'debate-student-task-access';
 export const TASK_STORAGE_KEY = 'debate-review-tasks';
-
-function readAccessMap(): Record<string, string> {
-  try {
-    return JSON.parse(localStorage.getItem(ACCESS_KEY) || '{}');
-  } catch {
-    return {};
-  }
-}
-
-export function rememberTaskAccess(taskId: string, accessToken: string): void {
-  localStorage.setItem(
-    ACCESS_KEY,
-    JSON.stringify({ ...readAccessMap(), [taskId]: accessToken }),
-  );
-}
-
-export function getTaskAccess(taskId: string): string | undefined {
-  return readAccessMap()[taskId];
-}
 
 export async function createReviewTask(file: File, title?: string, paperId?: string): Promise<ReviewSubmission> {
   const formData = new FormData();
@@ -87,12 +66,45 @@ export function toTaskStatus(status: RunSnapshot['status'] | string): TaskStatus
   return 'processing';
 }
 
-export async function getRunSnapshot(taskId: string, accessToken?: string): Promise<RunSnapshot> {
-  const token = accessToken || getTaskAccess(taskId);
-  if (!token) throw new Error('当前浏览器没有该任务的访问码，请先找回任务');
-  const response = await fetch(`/api/debate/runs/${encodeURIComponent(taskId)}`, {
-    headers: { 'X-Submission-Token': token },
-  });
+/** 把任务写回本地列表：已存在则原位更新，不存在（如换浏览器后直接打开详情页）则补录。 */
+export function upsertTaskRecord(taskId: string, snapshot: RunSnapshot): void {
+  try {
+    const raw = localStorage.getItem(TASK_STORAGE_KEY);
+    const current: TaskRecord[] = raw ? JSON.parse(raw) : [];
+    const status = toTaskStatus(snapshot.status);
+    const realTitle = snapshot.paper_title
+      || snapshot.result?.context?.profile?.title || '';
+    const existing = current.find(task => task.id === taskId);
+    if (existing) {
+      localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(current.map(task =>
+        task.id === taskId
+          ? {
+              ...task,
+              status,
+              createdAt: snapshot.created_at || task.createdAt,
+              paperId: snapshot.paper_id || task.paperId,
+              title: realTitle || task.title,
+            }
+          : task,
+      )));
+      return;
+    }
+    const record: TaskRecord = {
+      id: taskId,
+      title: realTitle || '论文评审任务',
+      fileName: '论文文件',
+      status,
+      createdAt: snapshot.created_at || new Date().toISOString(),
+      paperId: snapshot.paper_id || undefined,
+    };
+    localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify([record, ...current]));
+  } catch {
+    // 本地存储不可用时任务仍可通过 URL 访问
+  }
+}
+
+export async function getRunSnapshot(taskId: string): Promise<RunSnapshot> {
+  const response = await fetch(`/api/debate/runs/${encodeURIComponent(taskId)}`);
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     throw new Error(payload?.detail || '任务详情获取失败');
@@ -101,21 +113,10 @@ export async function getRunSnapshot(taskId: string, accessToken?: string): Prom
   return response.json() as Promise<RunSnapshot>;
 }
 
-export async function recoverTask(taskId: string, accessToken: string) {
-  const snapshot = await getRunSnapshot(taskId, accessToken);
-  rememberTaskAccess(taskId, accessToken);
-  return snapshot;
-}
-
 export async function retryReviewTask(taskId: string): Promise<ReviewSubmission> {
-  const accessToken = getTaskAccess(taskId);
-  if (!accessToken) throw new Error('当前浏览器没有该任务的访问码，无法重新评审');
   const response = await fetch(
     `/api/debate/runs/${encodeURIComponent(taskId)}/retry`,
-    {
-      method: 'POST',
-      headers: { 'X-Submission-Token': accessToken },
-    },
+    { method: 'POST' },
   );
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
@@ -125,13 +126,8 @@ export async function retryReviewTask(taskId: string): Promise<ReviewSubmission>
 }
 
 export async function downloadReviewTable(taskId: string): Promise<void> {
-  const accessToken = getTaskAccess(taskId);
-  if (!accessToken) throw new Error('当前浏览器没有该任务的访问码，无法导出评审表');
   const response = await fetch(
     `/api/debate/student/tasks/${encodeURIComponent(taskId)}/review-table`,
-    {
-      headers: { 'X-Submission-Token': accessToken },
-    },
   );
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
@@ -165,7 +161,6 @@ export function replaceRetriedTask(
         ...task,
         id: submission.task_id,
         paperId: submission.paper_id,
-        accessToken: submission.access_token,
         status: 'processing',
         createdAt: '刚刚重试',
       } : task)),

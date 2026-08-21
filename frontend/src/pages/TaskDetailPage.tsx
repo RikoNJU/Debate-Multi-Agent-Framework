@@ -1,14 +1,13 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChevronDown, ChevronLeft, CheckCircle2, CircleAlert, Copy, ExternalLink, FileText, RotateCcw, ShieldCheck, UsersRound } from 'lucide-react';
+import { ChevronDown, ChevronLeft, CheckCircle2, CircleAlert, ExternalLink, FileText, RotateCcw, ShieldCheck, UsersRound } from 'lucide-react';
 
 import {
   downloadReviewTable,
   getRunSnapshot,
-  getTaskAccess,
-  rememberTaskAccess,
   replaceRetriedTask,
   retryReviewTask,
+  upsertTaskRecord,
 } from '../lib/reviewApi';
 
 const ROLE_LABELS: Record<string, string> = {
@@ -58,14 +57,10 @@ export default function TaskDetailPage() {
   const [snapshot, setSnapshot] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
-  const [accessInput, setAccessInput] = useState('');
-  const [accessSubmitting, setAccessSubmitting] = useState(false);
-  const [accessSubmitError, setAccessSubmitError] = useState<string | null>(null);
   const [clock, setClock] = useState(Date.now());
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -94,6 +89,7 @@ export default function TaskDetailPage() {
         if (!active) return;
         setSnapshot(payload);
         setError(null);
+        upsertTaskRecord(taskId, payload);
         const status = payload?.status;
         if (status === 'queued' || status === 'running') {
           timerRef.current = setTimeout(loadSnapshot, 5000);
@@ -137,7 +133,6 @@ export default function TaskDetailPage() {
   const isFailed = status === 'failed'
     || status === 'interrupted'
     || (status === undefined && error);
-  const accessCode = getTaskAccess(taskId);
   const progress = Math.max(0, Math.min(100, snapshot?.progress_percent ?? 0));
   const stageEvents = snapshot?.stage_events ?? [];
   const elapsed = formatElapsed(snapshot?.created_at, clock);
@@ -145,20 +140,12 @@ export default function TaskDetailPage() {
     ? Math.max(0, Math.floor((clock - new Date(snapshot.updated_at).getTime()) / 1000))
     : 0;
 
-  const copyAccessCode = async () => {
-    if (!accessCode) return;
-    await navigator.clipboard.writeText(accessCode);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1800);
-  };
-
   const retry = async () => {
     if (!taskId || retrying) return;
     setRetrying(true);
     setRetryError(null);
     try {
       const submission = await retryReviewTask(taskId);
-      rememberTaskAccess(submission.task_id, submission.access_token);
       replaceRetriedTask(taskId, submission);
       navigate(`/student/tasks/${submission.task_id}`, { replace: true });
     } catch (exc) {
@@ -180,29 +167,11 @@ export default function TaskDetailPage() {
     }
   };
 
-  const submitAccessCode = async () => {
-    const code = accessInput.trim();
-    if (!code || accessSubmitting) return;
-    setAccessSubmitting(true);
-    setAccessSubmitError(null);
-    try {
-      const payload = await getRunSnapshot(taskId, code);
-      rememberTaskAccess(taskId, code);
-      setSnapshot(payload);
-      setError(null);
-      setAccessInput('');
-    } catch (exc: any) {
-      setAccessSubmitError(exc?.message || '访问码验证失败');
-    } finally {
-      setAccessSubmitting(false);
-    }
-  };
-
   return (
     <div className="report-page">
       <header className="report-bar">
         <Link to="/student"><ChevronLeft />返回任务列表</Link>
-        <div className="report-brand"><span>RW</span> 睿文智评</div>
+        <div className="report-brand"><span>南京大学</span> 睿文智评</div>
         <span>评审报告</span>
       </header>
 
@@ -215,7 +184,6 @@ export default function TaskDetailPage() {
               <FileText size={15} /> {taskId} · {STATUS_TEXT[status ?? ''] ?? (error ? '加载失败' : '正在加载…')}
             </p>
           </div>
-          {accessCode && <div className="access-receipt"><small>任务访问码</small><code>{accessCode}</code><button onClick={copyAccessCode} title="复制任务访问码"><Copy size={15}/>{copied ? '已复制' : '复制'}</button></div>}
           <div className="score-card">
             <small>最终评分</small>
             {displayedScore !== undefined && displayedScore !== null ? (
@@ -263,28 +231,10 @@ export default function TaskDetailPage() {
             {error && <p>{error}</p>}
             {!error && <p>{snapshot?.error || '未知错误，请稍后重试。'}</p>}
             {taskId?.startsWith('local-') && (
-              <p>该页面是上传过程中产生的临时记录，请返回任务列表重新进入对应任务，或使用“找回评审任务”功能。</p>
-            )}
-            {error && (
-              <div className="access-recover">
-                <p>本页需要该任务的访问码，粘贴后即可恢复查看：</p>
-                <div className="access-recover-row">
-                  <input
-                    value={accessInput}
-                    onChange={(e) => setAccessInput(e.target.value)}
-                    placeholder="任务访问码"
-                    onKeyDown={(e) => { if (e.key === 'Enter') submitAccessCode(); }}
-                  />
-                  <button onClick={submitAccessCode} disabled={accessSubmitting || !accessInput.trim()}>
-                    {accessSubmitting ? '验证中...' : '恢复访问'}
-                  </button>
-                </div>
-                {accessSubmitError && <small className="export-error">{accessSubmitError}</small>}
-                <Link to="/student/recover">前往“找回评审任务”页面</Link>
-              </div>
+              <p>该页面是上传过程中产生的临时记录，请返回任务列表重新进入对应任务。</p>
             )}
             {retryError && <p>{retryError}</p>}
-            {(status === 'failed' || status === 'interrupted') && accessCode && (
+            {(status === 'failed' || status === 'interrupted') && (
               <button onClick={retry} disabled={retrying}>
                 <RotateCcw size={16}/>{retrying ? '正在重新提交...' : '重新评审'}
               </button>

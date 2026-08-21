@@ -21,7 +21,6 @@ from .models import (
     PaperRevisionRecord,
     ReviewRunRecord,
     ReviewRunStageRecord,
-    StudentTaskAccessRecord,
     UserRecord,
 )
 from ..services.security import hash_password, hash_token, new_session_token, verify_password
@@ -463,66 +462,33 @@ class PortalRepository:
             if auth_session is not None and auth_session.revoked_at is None:
                 auth_session.revoked_at = datetime.now(UTC)
 
-    def issue_student_access(self, *, task_id: str, paper_id: str | None) -> str:
-        token = new_session_token()
+    def pdf_path_for_task(self, task_id: str) -> str | None:
         with self.database.session() as session:
-            existing = session.scalar(
-                select(StudentTaskAccessRecord).where(
-                    StudentTaskAccessRecord.task_id == task_id
+            paper_id = session.scalar(
+                select(ReviewRunRecord.paper_id).where(
+                    ReviewRunRecord.task_id == task_id
                 )
             )
-            if existing is not None:
-                session.delete(existing)
-                session.flush()
-            session.add(
-                StudentTaskAccessRecord(
-                    id=uuid4().hex,
-                    task_id=task_id,
-                    paper_id=paper_id,
-                    token_hash=hash_token(token),
-                )
-            )
-        return token
-
-    def validate_student_task_access(self, task_id: str, token: str) -> bool:
-        with self.database.session() as session:
-            return (
-                session.scalar(
-                    select(StudentTaskAccessRecord).where(
-                        StudentTaskAccessRecord.task_id == task_id,
-                        StudentTaskAccessRecord.token_hash == hash_token(token),
-                    )
-                )
-                is not None
-            )
-
-    def validate_student_paper_access(self, paper_id: str, token: str) -> bool:
-        with self.database.session() as session:
-            return (
-                session.scalar(
-                    select(StudentTaskAccessRecord).where(
-                        StudentTaskAccessRecord.paper_id == paper_id,
-                        StudentTaskAccessRecord.token_hash == hash_token(token),
-                    )
-                )
-                is not None
-            )
-
-    def student_pdf_path(self, task_id: str, token: str) -> str | None:
-        with self.database.session() as session:
-            access = session.scalar(
-                select(StudentTaskAccessRecord).where(
-                    StudentTaskAccessRecord.task_id == task_id,
-                    StudentTaskAccessRecord.token_hash == hash_token(token),
-                )
-            )
-            if access is None or access.paper_id is None:
+            if not paper_id:
                 return None
-            paper = session.get(PaperRecord, access.paper_id)
+            paper = session.get(PaperRecord, paper_id)
             if paper is None:
                 return None
             revision = session.get(PaperRevisionRecord, paper.current_revision_id)
             return revision.pdf_path if revision else None
+
+    def paper_title_for_task(self, task_id: str) -> str | None:
+        with self.database.session() as session:
+            paper_id = session.scalar(
+                select(ReviewRunRecord.paper_id).where(
+                    ReviewRunRecord.task_id == task_id
+                )
+            )
+            if not paper_id:
+                return None
+            return session.scalar(
+                select(PaperRecord.title).where(PaperRecord.id == paper_id)
+            )
 
     def get_published_review_for_paper(self, paper_id: str) -> dict[str, Any] | None:
         with self.database.session() as session:

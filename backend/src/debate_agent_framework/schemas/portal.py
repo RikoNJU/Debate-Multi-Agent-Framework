@@ -86,6 +86,7 @@ class StudentTaskResponse(PortalModel):
     result: dict[str, Any] | None = None
     error: str | None = None
     paper_id: str | None = None
+    paper_title: str | None = None
     revision_id: str | None = None
     current_stage: str | None = None
     current_stage_label: str | None = None
@@ -96,7 +97,7 @@ class StudentTaskResponse(PortalModel):
 
 
 class RunSubmissionResponse(StudentTaskResponse):
-    access_token: str = Field(min_length=32)
+    pass
 
 
 class AssignmentResponse(PortalModel):

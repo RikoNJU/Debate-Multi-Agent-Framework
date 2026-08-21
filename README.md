@@ -111,7 +111,7 @@ MinerU 可以直接沿用旧项目的 `MINERU_TOKEN`，也可以使用优先级�
 ```text
 POST /api/debate/papers/parse   只解析 PDF，返回 Markdown 和产物列表
 POST /api/debate/papers/review  解析 PDF、构建结构化论文输入并创建评审任务
-GET  /api/debate/runs/{task_id} 查询任务状态和最终结果（需提交访问码）
+GET  /api/debate/runs/{task_id} 查询任务状态和最终结果
 ```
 
 `/papers/review` 使用 multipart 表单上传 `pdf`。`paper_type` 为可选字段，可取
@@ -123,7 +123,7 @@ MinerU 切分出的正文会按分类结果使用旧 Step 2 的对应标签集�
 未提供 `paper_id` 时根据正文哈希生成稳定标识。
 
 学生端支持一次选择或拖拽多篇 PDF。前端按顺序调用 `/papers/review`，为每篇论文
-分别创建任务、保存访问码并显示提交进度，避免并发请求压垮 MinerU 服务。
+分别创建任务并显示提交进度，避免并发请求压垮 MinerU 服务。
 单篇上传仍创建一个独立任务，并在任务内部调用三位 Specialist。失败或中断的任务可
 复用已持久化的 MinerU 结构化输入重新评审，无需再次上传和解析 PDF。
 
@@ -219,7 +219,7 @@ DEBATE_BOOTSTRAP_ADMIN_DISPLAY_NAME=系统管理员
 
 系统前端按使用者拆为两个并列入口：
 
-- 学生端 `/student`：无需注册或登录，上传论文后获得任务编号与一次性生成的访问码；
+- 学生端 `/student`：无需注册或登录，上传论文后凭任务编号自由查看分析结果；
 - 工作人员端 `/login`：统一登录后进入 `/workspace`，在同一会话中使用论文评审和
   教务管理功能。`admin` 账号兼具两种能力，普通 `teacher` 账号仅使用评审功能。
 
@@ -227,17 +227,15 @@ DEBATE_BOOTSTRAP_ADMIN_DISPLAY_NAME=系统管理员
 切换到学生端不会退出；再次进入 `/workspace` 时会自动恢复有效会话，不会重复登录。
 旧地址 `/teacher`、`/admin`、`/teacher/login` 和 `/admin/login` 保留重定向兼容。
 
-学生访问码仅在创建任务时返回明文，数据库只保存 SHA-256 哈希。学生查看任务、结果或
-原始 PDF 时必须同时提供任务编号和访问码；可在 `/student/recover` 找回当前浏览器中的
-任务记录。已有 API 调用方需把创建任务响应中的 `access_token` 保存下来，并在查询
-`/api/debate/runs/{task_id}` 或论文详情时通过 `X-Submission-Token` 请求头发送。
+学生端无需访问码。上传论文后即可凭任务编号自由查看评审进度、分析结果、原始 PDF
+和已发布的教师终审评分，任务记录保存在当前浏览器中。
 
 门户 API 位于 `/api/debate/portal`：
 
 - `auth`：登录、当前用户、退出；
 - `teacher`：18 项标准、分配任务、PDF、草稿和终审；
 - `admin`：账号、论文分配、终审发布、统计、审计记录和 CSV 导出；
-- `student`：使用任务访问码下载本人提交的论文。
+- `student`：下载学生提交的论文原文和评审表。
 
 人工总分由后端按 `round(sum(18 项评分) / 54 * 100)` 统一换算。终审提交后锁定，
 每次分配、草稿保存、终审提交和教务发布都会写入审计日志。教师提交后结果保持内部

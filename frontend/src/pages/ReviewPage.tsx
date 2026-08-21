@@ -5,7 +5,6 @@ import { ArrowRight, Clock3, CircleAlert, FileText, FolderOpen, LoaderCircle, Pl
 import {
   createReviewTask,
   getRunSnapshot,
-  rememberTaskAccess,
   TASK_STORAGE_KEY,
   toTaskStatus,
   type TaskRecord,
@@ -13,15 +12,37 @@ import {
 
 const initialTasks: TaskRecord[] = [];
 
+/** 上传中的草稿保留 30 分钟，期间在页面间跳转不会丢失；超时视为中断残留。 */
+const DRAFT_TTL_MS = 30 * 60 * 1000;
+
+export function isDraftTask(task: TaskRecord): boolean {
+  return task.id.startsWith('local-');
+}
+
 function readStoredTasks(): TaskRecord[] {
   try {
     const raw = localStorage.getItem(TASK_STORAGE_KEY);
     const parsed = raw ? (JSON.parse(raw) as TaskRecord[]) : initialTasks;
-    // 过滤上传中断残留的草稿条目（真实任务 ID 由后端生成，不会以 local- 开头）
-    return parsed.filter(task => !task.id.startsWith('local-'));
+    const now = Date.now();
+    return parsed.filter(task => {
+      if (!isDraftTask(task)) return true;
+      const created = Date.parse(task.createdAt);
+      return Number.isFinite(created) && now - created < DRAFT_TTL_MS;
+    });
   } catch {
     return initialTasks;
   }
+}
+
+/** 每次都基于最新的 localStorage 计算并同步落盘，避免并发上传流相互覆盖。 */
+function applyTaskList(
+  tasksRef: { current: TaskRecord[] },
+  setTasks: (list: TaskRecord[]) => void,
+  updater: (list: TaskRecord[]) => TaskRecord[],
+): void {
+  const next = updater(readStoredTasks());
+  tasksRef.current = next;
+  setTasks(persistTasks(next));
 }
 
 /** 立即写入 localStorage，避免组件卸载时持久化 effect 未执行。 */
@@ -84,7 +105,7 @@ export default function ReviewPage() {
       syncing = true;
       const snapshots = await Promise.all(candidates.map(async task => {
         try {
-          return await getRunSnapshot(task.id, task.accessToken);
+          return await getRunSnapshot(task.id);
         } catch {
           // A missing or expired access code must not erase the local task receipt.
           return null;
@@ -104,6 +125,7 @@ export default function ReviewPage() {
           status: toTaskStatus(snapshot.status),
           createdAt: snapshot.created_at || task.createdAt,
           paperId: snapshot.paper_id || task.paperId,
+          title: snapshot.paper_title || snapshot.result?.context?.profile?.title || task.title,
         };
       })));
     };
@@ -161,10 +183,12 @@ export default function ReviewPage() {
     setErrorText(null);
     setBatchMessage(null);
     setBatchProgress({ completed: 0, total: selectedFiles.length });
-    setTasks(previous => persistTasks([...drafts, ...previous]));
+    // 同步写入 localStorage，确保上传期间刷新/跳转页面后草稿不丢失
+    const withDrafts = [...drafts, ...tasksRef.current];
+    tasksRef.current = withDrafts;
+    setTasks(persistTasks(withDrafts));
 
     let succeeded = 0;
-    let singleTaskId: string | null = null;
     const failures: string[] = [];
     for (const [index, file] of selectedFiles.entries()) {
       const draft = drafts[index];
@@ -177,16 +201,17 @@ export default function ReviewPage() {
           title: submission.title || draft.title,
           status: submission.status === 'succeeded' ? 'completed' : 'processing',
           paperId: submission.paper_id,
-          accessToken: submission.access_token,
         };
-        rememberTaskAccess(submission.task_id, submission.access_token);
-        setTasks(previous => persistTasks(previous.map(task => task.id === draft.id ? finalTask : task)));
+        const updated = tasksRef.current.map(task => task.id === draft.id ? finalTask : task);
+        tasksRef.current = updated;
+        setTasks(persistTasks(updated));
         succeeded += 1;
-        singleTaskId = submission.task_id;
       } catch (error) {
         console.error('创建评审任务失败', error);
         failures.push(`${file.name}：${error instanceof Error ? error.message : '创建失败'}`);
-        setTasks(previous => persistTasks(previous.filter(task => task.id !== draft.id)));
+        const updated = tasksRef.current.filter(task => task.id !== draft.id);
+        tasksRef.current = updated;
+        setTasks(persistTasks(updated));
       }
     }
 
@@ -195,9 +220,6 @@ export default function ReviewPage() {
     setBatchMessage(`已提交 ${succeeded}/${selectedFiles.length} 篇论文`);
     setErrorText(failures.length ? failures.join('；') : null);
     if (inputRef.current) inputRef.current.value = '';
-    if (selectedFiles.length === 1 && singleTaskId && !failures.length) {
-      navigate(`/student/tasks/${singleTaskId}`);
-    }
   };
 
   const filtered = tasks.filter((task) =>
@@ -207,7 +229,7 @@ export default function ReviewPage() {
   return (
     <div className="workspace">
       <header className="topbar">
-        <div className="brand-mark"><span>RW</span></div>
+        <div className="brand-mark"><span>南京大学</span></div>
         <div>
           <strong>睿文智评</strong>
           <small>Academic Review Workspace</small>
@@ -301,7 +323,6 @@ export default function ReviewPage() {
             </div>
             <span className="task-count">{tasks.length}</span>
           </div>
-          <Link className="recover-link" to="/student/recover">使用任务编号和访问码找回</Link>
 
           <label className="task-search">
             <Search size={17} />

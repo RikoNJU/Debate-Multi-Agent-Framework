@@ -39,4 +39,3 @@ class PaperReviewSubmission(StrictModel):
     title: str = Field(min_length=1)
     chapter_count: int = Field(ge=1)
     batch_id: str = Field(min_length=1)
-    access_token: str = Field(min_length=32)

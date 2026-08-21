@@ -2,7 +2,7 @@
 
 import asyncio
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
 from debate_agent_framework.schemas import DebateReviewInput, RunSubmissionResponse, StudentTaskResponse
 from debate_agent_framework.services.jobs import RunSnapshot, RunStatus
@@ -24,13 +24,11 @@ async def create_run(
     review_input: DebateReviewInput,
     background_tasks: BackgroundTasks,
     service: DebateWorkflowService = Depends(get_debate_workflow_service),
-    portal: PortalRepository = Depends(get_portal_repository),
 ) -> RunSubmissionResponse:
     snapshot = service.create_run()
-    access_token = portal.issue_student_access(task_id=snapshot.task_id, paper_id=None)
     background_tasks.add_task(service.execute, snapshot.task_id, review_input)
     return RunSubmissionResponse(
-        **snapshot.model_dump(), access_token=access_token, published_review=None
+        **snapshot.model_dump(), published_review=None
     )
 
 
@@ -42,15 +40,9 @@ async def create_run(
 async def retry_run(
     task_id: str,
     background_tasks: BackgroundTasks,
-    access_token: str | None = Header(None, alias="X-Submission-Token"),
     service: DebateWorkflowService = Depends(get_debate_workflow_service),
     persistence: PaperPersistenceService = Depends(get_paper_persistence_service),
-    portal: PortalRepository = Depends(get_portal_repository),
 ) -> RunSubmissionResponse:
-    if not access_token:
-        raise HTTPException(status_code=401, detail="需要任务访问码")
-    if not portal.validate_student_task_access(task_id, access_token):
-        raise HTTPException(status_code=403, detail="任务访问码无效")
     failed = service.get_run(task_id)
     if failed is None:
         raise HTTPException(status_code=404, detail="Debate 评审任务不存在")
@@ -71,14 +63,9 @@ async def retry_run(
         paper_id=failed.paper_id,
         revision_id=failed.revision_id,
     )
-    new_access_token = portal.issue_student_access(
-        task_id=snapshot.task_id,
-        paper_id=failed.paper_id,
-    )
     background_tasks.add_task(service.execute, snapshot.task_id, review_input)
     return RunSubmissionResponse(
         **snapshot.model_dump(),
-        access_token=new_access_token,
         published_review=None,
     )
 
@@ -86,14 +73,9 @@ async def retry_run(
 @router.get("/{task_id}", response_model=StudentTaskResponse)
 async def get_run(
     task_id: str,
-    access_token: str | None = Header(None, alias="X-Submission-Token"),
     service: DebateWorkflowService = Depends(get_debate_workflow_service),
     portal: PortalRepository = Depends(get_portal_repository),
 ) -> StudentTaskResponse:
-    if not access_token:
-        raise HTTPException(status_code=401, detail="需要任务访问码")
-    if not portal.validate_student_task_access(task_id, access_token):
-        raise HTTPException(status_code=403, detail="任务访问码无效")
     snapshot = service.get_run(task_id)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Debate 评审任务不存在")
@@ -103,5 +85,7 @@ async def get_run(
         else None
     )
     return StudentTaskResponse(
-        **snapshot.model_dump(), published_review=published
+        **snapshot.model_dump(),
+        paper_title=portal.paper_title_for_task(task_id),
+        published_review=published,
     )

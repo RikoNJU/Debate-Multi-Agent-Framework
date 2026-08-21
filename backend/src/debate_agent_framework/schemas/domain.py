@@ -354,12 +354,14 @@ class ResolvedFinding(StrictModel):
     affected_chapter_ids: list[str] = Field(default_factory=list)
     dissenting_views: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
+    requires_human_review: bool = False
 
     @model_validator(mode="after")
     def enforce_final_evidence_boundary(self) -> "ResolvedFinding":
         if self.severity in {FindingSeverity.FATAL, FindingSeverity.MAJOR} and not self.evidence:
             allowed = {ResolutionStatus.INSUFFICIENT, ResolutionStatus.HUMAN_REVIEW}
-            if self.status not in allowed or self.confidence > 0.5:
+            degraded = self.status in allowed or self.requires_human_review
+            if not degraded or self.confidence > 0.5:
                 raise ValueError("最终高严重度结论缺少证据时必须降级并降低置信度")
         return self
 
