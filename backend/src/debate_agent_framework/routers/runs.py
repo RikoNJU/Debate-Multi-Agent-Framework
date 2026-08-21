@@ -59,11 +59,9 @@ async def retry_run(
     if review_input.paper_id != failed.paper_id:
         raise HTTPException(status_code=409, detail="论文结构化数据与任务不一致")
 
-    snapshot = service.create_run(
-        paper_id=failed.paper_id,
-        revision_id=failed.revision_id,
-    )
-    background_tasks.add_task(service.execute, snapshot.task_id, review_input)
+    # 保留同一任务编号和已完成步骤的进度，从断点继续执行
+    snapshot = service.prepare_resume(task_id)
+    background_tasks.add_task(service.resume_run, task_id, review_input)
     return RunSubmissionResponse(
         **snapshot.model_dump(),
         published_review=None,

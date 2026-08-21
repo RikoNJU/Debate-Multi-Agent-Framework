@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { ChevronDown, ChevronLeft, CheckCircle2, CircleAlert, ExternalLink, FileText, RotateCcw, ShieldCheck, UsersRound } from 'lucide-react';
 
 import {
@@ -53,7 +53,6 @@ function Accordion({ title, icon, children, open = false }: { title: string; ico
 
 export default function TaskDetailPage() {
   const { taskId = '' } = useParams();
-  const navigate = useNavigate();
   const [snapshot, setSnapshot] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +61,7 @@ export default function TaskDetailPage() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [clock, setClock] = useState(Date.now());
+  const [refreshKey, setRefreshKey] = useState(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -80,6 +80,13 @@ export default function TaskDetailPage() {
       if (!taskId) {
         setLoading(false);
         setError('缺少任务 ID');
+        return;
+      }
+
+      // 本地草稿尚未创建后端任务，直接提示等待上传完成
+      if (taskId.startsWith('local-')) {
+        setLoading(false);
+        setError('该论文正在上传解析中，请稍后从任务列表进入查看');
         return;
       }
 
@@ -112,7 +119,7 @@ export default function TaskDetailPage() {
         timerRef.current = null;
       }
     };
-  }, [taskId]);
+  }, [taskId, refreshKey]);
 
   const result = snapshot?.result ?? null;
   const status = snapshot?.status;
@@ -147,7 +154,11 @@ export default function TaskDetailPage() {
     try {
       const submission = await retryReviewTask(taskId);
       replaceRetriedTask(taskId, submission);
-      navigate(`/student/tasks/${submission.task_id}`, { replace: true });
+      // 断点续跑复用同一任务编号，刷新快照并重启轮询
+      setSnapshot(submission as any);
+      setError(null);
+      setRetrying(false);
+      setRefreshKey(key => key + 1);
     } catch (exc) {
       setRetryError(exc instanceof Error ? exc.message : '重新评审失败');
       setRetrying(false);

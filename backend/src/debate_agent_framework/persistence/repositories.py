@@ -119,6 +119,22 @@ class SqlAlchemyRunStore:
             error=None,
         )
 
+    def mark_resuming(self, task_id: str) -> RunSnapshot:
+        """失败重试：恢复为运行中，但保留已完成步骤的进度记录。"""
+
+        now = datetime.now(UTC)
+        with self.database.session() as session:
+            record = session.get(ReviewRunRecord, task_id)
+            if record is None:
+                raise KeyError(task_id)
+            record.status = RunStatus.RUNNING.value
+            record.current_stage = "resuming"
+            record.result_json = None
+            record.error = None
+            record.updated_at = now
+            session.flush()
+            return self._snapshot(record, self._stage_events(session, task_id))
+
     def mark_failed(self, task_id: str, error: str) -> RunSnapshot:
         return self._update(
             task_id,

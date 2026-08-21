@@ -155,14 +155,12 @@ export function replaceRetriedTask(
     const tasks = JSON.parse(
       localStorage.getItem(TASK_STORAGE_KEY) || '[]',
     ) as TaskRecord[];
+    // 重试复用同一任务编号（断点续跑），原位更新状态即可
     localStorage.setItem(
       TASK_STORAGE_KEY,
-      JSON.stringify(tasks.map(task => task.id === previousTaskId ? {
+      JSON.stringify(tasks.map(task => task.id === submission.task_id ? {
         ...task,
-        id: submission.task_id,
-        paperId: submission.paper_id,
         status: 'processing',
-        createdAt: '刚刚重试',
       } : task)),
     );
   } catch {

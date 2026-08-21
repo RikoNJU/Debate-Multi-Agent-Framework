@@ -96,6 +96,29 @@ class InMemoryRunStore:
             stage_started_at=datetime.now(UTC),
         )
 
+    def mark_resuming(self, task_id: str) -> RunSnapshot:
+        """失败重试：恢复为运行中，但保留已完成步骤的进度记录。"""
+
+        with self._lock:
+            current = self._runs.get(task_id)
+            if current is None:
+                raise KeyError(task_id)
+        completed = [
+            event.progress_percent
+            for event in current.stage_events
+            if event.status is RunStageStatus.SUCCEEDED
+        ]
+        return self._update(
+            task_id,
+            status=RunStatus.RUNNING,
+            result=None,
+            error=None,
+            current_stage="resuming",
+            current_stage_label="正在从上次失败的步骤恢复",
+            progress_percent=max(completed, default=0),
+            stage_started_at=None,
+        )
+
     def mark_stage(
         self,
         task_id: str,

@@ -5,8 +5,10 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import aiosqlite
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from backend.env.loadenv import load_env_file
 
@@ -48,6 +50,9 @@ def create_app(settings: DebateWebSettings | None = None) -> FastAPI:
             settings.bootstrap_admin_password,
             settings.bootstrap_admin_display_name,
         )
+        # 持久化 LangGraph 检查点：失败重试可从上次失败的步骤恢复
+        checkpoint_conn = await aiosqlite.connect(data_dir / "checkpoints.db")
+        checkpointer = AsyncSqliteSaver(checkpoint_conn)
         application.state.database = database
         application.state.run_store = run_store
         application.state.paper_repository = paper_repository
@@ -58,10 +63,12 @@ def create_app(settings: DebateWebSettings | None = None) -> FastAPI:
         application.state.workflow_service = DebateWorkflowService(
             store=run_store,
             runtime=settings.runtime,
+            checkpointer=checkpointer,
         )
         try:
             yield
         finally:
+            await checkpoint_conn.close()
             database.dispose()
 
     application = FastAPI(

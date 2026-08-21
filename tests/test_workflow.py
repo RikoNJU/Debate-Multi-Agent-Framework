@@ -407,3 +407,70 @@ def test_original_pipeline_adapter_receives_exact_step4_step5_shapes() -> None:
         "summary",
         "workload_evaluation",
     }
+
+
+class FlakyChair(DemoReviewChair):
+    """前 N 次综合评审抛错，之后委托给默认 Demo 逻辑。"""
+
+    def __init__(self, failures: int = 2) -> None:
+        super().__init__()
+        self.failures = failures
+        self.plan_calls = 0
+        self.synthesize_calls = 0
+
+    def plan_debate(self, context, reviews):  # type: ignore[no-untyped-def]
+        self.plan_calls += 1
+        return super().plan_debate(context, reviews)
+
+    def synthesize(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        self.synthesize_calls += 1
+        if self.synthesize_calls <= self.failures:
+            raise RuntimeError("模拟综合失败")
+        return super().synthesize(*args, **kwargs)
+
+
+class CountingPipelineAdapter(DemoOriginalPipelineAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.summarize_calls = 0
+
+    def summarize_advice(self, review_input, synthesis):  # type: ignore[no-untyped-def]
+        self.summarize_calls += 1
+        return super().summarize_advice(review_input, synthesis)
+
+
+def test_resume_continues_from_failed_step_without_rerunning_completed_steps() -> None:
+    chair = FlakyChair(failures=2)
+    pipeline = CountingPipelineAdapter()
+    workflow = DebateWorkflow(
+        make_services(chair=chair, original_pipeline=pipeline)
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="模拟综合失败"):
+        asyncio.run(workflow.arun(make_input(), thread_id="resume-case"))
+
+    assert chair.plan_calls == 1
+    assert chair.synthesize_calls == 2
+    assert pipeline.summarize_calls == 0
+
+    result = asyncio.run(workflow.aresume(make_input(), thread_id="resume-case"))
+
+    # 失败前的步骤不重复执行：plan_debate 只跑一次，step6 只在恢复后执行
+    assert chair.plan_calls == 1
+    assert chair.synthesize_calls == 3
+    assert pipeline.summarize_calls == 1
+    assert result.final_score is not None
+
+
+def test_resume_falls_back_to_full_run_without_checkpoint() -> None:
+    chair = FlakyChair(failures=1)
+    workflow = DebateWorkflow(make_services(chair=chair))
+
+    # 没有先执行过 arun，没有任何检查点：aresume 应回退为完整执行
+    result = asyncio.run(
+        workflow.aresume(make_input(), thread_id="fresh-thread")
+    )
+
+    assert chair.plan_calls == 1
+    assert chair.synthesize_calls == 2
+    assert result.final_score is not None

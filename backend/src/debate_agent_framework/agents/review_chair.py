@@ -10,14 +10,16 @@ import os
 from collections.abc import Sequence
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from backend.env import ModelClient
 from ..schemas import (
     DebatePlan,
     DebateResponse,
+    DimensionEvaluation,
     GlobalReview,
     IndependentReview,
+    ResolvedFinding,
     ReviewContext,
     ReviewEvidence,
 )
@@ -121,7 +123,9 @@ class DebateReviewChairAgent(ReviewChair):
             schema=GlobalReview.model_json_schema(),
             max_tokens=self.synthesize_max_tokens,
         )
-        global_review = self._validate_global_review(data)
+        global_review = self._validate_global_review(
+            self._repair_global_review(data)
+        )
         return assemble_review_synthesis(context, global_review)
 
     def _complete_json(
@@ -220,6 +224,34 @@ class DebateReviewChairAgent(ReviewChair):
         ]
         return {"issues": valid_issues, "questions": questions}
 
+    @classmethod
+    def _repair_global_review(cls, data: dict[str, Any]) -> dict[str, Any]:
+        """丢弃模型多输出的未知字段，避免个别冗余键导致整轮评审失败。
+
+        模型会模仿输入载荷的结构（例如把初审 finding 的
+        ``requires_human_review`` 复制进 resolved_findings），这些冗余键
+        对最终裁决没有意义，直接剥离后交由 pydantic 做严格校验。
+        """
+
+        def strip(model: type[BaseModel], item: Any) -> Any:
+            if not isinstance(item, dict):
+                return item
+            allowed = set(model.model_fields)
+            return {key: value for key, value in item.items() if key in allowed}
+
+        repaired = strip(GlobalReview, data)
+        repaired["dimensions"] = [
+            strip(DimensionEvaluation, item)
+            for item in repaired.get("dimensions") or []
+            if isinstance(item, dict)
+        ]
+        repaired["resolved_findings"] = [
+            strip(ResolvedFinding, item)
+            for item in repaired.get("resolved_findings") or []
+            if isinstance(item, dict)
+        ]
+        return repaired
+
     @staticmethod
     def _validate_global_review(data: dict[str, Any]) -> GlobalReview:
         """校验 Chair 生成的最终裁决判断部分。"""
@@ -228,7 +260,7 @@ class DebateReviewChairAgent(ReviewChair):
             return GlobalReview.model_validate(data)
         except ValidationError as exc:
             raise ValueError(
-                "DebateReviewChairAgent 输出不符合 GlobalReview"
+                f"DebateReviewChairAgent 输出不符合 GlobalReview：{exc}"
             ) from exc
 
     @staticmethod

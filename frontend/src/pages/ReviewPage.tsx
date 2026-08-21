@@ -184,9 +184,7 @@ export default function ReviewPage() {
     setBatchMessage(null);
     setBatchProgress({ completed: 0, total: selectedFiles.length });
     // 同步写入 localStorage，确保上传期间刷新/跳转页面后草稿不丢失
-    const withDrafts = [...drafts, ...tasksRef.current];
-    tasksRef.current = withDrafts;
-    setTasks(persistTasks(withDrafts));
+    applyTaskList(tasksRef, setTasks, stored => [...drafts, ...stored]);
 
     let succeeded = 0;
     const failures: string[] = [];
@@ -195,23 +193,22 @@ export default function ReviewPage() {
       setBatchProgress({ completed: index + 1, total: selectedFiles.length });
       try {
         const submission = await createReviewTask(file, draft.title, draft.id);
-        const finalTask: TaskRecord = {
-          ...draft,
-          id: submission.task_id,
-          title: submission.title || draft.title,
-          status: submission.status === 'succeeded' ? 'completed' : 'processing',
-          paperId: submission.paper_id,
-        };
-        const updated = tasksRef.current.map(task => task.id === draft.id ? finalTask : task);
-        tasksRef.current = updated;
-        setTasks(persistTasks(updated));
+        applyTaskList(tasksRef, setTasks, stored => stored.map(task =>
+          task.id === draft.id
+            ? {
+              ...task,
+              id: submission.task_id,
+              title: submission.title || task.title,
+              status: submission.status === 'succeeded' ? 'completed' : 'processing',
+              paperId: submission.paper_id,
+            }
+            : task,
+        ));
         succeeded += 1;
       } catch (error) {
         console.error('创建评审任务失败', error);
         failures.push(`${file.name}：${error instanceof Error ? error.message : '创建失败'}`);
-        const updated = tasksRef.current.filter(task => task.id !== draft.id);
-        tasksRef.current = updated;
-        setTasks(persistTasks(updated));
+        applyTaskList(tasksRef, setTasks, stored => stored.filter(task => task.id !== draft.id));
       }
     }
 
@@ -331,7 +328,15 @@ export default function ReviewPage() {
 
           <div className="task-list">
             {filtered.map((task) => (
-              <button className="task-card" key={task.id} onClick={() => navigate(`/student/tasks/${task.id}`)}>
+              <button
+                className="task-card"
+                key={task.id}
+                onClick={() => {
+                  // 本地草稿还没有后端任务编号，点击不跳转，避免详情页 404
+                  if (isDraftTask(task)) return;
+                  navigate(`/student/tasks/${task.id}`);
+                }}
+              >
                 <div className="task-file"><FileText size={19} /></div>
                 <div>
                   <strong>{task.title}</strong>
@@ -342,7 +347,9 @@ export default function ReviewPage() {
                   </small>
                 </div>
                 <div className={`pill ${task.status}`}>
-                  {task.status === 'processing' ? '评审中' : task.status === 'failed' ? '失败' : '已完成'}
+                  {isDraftTask(task)
+                    ? '解析中'
+                    : task.status === 'processing' ? '评审中' : task.status === 'failed' ? '失败' : '已完成'}
                 </div>
                 <ArrowRight className="task-arrow" size={17} />
               </button>

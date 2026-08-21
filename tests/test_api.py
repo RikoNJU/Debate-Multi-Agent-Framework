@@ -141,9 +141,10 @@ def test_pdf_review_endpoint_parses_and_creates_run(monkeypatch, tmp_path) -> No
         )
         assert retried.status_code == 202
         retried_payload = retried.json()
-        assert retried_payload["task_id"] != payload["task_id"]
+        assert retried_payload["task_id"] == payload["task_id"]
         assert retried_payload["paper_id"] == payload["paper_id"]
         assert retried_payload["revision_id"] == result.json()["revision_id"]
+        assert retried_payload["status"] == "running"
         retried_result = client.get(
             f"/api/debate/runs/{retried_payload['task_id']}",
         )

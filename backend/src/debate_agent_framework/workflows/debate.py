@@ -8,7 +8,10 @@ import logging
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from typing import Any, Literal, TypeVar, cast
+from uuid import uuid4
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from pydantic import ValidationError
 
@@ -127,7 +130,9 @@ class DebateWorkflow:
     """执行独立初审、一轮定向 Debate 和原流程兼容输出。"""
 
     @classmethod
-    def default(cls) -> "DebateWorkflow":
+    def default(
+        cls, *, checkpointer: BaseCheckpointSaver | None = None
+    ) -> "DebateWorkflow":
         """构造默认 Debate 工作流。
 
         当前项目采用固定 Agent 组合，因此默认装配逻辑直接放在工作流类中。
@@ -144,11 +149,17 @@ class DebateWorkflow:
                 historical_score_retriever=DemoHistoricalScoreRetriever(),
                 original_pipeline=DemoOriginalPipelineAdapter(),
                 workload_evaluator=DeterministicLegacyWorkloadEvaluator(),
-            )
+            ),
+            checkpointer=checkpointer,
         )
 
     @classmethod
-    def real(cls, model_client: ModelClient | None = None) -> "DebateWorkflow":
+    def real(
+        cls,
+        model_client: ModelClient | None = None,
+        *,
+        checkpointer: BaseCheckpointSaver | None = None,
+    ) -> "DebateWorkflow":
         """构造真实模型驱动的 Debate 工作流。
 
         Specialist、Review Chair 与 Step 6/7 使用真实 LLM。未配置的外部证据
@@ -184,15 +195,19 @@ class DebateWorkflow:
                 workload_evaluator=RealLegacyWorkloadEvaluator(client),
             ),
             config=DebateWorkflowConfig.from_env(),
+            checkpointer=checkpointer,
         )
 
     def __init__(
         self,
         services: DebateWorkflowServices,
         config: DebateWorkflowConfig | None = None,
+        *,
+        checkpointer: BaseCheckpointSaver | None = None,
     ) -> None:
         self.services = services
         self.config = config or DebateWorkflowConfig()
+        self.checkpointer = checkpointer or MemorySaver()
         registered_roles = set(services.specialists)
         if registered_roles != REQUIRED_ROLES:
             missing = sorted(role.value for role in REQUIRED_ROLES - registered_roles)
@@ -236,7 +251,7 @@ class DebateWorkflow:
         builder.add_edge("step6_summary_advice", "retrieve_score_cases")
         builder.add_edge("retrieve_score_cases", "step7_scoring")
         builder.add_edge("step7_scoring", END)
-        return builder.compile()
+        return builder.compile(checkpointer=self.checkpointer)
 
     @staticmethod
     def _with_progress(name: str, handler: Any) -> Any:
@@ -865,23 +880,63 @@ class DebateWorkflow:
         review_input: DebateReviewInput | dict[str, Any],
         *,
         progress_callback: ProgressCallback | None = None,
+        thread_id: str | None = None,
     ) -> DebateRunResult:
         """异步执行完整 Debate 评审链路。"""
 
         validated_input = DebateReviewInput.model_validate(review_input)
-        initial: DebateState = {
-            "review_input": validated_input,
+        token = _progress_callback.set(progress_callback)
+        try:
+            config = {"configurable": {"thread_id": thread_id or uuid4().hex}}
+            final = await self.graph.ainvoke(
+                self._initial_state(validated_input), config
+            )
+        finally:
+            _progress_callback.reset(token)
+        return self._result_from_state(final)
+
+    async def aresume(
+        self,
+        review_input: DebateReviewInput | dict[str, Any],
+        *,
+        thread_id: str,
+        progress_callback: ProgressCallback | None = None,
+    ) -> DebateRunResult:
+        """从上次失败的步骤恢复执行。
+
+        LangGraph checkpointer 会在每个节点成功后保存状态快照；失败重试时
+        若存在未完成的待执行节点，则从断点继续，只重跑失败及之后的步骤。
+        没有任何快照（如服务重启且使用内存检查点）时退回完整执行。
+        """
+
+        validated_input = DebateReviewInput.model_validate(review_input)
+        config = {"configurable": {"thread_id": thread_id}}
+        token = _progress_callback.set(progress_callback)
+        try:
+            state = await self.graph.aget_state(config)
+            if state.next:
+                final = await self.graph.ainvoke(None, config)
+            else:
+                final = await self.graph.ainvoke(
+                    self._initial_state(validated_input), config
+                )
+        finally:
+            _progress_callback.reset(token)
+        return self._result_from_state(final)
+
+    @staticmethod
+    def _initial_state(review_input: DebateReviewInput) -> DebateState:
+        return {
+            "review_input": review_input,
             "independent_reviews": [],
             "external_evidence": [],
             "debate_responses": [],
             "historical_score_cases": [],
             "issues": [],
         }
-        token = _progress_callback.set(progress_callback)
-        try:
-            final = await self.graph.ainvoke(initial)
-        finally:
-            _progress_callback.reset(token)
+
+    @staticmethod
+    def _result_from_state(final: DebateState) -> DebateRunResult:
         required = {
             "context",
             "debate_plan",
@@ -1134,7 +1189,11 @@ class DebateWorkflow:
         raise RuntimeError("检测到正在运行的事件循环，请改用 await workflow.arun(...) ")
 
 
-def build_workflow(runtime: str = "demo") -> DebateWorkflow:
+def build_workflow(
+    runtime: str = "demo",
+    *,
+    checkpointer: BaseCheckpointSaver | None = None,
+) -> DebateWorkflow:
     """按运行模式构造 Debate 工作流。
 
     - ``demo``：确定性 Demo Agent，用于测试和回归基线；
@@ -1142,7 +1201,7 @@ def build_workflow(runtime: str = "demo") -> DebateWorkflow:
     """
 
     if runtime == "real":
-        return DebateWorkflow.real()
+        return DebateWorkflow.real(checkpointer=checkpointer)
     if runtime == "demo":
-        return DebateWorkflow.default()
+        return DebateWorkflow.default(checkpointer=checkpointer)
     raise ValueError(f"未知的 Debate 运行模式: {runtime}")
