@@ -63,6 +63,9 @@ export default function TaskDetailPage() {
   const [retryError, setRetryError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [accessInput, setAccessInput] = useState('');
+  const [accessSubmitting, setAccessSubmitting] = useState(false);
+  const [accessSubmitError, setAccessSubmitError] = useState<string | null>(null);
   const [clock, setClock] = useState(Date.now());
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -177,6 +180,24 @@ export default function TaskDetailPage() {
     }
   };
 
+  const submitAccessCode = async () => {
+    const code = accessInput.trim();
+    if (!code || accessSubmitting) return;
+    setAccessSubmitting(true);
+    setAccessSubmitError(null);
+    try {
+      const payload = await getRunSnapshot(taskId, code);
+      rememberTaskAccess(taskId, code);
+      setSnapshot(payload);
+      setError(null);
+      setAccessInput('');
+    } catch (exc: any) {
+      setAccessSubmitError(exc?.message || '访问码验证失败');
+    } finally {
+      setAccessSubmitting(false);
+    }
+  };
+
   return (
     <div className="report-page">
       <header className="report-bar">
@@ -238,10 +259,29 @@ export default function TaskDetailPage() {
         ) : isFailed || error ? (
           <div className="report-error">
             <CircleAlert size={22} />
-            <b>评审失败</b>
-            <p>{snapshot?.error || error || '未知错误，请稍后重试。'}</p>
+            <b>{error ? '页面加载失败' : '评审失败'}</b>
+            {error && <p>{error}</p>}
+            {!error && <p>{snapshot?.error || '未知错误，请稍后重试。'}</p>}
             {taskId?.startsWith('local-') && (
               <p>该页面是上传过程中产生的临时记录，请返回任务列表重新进入对应任务，或使用“找回评审任务”功能。</p>
+            )}
+            {error && (
+              <div className="access-recover">
+                <p>本页需要该任务的访问码，粘贴后即可恢复查看：</p>
+                <div className="access-recover-row">
+                  <input
+                    value={accessInput}
+                    onChange={(e) => setAccessInput(e.target.value)}
+                    placeholder="任务访问码"
+                    onKeyDown={(e) => { if (e.key === 'Enter') submitAccessCode(); }}
+                  />
+                  <button onClick={submitAccessCode} disabled={accessSubmitting || !accessInput.trim()}>
+                    {accessSubmitting ? '验证中...' : '恢复访问'}
+                  </button>
+                </div>
+                {accessSubmitError && <small className="export-error">{accessSubmitError}</small>}
+                <Link to="/student/recover">前往“找回评审任务”页面</Link>
+              </div>
             )}
             {retryError && <p>{retryError}</p>}
             {(status === 'failed' || status === 'interrupted') && accessCode && (
@@ -377,18 +417,25 @@ export default function TaskDetailPage() {
                   </div>
                 </Accordion>
               </div>
+              {status === 'succeeded' && (
+                <div className="export-actions report-export">
+                  <button className="export-button" onClick={exportTable} disabled={exporting}>
+                    {exporting
+                      ? '正在生成...'
+                      : publishedReview
+                        ? '导出 18 维评审表（教师终审版）'
+                        : '导出 18 维评审表（AI 预审版）'}
+                  </button>
+                  {!publishedReview && <small>教师发布终审后将自动切换为终审版</small>}
+                  {exportError && <small className="export-error">{exportError}</small>}
+                </div>
+              )}
               {publishedReview && <div id="human-review">
                 <Accordion title="已发布的人工终审" icon={<CheckCircle2 />} open>
                   <div className="score-panel">
                     <div className="score-row"><span>人工终审总分</span><b>{publishedReview.total_score}</b></div>
                     <p>{publishedReview.advice_content || '教师未填写公开修改建议。'}</p>
                     <small>发布时间：{new Date(publishedReview.published_at).toLocaleString('zh-CN')}</small>
-                    <div className="export-actions">
-                      <button className="export-button" onClick={exportTable} disabled={exporting}>
-                        {exporting ? '正在生成...' : '导出 18 维评审表'}
-                      </button>
-                      {exportError && <small className="export-error">{exportError}</small>}
-                    </div>
                   </div>
                 </Accordion>
               </div>}

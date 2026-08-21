@@ -393,15 +393,28 @@ def test_review_table_export_endpoints(tmp_path) -> None:  # type: ignore[no-unt
             0
         ].read_text(encoding="utf-8")
 
-        # 学生端在人工终审发布前不可导出
+        # 学生端在人工终审发布前可导出 AI 预审版评审表
         student_token = client.app.state.portal_repository.issue_student_access(
             task_id="run-export", paper_id="paper-export"
         )
-        before_publish = client.get(
-            "/api/debate/student/tasks/run-export/review-table",
-            headers={"X-Submission-Token": student_token},
+        with patch(
+            "debate_agent_framework.routers.student.compile_review_table_pdf",
+            side_effect=_fake_compile,
+        ):
+            before_publish = client.get(
+                "/api/debate/student/tasks/run-export/review-table",
+                headers={"X-Submission-Token": student_token},
+            )
+        assert before_publish.status_code == 200
+        assert before_publish.headers["content-type"] == "application/pdf"
+        paper_key = hashlib.sha256(b"paper-export").hexdigest()[:24]
+        ai_tex = list(
+            (data_dir / "papers" / paper_key / "revision-export").glob(
+                "review_table_ai_*.tex"
+            )
         )
-        assert before_publish.status_code == 409
+        assert len(ai_tex) == 1
+        assert "人工智能学院本科毕设论文院内预审表" in ai_tex[0].read_text(encoding="utf-8")
 
         # 通过 assignment detail 拿到 review_id 并发布终审
         detail = client.get(
@@ -426,3 +439,11 @@ def test_review_table_export_endpoints(tmp_path) -> None:  # type: ignore[no-unt
         assert student_export.status_code == 200
         assert student_export.headers["content-type"] == "application/pdf"
         assert "18%E7%BB%B4" in student_export.headers["content-disposition"] or "18维评审表" in student_export.headers["content-disposition"]
+
+        # 发布后导出以教师评分为准（生成 review_table_{review_id} 版本）
+        persisted_tex = list(
+            (data_dir / "papers" / paper_key / "revision-export").glob(
+                f"review_table_{review_id}.tex"
+            )
+        )
+        assert len(persisted_tex) == 1

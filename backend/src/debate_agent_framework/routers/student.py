@@ -54,7 +54,10 @@ async def get_review_table(
     storage: PaperPersistenceService = Depends(get_paper_persistence_service),
     service: DebateWorkflowService = Depends(get_debate_workflow_service),
 ) -> FileResponse:
-    """导出 18 维评审表（以已发布的人工终审为准）。"""
+    """导出 18 维评审表。
+
+    教师终审已发布时以教师评分为准；否则回退到 AI 预审评分生成预览版。
+    """
     if not access_token:
         raise HTTPException(status_code=401, detail="需要任务访问码")
     if not repository.validate_student_task_access(task_id, access_token):
@@ -64,14 +67,34 @@ async def get_review_table(
         raise HTTPException(status_code=404, detail="Debate 评审任务不存在")
     if not snapshot.paper_id:
         raise HTTPException(status_code=409, detail="该任务未关联论文，无法导出评审表")
-    published = repository.get_published_review_for_paper(snapshot.paper_id)
-    if published is None or not published.get("section_scores"):
-        raise HTTPException(
-            status_code=409, detail="人工终审尚未发布，暂时无法导出 18 维评审表"
-        )
     paper = storage.repository.get_paper(snapshot.paper_id)
     if paper is None:
         raise HTTPException(status_code=404, detail="论文不存在")
+
+    published = repository.get_published_review_for_paper(snapshot.paper_id)
+    result = snapshot.result if isinstance(snapshot.result, dict) else {}
+    final_score = result.get("final_score") or {}
+    chapter_advice = chapter_advice_from_result(result)
+
+    if published and published.get("section_scores"):
+        section_scores = [int(v) for v in published["section_scores"]]
+        total_score = int(published["total_score"])
+        advice_content = published.get("advice_content") or ""
+        stem = f"review_table_{published['review_id']}"
+        filename = f"18维评审表-{paper['title']}.pdf"
+    else:
+        levels = final_score.get("legacy_level_scores")
+        raw_total = final_score.get("total_score")
+        if not isinstance(levels, list) or len(levels) != 18 or raw_total is None:
+            raise HTTPException(
+                status_code=409, detail="AI 预审评分尚未生成，暂时无法导出 18 维评审表"
+            )
+        section_scores = [max(0, min(3, int(v))) for v in levels]
+        total_score = int(round(float(raw_total)))
+        advice_content = final_score.get("overall_evaluation") or ""
+        stem = f"review_table_ai_{task_id}"
+        filename = f"18维评审表(AI预审)-{paper['title']}.pdf"
+
     try:
         output_dir = storage.review_table_dir(snapshot.paper_id)
     except ValueError as exc:
@@ -81,23 +104,20 @@ async def get_review_table(
         source_filename=paper.get("source_filename"),
         paper_type=paper.get("paper_type"),
         reviewer_name="",
-        section_scores=list(published["section_scores"]),
-        total_score=published["total_score"],
-        advice_content=published.get("advice_content") or "",
-        chapter_advice=chapter_advice_from_result(
-            snapshot.result if snapshot.result else None
-        ),
+        section_scores=section_scores,
+        total_score=total_score,
+        advice_content=advice_content,
+        chapter_advice=chapter_advice,
     )
     try:
         pdf_path = await asyncio.to_thread(
             compile_review_table_pdf,
             data=data,
             output_dir=output_dir,
-            stem=f"review_table_{published['review_id']}",
+            stem=stem,
             tectonic_path=request.app.state.settings.tectonic_path,
             cache_dir=f"{request.app.state.settings.data_dir}/.tectonic-cache",
         )
     except (FileNotFoundError, RuntimeError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    filename = f"18维评审表-{paper['title']}.pdf"
     return FileResponse(pdf_path, media_type="application/pdf", filename=filename)
