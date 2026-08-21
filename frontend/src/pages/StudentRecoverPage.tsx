@@ -2,7 +2,7 @@ import { FormEvent, useState } from 'react';
 import { ArrowLeft, KeyRound, Search } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 
-import { recoverTask, TaskRecord } from '../lib/reviewApi';
+import { recoverTask, TaskRecord, toTaskStatus } from '../lib/reviewApi';
 
 const TASKS_KEY = 'debate-review-tasks';
 
@@ -21,11 +21,11 @@ export default function StudentRecoverPage() {
       const current: TaskRecord[] = raw ? JSON.parse(raw) : [];
       const record: TaskRecord = {
         id: taskId.trim(),
-        paperId: snapshot.paper_id,
+        paperId: snapshot.paper_id || undefined,
         title: snapshot.result?.context?.profile?.title || snapshot.paper_id || '已找回的评审任务',
         fileName: '论文文件',
-        status: snapshot.status === 'succeeded' ? 'completed' : snapshot.status === 'failed' || snapshot.status === 'interrupted' ? 'failed' : 'processing',
-        createdAt: new Date(snapshot.created_at).toLocaleString('zh-CN'),
+        status: toTaskStatus(snapshot.status),
+        createdAt: snapshot.created_at,
         accessToken: accessCode.trim(),
       };
       localStorage.setItem(TASKS_KEY, JSON.stringify([record, ...current.filter(item => item.id !== record.id)]));

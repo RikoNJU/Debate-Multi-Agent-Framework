@@ -20,6 +20,16 @@ export type ReviewSubmission = {
   access_token: string;
 };
 
+export type RunSnapshot = {
+  task_id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'interrupted';
+  created_at: string;
+  updated_at: string;
+  result?: Record<string, any> | null;
+  error?: string | null;
+  paper_id?: string | null;
+};
+
 const ACCESS_KEY = 'debate-student-task-access';
 export const TASK_STORAGE_KEY = 'debate-review-tasks';
 
@@ -71,7 +81,13 @@ export async function createReviewTask(file: File, title?: string, paperId?: str
   return response.json();
 }
 
-export async function getRunSnapshot(taskId: string, accessToken?: string) {
+export function toTaskStatus(status: RunSnapshot['status'] | string): TaskStatus {
+  if (status === 'succeeded') return 'completed';
+  if (status === 'failed' || status === 'interrupted') return 'failed';
+  return 'processing';
+}
+
+export async function getRunSnapshot(taskId: string, accessToken?: string): Promise<RunSnapshot> {
   const token = accessToken || getTaskAccess(taskId);
   if (!token) throw new Error('当前浏览器没有该任务的访问码，请先找回任务');
   const response = await fetch(`/api/debate/runs/${encodeURIComponent(taskId)}`, {
@@ -82,7 +98,7 @@ export async function getRunSnapshot(taskId: string, accessToken?: string) {
     throw new Error(payload?.detail || '任务详情获取失败');
   }
 
-  return response.json();
+  return response.json() as Promise<RunSnapshot>;
 }
 
 export async function recoverTask(taskId: string, accessToken: string) {

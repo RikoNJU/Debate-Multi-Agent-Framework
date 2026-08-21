@@ -4,8 +4,10 @@ import { ArrowRight, Clock3, CircleAlert, FileText, FolderOpen, LoaderCircle, Pl
 
 import {
   createReviewTask,
+  getRunSnapshot,
   rememberTaskAccess,
   TASK_STORAGE_KEY,
+  toTaskStatus,
   type TaskRecord,
 } from '../lib/reviewApi';
 
@@ -32,10 +34,30 @@ function persistTasks(list: TaskRecord[]): TaskRecord[] {
   return list;
 }
 
+function formatTaskTime(value: string, now: number): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value || '时间未知';
+  const elapsedSeconds = Math.max(0, Math.floor((now - timestamp) / 1000));
+  if (elapsedSeconds < 60) return '刚刚';
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) return `${elapsedMinutes} 分钟前`;
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `${elapsedHours} 小时前`;
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(timestamp));
+}
+
 export default function ReviewPage() {
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const [tasks, setTasks] = useState<TaskRecord[]>(readStoredTasks);
+  const tasksRef = useRef<TaskRecord[]>(tasks);
+  const [clock, setClock] = useState(Date.now());
   const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -45,8 +67,56 @@ export default function ReviewPage() {
   const [errorText, setErrorText] = useState<string | null>(null);
 
   useEffect(() => {
+    tasksRef.current = tasks;
     localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(tasks));
   }, [tasks]);
+
+  useEffect(() => {
+    let active = true;
+    let syncing = false;
+
+    const syncTasks = async (includeFinished: boolean) => {
+      if (syncing) return;
+      const candidates = tasksRef.current.filter(task =>
+        !task.id.startsWith('local-') && (includeFinished || task.status === 'processing'),
+      );
+      if (!candidates.length) return;
+      syncing = true;
+      const snapshots = await Promise.all(candidates.map(async task => {
+        try {
+          return await getRunSnapshot(task.id, task.accessToken);
+        } catch {
+          // A missing or expired access code must not erase the local task receipt.
+          return null;
+        }
+      }));
+      syncing = false;
+      if (!active) return;
+      const snapshotById = new Map(
+        snapshots.filter(snapshot => snapshot !== null).map(snapshot => [snapshot.task_id, snapshot]),
+      );
+      if (!snapshotById.size) return;
+      setTasks(previous => persistTasks(previous.map(task => {
+        const snapshot = snapshotById.get(task.id);
+        if (!snapshot) return task;
+        return {
+          ...task,
+          status: toTaskStatus(snapshot.status),
+          createdAt: snapshot.created_at || task.createdAt,
+          paperId: snapshot.paper_id || task.paperId,
+        };
+      })));
+    };
+
+    void syncTasks(true);
+    const statusTimer = window.setInterval(() => void syncTasks(false), 5000);
+    const clockTimer = window.setInterval(() => setClock(Date.now()), 30000);
+    return () => {
+      active = false;
+      window.clearInterval(statusTimer);
+      window.clearInterval(clockTimer);
+    };
+  }, []);
 
   const choose = (candidates: File[]) => {
     if (!candidates.length || submitting) return;
@@ -84,7 +154,7 @@ export default function ReviewPage() {
       title: file.name.replace(/\.[^.]+$/, '') || '未命名论文',
       fileName: file.name,
       status: 'processing',
-      createdAt: '刚刚',
+      createdAt: new Date().toISOString(),
     }));
 
     setSubmitting(true);
@@ -247,7 +317,7 @@ export default function ReviewPage() {
                   <span>{task.fileName}</span>
                   <small>
                     <Clock3 size={12} />
-                    {task.createdAt}
+                    {formatTaskTime(task.createdAt, clock)}
                   </small>
                 </div>
                 <div className={`pill ${task.status}`}>
