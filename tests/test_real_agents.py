@@ -637,3 +637,73 @@ def test_plan_debate_repairs_structural_constraints() -> None:
         SpecialistRole.EMPIRICAL_EVIDENCE,
     }
     assert [q.question_id for q in plan.questions] == ["Q-1"]
+
+
+def test_paraphrased_paper_evidence_is_degraded_not_discarded() -> None:
+    """改写引文应降级为人工复核，而不是整体丢弃专家意见。"""
+    from debate_agent_framework.schemas import (
+        DebateReviewInput,
+        ChapterInput,
+        PaperType,
+        ReviewEvidence,
+    )
+    from debate_agent_framework.agents.context_planner import DebateContextPlannerAgent
+
+    chapter_a = ChapterInput(
+        chapter_id="C1",
+        chapter_name="第一章 绪论",
+        stage="引言/绪论",
+        content=(
+            "多智能体协同方法一直是研究热点，本文聚焦如何让智能体在共享环境中"
+            "通过通信与协商完成复杂任务，并在此基础上提出一种证据驱动的评审框架。"
+        ),
+        section_titles=["研究背景"],
+    )
+    chapter_b = ChapterInput(
+        chapter_id="C2",
+        chapter_name="第二章 方法设计",
+        stage="方法构建",
+        content=(
+            "本章提出基于多代理辩论的评审方法，结合科学严谨性、实证证据与全局质量"
+            "三个视角，通过独立评审、定向讨论与主席综合形成最终裁决。"
+        ),
+        section_titles=["总体架构"],
+    )
+    review_input_lite = DebateReviewInput(
+        paper_id="paper-degrade-test",
+        title="证据驱动多智能体评审",
+        abstract="测试降级机制。",
+        full_text=chapter_a.content + "\n" + chapter_b.content,
+        paper_type=PaperType.METHOD,
+        chapters=[chapter_a, chapter_b],
+    )
+    context = DebateContextPlannerAgent().build(review_input_lite)
+    paraphrase_quote = "本文提出一种证据驱动的评审框架，用于完成复杂任务，并基于三个视角进行综合。"
+    evidence = ReviewEvidence(
+        evidence_id="E-PARAPHRASE",
+        kind="paper",
+        source_title="第一章 绪论",
+        quote=paraphrase_quote,
+        location="第一章",
+    )
+    degraded = DebateWorkflow._validate_paper_evidence([evidence], context)
+
+    assert degraded == [evidence]
+    assert evidence.confidence <= 0.4
+    assert evidence.chapter_id == "C1"
+
+
+def test_fabricated_paper_evidence_is_rejected() -> None:
+    """完全编造的引文应抛错，阻止幻觉证据混入。"""
+    from debate_agent_framework.schemas import ReviewEvidence
+
+    context = make_context()
+    fake = ReviewEvidence(
+        evidence_id="E-HALLUCINATION",
+        kind="paper",
+        source_title="论文原文",
+        quote="这份内容是凭空编造的，原文中不存在。",
+        location="第三章",
+    )
+    with pytest.raises(ValueError, match="无法在章节原文中定位"):
+        DebateWorkflow._validate_paper_evidence([fake], context)

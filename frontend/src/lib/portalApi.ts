@@ -120,6 +120,28 @@ export const portalApi = {
   pdfUrl: (id: string) => `${API_ROOT}/teacher/assignments/${encodeURIComponent(id)}/pdf`,
   saveReview: (id: string, body: object) => request<HumanReview>(`/teacher/assignments/${encodeURIComponent(id)}/review`, { method: 'PUT', body: JSON.stringify(body) }),
   submitReview: (id: string, body: object) => request<HumanReview>(`/teacher/assignments/${encodeURIComponent(id)}/review/submit`, { method: 'POST', body: JSON.stringify(body) }),
+  runReviewTable: async (id: string): Promise<void> => {
+    const token = getToken();
+    const response = await fetch(`${API_ROOT}/teacher/assignments/${encodeURIComponent(id)}/review-table`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload?.detail || '导出 18 维评审表失败');
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = /filename="?([^"]+)"?/.exec(disposition);
+    const filename = match?.[1] || '18维评审表.pdf';
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  },
   statistics: () => request<PortalStatistics>('/admin/statistics'),
   papers: () => request<AdminPaper[]>('/admin/papers'),
   users: () => request<PortalUser[]>('/admin/users'),

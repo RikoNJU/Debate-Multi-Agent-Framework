@@ -108,6 +108,33 @@ export async function retryReviewTask(taskId: string): Promise<ReviewSubmission>
   return response.json();
 }
 
+export async function downloadReviewTable(taskId: string): Promise<void> {
+  const accessToken = getTaskAccess(taskId);
+  if (!accessToken) throw new Error('当前浏览器没有该任务的访问码，无法导出评审表');
+  const response = await fetch(
+    `/api/debate/student/tasks/${encodeURIComponent(taskId)}/review-table`,
+    {
+      headers: { 'X-Submission-Token': accessToken },
+    },
+  );
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload?.detail || '导出 18 维评审表失败');
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const match = /filename="?([^"]+)"?/.exec(disposition);
+  const filename = match?.[1] || '18维评审表.pdf';
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function replaceRetriedTask(
   previousTaskId: string,
   submission: ReviewSubmission,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, ChevronLeft, FileText, Save, Search, Send, Sparkles } from 'lucide-react';
+import { Check, ChevronLeft, FileText, FileDown, Save, Search, Send, Sparkles } from 'lucide-react';
 
 import PortalShell from '../components/PortalShell';
 import { usePortalAuth } from '../contexts/PortalAuthContext';
@@ -29,6 +29,7 @@ export default function TeacherPortalPage() {
   const [message, setMessage] = useState('');
   const [pdfUrl, setPdfUrl] = useState('');
   const [pdfMessage, setPdfMessage] = useState('请选择评审任务');
+  const [exporting, setExporting] = useState(false);
 
   const load = async () => {
     try {
@@ -81,6 +82,20 @@ export default function TeacherPortalPage() {
     } catch (exc) { setMessage(exc instanceof Error ? exc.message : '保存失败'); }
   };
 
+  const exportTable = async () => {
+    if (!selected || exporting) return;
+    setExporting(true);
+    setMessage('');
+    try {
+      await portalApi.runReviewTable(selected.assignment_id);
+      setMessage('18 维评审表已生成并开始下载');
+    } catch (exc) {
+      setMessage(exc instanceof Error ? exc.message : '导出 18 维评审表失败');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const filtered = useMemo(() => items.filter((item) => `${item.title} ${item.paper_id}`.toLowerCase().includes(search.toLowerCase())), [items, search]);
   if (!user) return <div className="portal-loading">正在加载教师工作台...</div>;
 
@@ -109,7 +124,7 @@ export default function TeacherPortalPage() {
           <label className="review-text"><span>修改建议</span><textarea disabled={selected.status === 'submitted'} value={advice} onChange={e => setAdvice(e.target.value)} placeholder="填写可执行的修改建议"/></label>
           <label className="review-text"><span>教师备注</span><textarea disabled={selected.status === 'submitted'} value={comments} onChange={e => setComments(e.target.value)} placeholder="填写内部复核说明"/></label>
           {message && <div className="save-message"><Check size={16}/>{message}</div>}
-          <div className="review-actions"><button disabled={selected.status === 'submitted'} onClick={() => save(false)}><Save size={17}/>保存草稿</button><button className="primary" disabled={selected.status === 'submitted'} onClick={() => confirm('提交后将锁定评审结果，确认提交吗？') && save(true)}><Send size={17}/>提交终审</button></div>
+          <div className="review-actions"><button disabled={selected.status === 'submitted'} onClick={() => save(false)}><Save size={17}/>保存草稿</button><button className="primary" disabled={selected.status === 'submitted'} onClick={() => confirm('提交后将锁定评审结果，确认提交吗？') && save(true)}><Send size={17}/>提交终审</button><button className="export-button" disabled={exporting} onClick={exportTable}><FileDown size={16}/>{exporting ? '正在生成...' : '导出 18 维评审表'}</button></div>
         </section>
       </div>
     </main>}

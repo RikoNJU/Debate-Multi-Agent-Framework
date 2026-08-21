@@ -242,6 +242,7 @@ class OpenAICompatibleChatClient:
         content_parts: list[str] = []
         usage: Mapping[str, Any] = {}
         chunk_count = 0
+        finish_reason: str | None = None
         for raw_line in response:
             line = raw_line.decode("utf-8", errors="replace").strip()
             if not line or line.startswith(":") or not line.startswith("data:"):
@@ -263,13 +264,15 @@ class OpenAICompatibleChatClient:
             content = delta.get("content")
             if content:
                 content_parts.append(content)
+            if choices[0].get("finish_reason"):
+                finish_reason = choices[0]["finish_reason"]
 
         content = "".join(content_parts)
         if not content:
             raise ModelClientError("模型流式调用未返回正文内容")
         return ModelResponse(
             content=content,
-            raw={"streamed": True, "chunk_count": chunk_count},
+            raw={"streamed": True, "chunk_count": chunk_count, "finish_reason": finish_reason},
             usage=usage,
         )
 

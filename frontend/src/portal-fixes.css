@@ -136,6 +136,37 @@
   border-radius: 8px;
 }
 
+.export-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #edf1f5;
+}
+
+.export-button {
+  height: 36px;
+  padding: 0 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #146c67;
+  border-radius: 5px;
+  background: #146c67;
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.export-button:disabled { opacity: .55; cursor: not-allowed; }
+
+.export-error { color: #a3374b; font-size: 12px; }
+
+.export-success { color: #176c4d; font-size: 12px; }
+
 .progress-heading {
   display: flex;
   align-items: flex-end;

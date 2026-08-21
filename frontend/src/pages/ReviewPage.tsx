@@ -14,10 +14,22 @@ const initialTasks: TaskRecord[] = [];
 function readStoredTasks(): TaskRecord[] {
   try {
     const raw = localStorage.getItem(TASK_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as TaskRecord[]) : initialTasks;
+    const parsed = raw ? (JSON.parse(raw) as TaskRecord[]) : initialTasks;
+    // 过滤上传中断残留的草稿条目（真实任务 ID 由后端生成，不会以 local- 开头）
+    return parsed.filter(task => !task.id.startsWith('local-'));
   } catch {
     return initialTasks;
   }
+}
+
+/** 立即写入 localStorage，避免组件卸载时持久化 effect 未执行。 */
+function persistTasks(list: TaskRecord[]): TaskRecord[] {
+  try {
+    localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(list));
+  } catch {
+    // 存储不可用时保留内存态即可
+  }
+  return list;
 }
 
 export default function ReviewPage() {
@@ -79,7 +91,7 @@ export default function ReviewPage() {
     setErrorText(null);
     setBatchMessage(null);
     setBatchProgress({ completed: 0, total: selectedFiles.length });
-    setTasks(previous => [...drafts, ...previous]);
+    setTasks(previous => persistTasks([...drafts, ...previous]));
 
     let succeeded = 0;
     let singleTaskId: string | null = null;
@@ -98,13 +110,13 @@ export default function ReviewPage() {
           accessToken: submission.access_token,
         };
         rememberTaskAccess(submission.task_id, submission.access_token);
-        setTasks(previous => previous.map(task => task.id === draft.id ? finalTask : task));
+        setTasks(previous => persistTasks(previous.map(task => task.id === draft.id ? finalTask : task)));
         succeeded += 1;
         singleTaskId = submission.task_id;
       } catch (error) {
         console.error('创建评审任务失败', error);
         failures.push(`${file.name}：${error instanceof Error ? error.message : '创建失败'}`);
-        setTasks(previous => previous.map(task => task.id === draft.id ? { ...task, status: 'failed' } : task));
+        setTasks(previous => persistTasks(previous.filter(task => task.id !== draft.id)));
       }
     }
 

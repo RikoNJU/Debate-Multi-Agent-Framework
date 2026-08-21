@@ -26,6 +26,7 @@ class DebateWebSettings:
         "http://localhost:3001",
         "http://localhost:5174",
     )
+    tectonic_path: str | None = None
 
     @classmethod
     def from_env(cls) -> "DebateWebSettings":
@@ -52,6 +53,7 @@ class DebateWebSettings:
                 if origins
                 else cls.cors_origins
             ),
+            tectonic_path=os.getenv("DEBATE_TECTONIC_PATH") or None,
         )
 
     def resolved_database_url(self) -> str:

@@ -10,6 +10,7 @@ build/
 dist/
 output/
 backend/data/
+backend/local.db
 .venv/
 .env
 .env.*

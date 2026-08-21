@@ -489,8 +489,25 @@ class DebateWorkflow:
                             raise ValueError(
                                 f"注册为 {role.value} 的 Agent 返回了 {review.role.value}"
                             )
-                        self._validate_review_grounding(review, state["context"])
+                        degraded = self._validate_review_grounding(
+                            review, state["context"]
+                        )
                         await _emit_progress(stage, label, "succeeded", 50)
+                        if degraded:
+                            return review, DebateWorkflowIssue(
+                                node="independent_review",
+                                code="specialist_evidence_needs_review",
+                                message=(
+                                    f"{role.value} 部分论文证据未能完全锚定到原文，"
+                                    f"已标记 {len(degraded)} 条证据需人工复核："
+                                    + "；".join(
+                                        f"{item.evidence_id}"
+                                        for item in degraded
+                                    )
+                                ),
+                                severity=IssueSeverity.WARNING,
+                                role=role,
+                            )
                         return review, None
                     except ModelClientError as exc:
                         last_error = exc
@@ -655,7 +672,24 @@ class DebateWorkflow:
                         or response.issue_id != question.issue_id
                     ):
                         raise ValueError("DebateResponse 与定向问题的角色或标识不一致")
-                    self._validate_response_grounding(response, state["context"])
+                    degraded = self._validate_response_grounding(
+                        response, state["context"]
+                    )
+                    if degraded:
+                        return response, DebateWorkflowIssue(
+                            node="targeted_debate",
+                            code="debate_evidence_needs_review",
+                            message=(
+                                f"问题 {question.question_id} 回应中 {len(degraded)} "
+                                "条证据未能完全锚定到原文，已标记人工复核："
+                                + "；".join(
+                                    f"{item.evidence_id}" for item in degraded
+                                )
+                            ),
+                            severity=IssueSeverity.WARNING,
+                            role=role,
+                            question_id=question.question_id,
+                        )
                     return response, None
                 except Exception as exc:
                     return None, DebateWorkflowIssue(
@@ -688,7 +722,23 @@ class DebateWorkflow:
                 ),
                 ReviewSynthesis,
             )
-            self._validate_synthesis_grounding(synthesis, state["context"])
+            degraded = self._validate_synthesis_grounding(
+                synthesis, state["context"]
+            )
+            if degraded:
+                issues = state.get("issues", []) + [
+                    DebateWorkflowIssue(
+                        node="synthesize_review",
+                        code="synthesis_evidence_needs_review",
+                        message=(
+                            "综合裁决中有 " + str(len(degraded)) +
+                            " 条论文证据未能完全锚定到原文，已标记人工复核："
+                            + "；".join(f"{item.evidence_id}" for item in degraded)
+                        ),
+                        severity=IssueSeverity.WARNING,
+                    )
+                ]
+                return {"synthesis": synthesis, "issues": issues}
         except ModelClientError as exc:
             raise WorkflowExecutionError(
                 f"Review Chair 模型调用失败（网络/超时/API 错误）：{exc}"
@@ -859,27 +909,49 @@ class DebateWorkflow:
     @classmethod
     def _validate_review_grounding(
         cls, review: IndependentReview, context: ReviewContext
-    ) -> None:
+    ) -> list[ReviewEvidence]:
+        degraded: list[ReviewEvidence] = []
         for finding in review.findings:
             cls._validate_chapter_ids(finding.affected_chapter_ids, context)
-            cls._validate_paper_evidence(finding.evidence, context)
+            degraded.extend(
+                cls._validate_paper_evidence(finding.evidence, context)
+            )
+            if any(item for item in finding.evidence if item in degraded):
+                finding.requires_human_review = True
+        return degraded
 
     @classmethod
     def _validate_response_grounding(
         cls, response: DebateResponse, context: ReviewContext
-    ) -> None:
-        cls._validate_paper_evidence(response.evidence, context)
+    ) -> list[ReviewEvidence]:
+        degraded: list[ReviewEvidence] = []
+        degraded.extend(
+            cls._validate_paper_evidence(response.evidence, context)
+        )
         for finding in response.revised_findings:
             cls._validate_chapter_ids(finding.affected_chapter_ids, context)
-            cls._validate_paper_evidence(finding.evidence, context)
+            finding_degraded = cls._validate_paper_evidence(
+                finding.evidence, context
+            )
+            degraded.extend(finding_degraded)
+            if finding_degraded:
+                finding.requires_human_review = True
+        return degraded
 
     @classmethod
     def _validate_synthesis_grounding(
         cls, synthesis: ReviewSynthesis, context: ReviewContext
-    ) -> None:
+    ) -> list[ReviewEvidence]:
+        degraded: list[ReviewEvidence] = []
         for finding in getattr(synthesis.global_review, "resolved_findings", []):
             cls._validate_chapter_ids(finding.affected_chapter_ids, context)
-            cls._validate_paper_evidence(finding.evidence, context)
+            finding_degraded = cls._validate_paper_evidence(
+                finding.evidence, context
+            )
+            degraded.extend(finding_degraded)
+            if finding_degraded:
+                finding.requires_human_review = True
+        return degraded
 
     @staticmethod
     def _validate_chapter_ids(chapter_ids: list[str], context: ReviewContext) -> None:
@@ -888,54 +960,68 @@ class DebateWorkflow:
         if unknown:
             raise ValueError(f"评审结论引用了未知章节：{unknown}")
 
-    @staticmethod
-    def _fuzzy_anchor(quote: str, content: str) -> str | None:
+    @classmethod
+    def _fuzzy_anchor(cls, quote: str, content: str) -> tuple[str, float] | None:
         """在章节原文中寻找与引文最相似的片段并回填。
 
-        真实 LLM 形成的引文常是改写或概述，无法逐字匹配。这里用最长公共
-        片段在原文中定位锚点，把 ``quote`` 回填为可追溯的原文片段；找不到
-        足够相似的片段时返回 None，由调用方决定拒绝该条证据。
+        真实 LLM 形成的引文常带公式或轻微改写，无法逐字匹配。这里对整章
+        做最长公共子串匹配，返回 ``(原文章节片段, 覆盖比例)``，其中覆盖
+        比例 = 最长连续公共块长度 / 规范化引文长度；连续公共块过短
+        （< 6 个字符）视为无法定位，返回 None。为防止 LaTeX 归一化产生
+        长度变化，规范化仅做"去空白 + 小写"，并用原文下标映射回填片段，
+        保证回填内容与原文一致。
         """
-
         import difflib
 
-        normalize = lambda value: "".join(value.split()).casefold()  # noqa: E731
-        norm_quote = normalize(quote)
-        norm_content = normalize(content)
+        def build_mapping(raw: str) -> tuple[list[int], str]:
+            mapping: list[int] = []
+            chars: list[str] = []
+            for index, char in enumerate(raw):
+                if char.isspace():
+                    continue
+                mapping.append(index)
+                chars.append(char.casefold())
+            return mapping, "".join(chars)
+
+        quote_map, norm_quote = build_mapping(quote)
+        content_map, norm_content = build_mapping(content)
         if not norm_quote or not norm_content:
             return None
 
-        threshold = max(8, min(len(norm_quote), len(norm_content)) // 3)
-        best_match = 0
-        best_fragment: str | None = None
+        matcher = difflib.SequenceMatcher(
+            None, norm_quote, norm_content, autojunk=False
+        )
+        best_block: difflib.Match | None = None
+        matched_blocks = matcher.get_matching_blocks()
+        for block in matched_blocks:
+            if best_block is None or block.size > best_block.size:
+                best_block = block
 
-        step = 4000
-        for start in range(0, len(content), step):
-            chunk = content[start : start + step]
-            matcher = difflib.SequenceMatcher(
-                None, norm_quote, normalize(chunk), autojunk=False
-            )
-            for block in matcher.get_matching_blocks():
-                if block.size > best_match:
-                    best_match = block.size
-                    begin = start + block.b
-                    end = begin + block.size
-                    best_fragment = content[begin:end]
-
-        if best_match < threshold or best_fragment is None:
+        if best_block is None:
             return None
-        return best_fragment
+        coverage = best_block.size / max(1, len(norm_quote))
+        coverage = min(1.0, coverage)
+        min_block_size = max(3, min(6, len(norm_quote) // 2))
+        if best_block.size < min_block_size or coverage < 0.1:
+            return None
+
+        begin = content_map[best_block.b]
+        last_idx = min(best_block.b + best_block.size - 1, len(content_map) - 1)
+        end = content_map[last_idx] + 1
+        best_fragment = content[begin:end]
+        return best_fragment, coverage
 
     @classmethod
     def _locate_paper_evidence(
         cls,
         evidence: ReviewEvidence,
         context: ReviewContext,
-    ) -> tuple[str, str] | None:
-        """把证据锚定到章节原文，返回 ``(chapter_id, normalized_quote)``。
+    ) -> tuple[str, str, float] | None:
+        """把证据锚定到章节原文，返回 ``(chapter_id, quote, coverage)``。
 
         优先使用模型给出的 chapter_id；逐字匹配失败时对候选章节做模糊锚定，
-        命中后把证据的 quote 回填为可追溯的原文片段。
+        命中后把证据的 quote 回填为可追溯的原文片段。coverage 是规范化引文
+        在原文中的覆盖比例（0~1）；返回 None 表示完全无法定位。
         """
 
         def normalize(value: str) -> str:
@@ -953,26 +1039,34 @@ class DebateWorkflow:
             content = chapters[chapter_id].content
             quote = normalize(evidence.quote)
             if quote in normalize(content):
-                return chapter_id, quote
-            fragment = cls._fuzzy_anchor(evidence.quote, content)
-            if fragment is None:
+                return chapter_id, quote, 1.0
+            result = cls._fuzzy_anchor(evidence.quote, content)
+            if result is None:
                 continue
-            score = len(normalize(fragment)) / max(1, len(quote))
-            if best is None or score > best[0]:
-                best = (score, chapter_id, normalize(fragment))
+            fragment, coverage = result
+            if coverage < 0.1:
+                continue
+            if best is None or coverage > best[0]:
+                best = (coverage, chapter_id, normalize(fragment))
         if best is None:
             return None
-        _, chapter_id, normalized_fragment = best
+        coverage, chapter_id, normalized_fragment = best
         evidence.quote = normalized_fragment
         evidence.chapter_id = chapter_id
-        return chapter_id, normalized_fragment
+        return chapter_id, normalized_fragment, coverage
 
     @classmethod
     def _validate_paper_evidence(
         cls,
         evidence_items: list[ReviewEvidence],
         context: ReviewContext,
-    ) -> None:
+    ) -> list[ReviewEvidence]:
+        """校正并锚定论文证据，返回需要人工复核的证据列表。
+
+        对每条论文证据：能精确定位或高覆盖度模糊定位的，回填可追溯片段；
+        仅能部分定位（覆盖度不足）的，降低置信度并标记需要人工复核，
+        不会整体丢弃该条证据；完全无法定位的才会抛错，阻止编造引文混入。
+        """
         chapters = {chapter.chapter_id: chapter for chapter in context.chapters}
         blocks = {
             block.block_id: block
@@ -986,6 +1080,7 @@ class DebateWorkflow:
         def normalize(value: str) -> str:
             return "".join(value.split()).casefold()
 
+        degraded: list[ReviewEvidence] = []
         for evidence in evidence_items:
             if evidence.kind.value != "paper":
                 continue
@@ -994,7 +1089,12 @@ class DebateWorkflow:
                 raise ValueError(
                     f"论文证据 {evidence.evidence_id} 的引文无法在章节原文中定位"
                 )
-            chapter_id, quote = located
+            chapter_id, quote, coverage = located
+
+            if coverage < 0.5:
+                evidence.confidence = min(evidence.confidence, 0.4)
+                degraded.append(evidence)
+
             block = blocks.get(evidence.block_id) if evidence.block_id else None
             if evidence.block_id and block is None:
                 raise ValueError(
@@ -1022,6 +1122,7 @@ class DebateWorkflow:
                 evidence.chunk_id = block.chunk_id
                 evidence.page_number = block.page_number
                 evidence.bbox = block.bbox
+        return degraded
 
     def run(self, review_input: DebateReviewInput | dict[str, Any]) -> DebateRunResult:
         """同步入口；异步应用请调用 arun。"""

@@ -147,5 +147,5 @@ def test_model_client_reassembles_streamed_content(monkeypatch) -> None:
     assert captured_payload["max_tokens"] == 4096
     assert captured_payload["thinking_budget"] == 2048
     assert response.content == '{"ok":true}'
-    assert response.raw == {"streamed": True, "chunk_count": 4}
+    assert response.raw == {"streamed": True, "chunk_count": 4, "finish_reason": None}
     assert response.usage == {"total_tokens": 12}

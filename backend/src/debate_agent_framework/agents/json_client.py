@@ -70,6 +70,29 @@ def review_context_payload(context: ReviewContext) -> dict[str, Any]:
     return payload
 
 
+def extract_json_object(text: str) -> str:
+    """从模型回复中提取 JSON 对象文本。
+
+    即使声明了 json_object 输出，部分模型仍会用 ```json 围栏包裹，
+    或在前后附带说明文字，这里做容错提取。
+    """
+
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        # 去掉首行围栏（``` 或 ```json）与结尾围栏
+        first_newline = stripped.find("\n")
+        if first_newline != -1:
+            candidate = stripped[first_newline + 1 :]
+            if candidate.rstrip().endswith("```"):
+                candidate = candidate.rstrip()[:-3]
+            stripped = candidate.strip()
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end > start:
+        return stripped[start : end + 1]
+    return stripped
+
+
 def complete_json(
     model_client: ModelClient,
     *,
@@ -107,10 +130,17 @@ def complete_json(
             stream=True,
         ),
     )
+    finish_reason = response.raw.get("finish_reason")
+    if finish_reason == "length":
+        raise ValueError(
+            "模型输出因达到 max_tokens 上限被截断，"
+            "请增大该 Agent 的 max_tokens 配置后重试"
+        )
     try:
-        data = json.loads(response.content)
+        data = json.loads(extract_json_object(response.content))
     except json.JSONDecodeError as exc:
-        raise ValueError("模型返回内容不是合法 JSON") from exc
+        preview = response.content[:200]
+        raise ValueError(f"模型返回内容不是合法 JSON（开头片段：{preview}）") from exc
     if not isinstance(data, dict):
         raise ValueError("模型返回 JSON 顶层必须是对象")
     return data

@@ -62,10 +62,19 @@ class DebateWorkflowConfig:
     @classmethod
     def from_env(cls) -> "DebateWorkflowConfig":
         concurrency = os.getenv("DEBATE_SPECIALIST_CONCURRENCY")
+        attempts = os.getenv("DEBATE_REVIEW_ATTEMPTS")
+        if attempts is not None:
+            try:
+                attempts_value = int(attempts)
+            except ValueError:
+                attempts_value = 2
+        else:
+            attempts_value = 2
         return cls(
             max_concurrency=(
                 int(concurrency) if concurrency is not None else 1
-            )
+            ),
+            review_attempts=attempts_value,
         )
 
     def __post_init__(self) -> None:

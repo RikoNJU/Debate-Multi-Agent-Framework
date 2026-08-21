@@ -128,6 +128,17 @@ class PaperPersistenceService:
             raise FileNotFoundError("论文结构化输入不存在")
         return DebateReviewInput.model_validate_json(path.read_text(encoding="utf-8"))
 
+    def review_table_dir(self, paper_id: str) -> Path:
+        """定位该论文当前版本用于存放评审表产物（tex/pdf）的版本目录。"""
+        paper = self.repository.get_paper(paper_id)
+        if paper is None:
+            raise ValueError("论文不存在")
+        revision_id = paper["current_revision_id"]
+        paper_key = hashlib.sha256(paper_id.encode("utf-8")).hexdigest()[:24]
+        directory = self.papers_dir / paper_key / revision_id
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
     @staticmethod
     def _artifact_type(relative_path: str) -> str:
         name = Path(relative_path).name

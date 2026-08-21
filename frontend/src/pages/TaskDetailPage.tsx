@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChevronDown, ChevronLeft, CheckCircle2, CircleAlert, Copy, ExternalLink, FileText, RotateCcw, ShieldCheck, UsersRound } from 'lucide-react';
 
 import {
+  downloadReviewTable,
   getRunSnapshot,
   getTaskAccess,
   rememberTaskAccess,
@@ -60,6 +61,8 @@ export default function TaskDetailPage() {
   const [copied, setCopied] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [clock, setClock] = useState(Date.now());
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -161,6 +164,19 @@ export default function TaskDetailPage() {
     }
   };
 
+  const exportTable = async () => {
+    if (!taskId || exporting) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      await downloadReviewTable(taskId);
+    } catch (exc) {
+      setExportError(exc instanceof Error ? exc.message : '导出 18 维评审表失败');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="report-page">
       <header className="report-bar">
@@ -224,6 +240,9 @@ export default function TaskDetailPage() {
             <CircleAlert size={22} />
             <b>评审失败</b>
             <p>{snapshot?.error || error || '未知错误，请稍后重试。'}</p>
+            {taskId?.startsWith('local-') && (
+              <p>该页面是上传过程中产生的临时记录，请返回任务列表重新进入对应任务，或使用“找回评审任务”功能。</p>
+            )}
             {retryError && <p>{retryError}</p>}
             {(status === 'failed' || status === 'interrupted') && accessCode && (
               <button onClick={retry} disabled={retrying}>
@@ -364,6 +383,12 @@ export default function TaskDetailPage() {
                     <div className="score-row"><span>人工终审总分</span><b>{publishedReview.total_score}</b></div>
                     <p>{publishedReview.advice_content || '教师未填写公开修改建议。'}</p>
                     <small>发布时间：{new Date(publishedReview.published_at).toLocaleString('zh-CN')}</small>
+                    <div className="export-actions">
+                      <button className="export-button" onClick={exportTable} disabled={exporting}>
+                        {exporting ? '正在生成...' : '导出 18 维评审表'}
+                      </button>
+                      {exportError && <small className="export-error">{exportError}</small>}
+                    </div>
                   </div>
                 </Accordion>
               </div>}

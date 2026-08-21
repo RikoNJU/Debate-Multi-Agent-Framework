@@ -1,12 +1,18 @@
 """Teacher paper-reading and human-review endpoints."""
 
+import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from ..persistence import PortalRepository
 from ..services.paper_storage import PaperPersistenceService
+from ..services.review_table_export import (
+    build_review_table_data,
+    chapter_advice_from_result,
+    compile_review_table_pdf,
+)
 from ..schemas import (
     AssignmentResponse,
     HumanReviewResponse,
@@ -121,3 +127,51 @@ async def submit_review(
     repository: PortalRepository = Depends(get_portal_repository),
 ) -> HumanReviewResponse:
     return _save_review(assignment_id, payload, user, repository, submit=True)
+
+
+@router.get("/assignments/{assignment_id}/review-table")
+async def export_review_table(
+    assignment_id: str,
+    request: Request,
+    user: dict[str, Any] = Depends(teacher_or_admin),
+    repository: PortalRepository = Depends(get_portal_repository),
+    storage: PaperPersistenceService = Depends(get_paper_persistence_service),
+) -> FileResponse:
+    """导出 18 维评审表：生成 LaTeX、编译 PDF 并保存到论文持久化目录。"""
+    item = repository.get_assignment(assignment_id, reviewer_id=user["id"])
+    if item is None:
+        raise HTTPException(status_code=404, detail="评审任务不存在")
+    review = item.get("human_review")
+    if review is None:
+        raise HTTPException(
+            status_code=409, detail="尚未完成评分，请先保存或提交终审后再导出评审表"
+        )
+    section_scores = list(review["section_scores"])
+    if len(section_scores) != 18:
+        raise HTTPException(status_code=409, detail="尚未完成评分，无法导出评审表")
+    techniques = chapter_advice_from_result(item.get("ai_result"))
+    try:
+        output_dir = storage.review_table_dir(item["paper_id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="论文不存在") from exc
+    data = build_review_table_data(
+        paper_title=item["title"],
+        source_filename=item.get("source_filename"),
+        paper_type=item.get("paper_type"),
+        reviewer_name=item.get("reviewer_name"),
+        section_scores=list(review["section_scores"]),
+        total_score=review["total_score"],
+        advice_content=review.get("advice_content") or "",
+        chapter_advice=techniques,
+    )
+    try:
+        pdf_path = await asyncio.to_thread(
+            compile_review_table_pdf,
+            data=data,
+            output_dir=output_dir,
+            stem=f"review_table_{review['review_id']}",
+        )
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    filename = f"18维评审表-{item['title']}.pdf"
+    return FileResponse(pdf_path, media_type="application/pdf", filename=filename)

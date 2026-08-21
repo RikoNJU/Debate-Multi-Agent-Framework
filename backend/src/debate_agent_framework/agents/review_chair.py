@@ -6,6 +6,7 @@ Review Chair 是 Debate 工作流中的主 Agent，负责把多个 Specialist �
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from typing import Any
 
@@ -23,6 +24,10 @@ from ..schemas import (
 from .compat import assemble_review_synthesis
 from .json_client import complete_json, review_context_payload
 from ..ports import ReviewChair
+
+# 综合裁决需要为每个章节输出评估与证据锚定，是全流程最长的输出；
+# 思考模型的思考 token 也计入输出上限，默认值需留足余量。
+DEFAULT_CHAIR_MAX_TOKENS = 16384
 
 
 class DebateReviewChairAgent(ReviewChair):
@@ -45,6 +50,9 @@ class DebateReviewChairAgent(ReviewChair):
     ) -> None:
         self.model_client = model_client
         self.temperature = temperature
+        self.synthesize_max_tokens = int(
+            os.getenv("DEBATE_CHAIR_MAX_TOKENS", str(DEFAULT_CHAIR_MAX_TOKENS))
+        )
 
     def plan_debate(
         self,
@@ -111,6 +119,7 @@ class DebateReviewChairAgent(ReviewChair):
             ),
             payload=payload,
             schema=GlobalReview.model_json_schema(),
+            max_tokens=self.synthesize_max_tokens,
         )
         global_review = self._validate_global_review(data)
         return assemble_review_synthesis(context, global_review)
@@ -122,6 +131,7 @@ class DebateReviewChairAgent(ReviewChair):
         user_prompt: str,
         payload: dict[str, Any],
         schema: dict[str, Any],
+        max_tokens: int = 4096,
     ) -> dict[str, Any]:
         """调用统一模型客户端并解析 JSON，最终由 complete_json 完成。"""
 
@@ -134,6 +144,7 @@ class DebateReviewChairAgent(ReviewChair):
             payload=payload,
             schema=schema,
             temperature=self.temperature,
+            max_tokens=max_tokens,
         )
         return data
 
