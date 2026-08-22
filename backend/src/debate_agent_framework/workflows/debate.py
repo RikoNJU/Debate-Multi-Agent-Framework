@@ -39,6 +39,7 @@ from ..agents import (
 from ..schemas import (
     CompatibleWorkloadEvaluation,
     ComprehensiveScoreResult,
+    FindingAdviceItem,
     DebatePlan,
     DebateResponse,
     DebateReviewInput,
@@ -75,18 +76,18 @@ _progress_callback: ContextVar[ProgressCallback | None] = ContextVar(
 WORKFLOW_STAGES: dict[str, tuple[str, int, int]] = {
     "step1_classify_paper": ("识别论文类型", 2, 8),
     "step2_classify_chapters": ("识别章节阶段", 8, 14),
-    "retrieve_historical_advice": ("检索历史评审建议", 14, 18),
-    "build_context": ("构造评审上下文", 18, 25),
-    "independent_review": ("三位专家独立初审", 25, 55),
-    "plan_debate": ("Chair 识别争议", 55, 63),
-    "retrieve_debate_evidence": ("检索外部证据", 63, 68),
-    "targeted_debate": ("专家定向讨论", 68, 75),
-    "synthesize_review": ("Chair 综合裁决", 75, 83),
-    "step5_workload_evaluation": ("评价论文结构与工作量", 83, 88),
-    "compatibility_gate": ("校验评审结果完整性", 88, 90),
-    "step6_summary_advice": ("汇总关键修改建议", 90, 94),
-    "retrieve_score_cases": ("检索历史评分案例", 94, 96),
-    "step7_scoring": ("生成最终评分", 96, 99),
+    "build_context": ("构造评审上下文", 14, 22),
+    "independent_review": ("三位专家独立初审", 22, 52),
+    "plan_debate": ("Chair 识别争议", 52, 60),
+    "retrieve_debate_evidence": ("检索外部证据", 60, 65),
+    "targeted_debate": ("专家定向讨论", 65, 72),
+    "synthesize_review": ("Chair 综合裁决", 72, 80),
+    "step5_workload_evaluation": ("评价论文结构与工作量", 80, 85),
+    "compatibility_gate": ("校验评审结果完整性", 85, 88),
+    "retrieve_cleaned_advice": ("检索历史建议 (V2)", 88, 92),
+    "step6_summary_advice": ("汇总关键修改建议", 92, 96),
+    "retrieve_score_cases": ("检索历史评分案例", 96, 98),
+    "step7_scoring": ("生成最终评分", 98, 99),
 }
 
 SPECIALIST_LABELS = {
@@ -166,6 +167,7 @@ class DebateWorkflow:
         与历史评分服务保持为空，禁止 Demo 数据污染真实评审。
         """
 
+        from ..services.clean_advice import build_clean_advice_retriever_from_env
         from ..services.external_evidence import build_evidence_retriever_from_env
         from ..services.historical_advice import (
             build_historical_advice_retriever_from_env,
@@ -191,6 +193,7 @@ class DebateWorkflow:
                     build_historical_advice_retriever_from_env()
                 ),
                 historical_score_retriever=build_historical_score_retriever_from_env(),
+                clean_advice_retriever=build_clean_advice_retriever_from_env(),
                 original_pipeline=RealOriginalPipelineAdapter(model_client=client),
                 workload_evaluator=RealLegacyWorkloadEvaluator(client),
             ),
@@ -220,7 +223,6 @@ class DebateWorkflow:
         nodes = {
             "step1_classify_paper": self._step1_classify_paper,
             "step2_classify_chapters": self._step2_classify_chapters,
-            "retrieve_historical_advice": self._retrieve_historical_advice,
             "build_context": self._build_context,
             "independent_review": self._independent_review,
             "plan_debate": self._plan_debate,
@@ -229,6 +231,7 @@ class DebateWorkflow:
             "synthesize_review": self._synthesize_review,
             "step5_workload_evaluation": self._step5_workload_evaluation,
             "compatibility_gate": self._compatibility_gate,
+            "retrieve_cleaned_advice": self._retrieve_cleaned_advice,
             "step6_summary_advice": self._step6_summary_advice,
             "retrieve_score_cases": self._retrieve_score_cases,
             "step7_scoring": self._step7_scoring,
@@ -238,8 +241,7 @@ class DebateWorkflow:
 
         builder.add_edge(START, "step1_classify_paper")
         builder.add_edge("step1_classify_paper", "step2_classify_chapters")
-        builder.add_edge("step2_classify_chapters", "retrieve_historical_advice")
-        builder.add_edge("retrieve_historical_advice", "build_context")
+        builder.add_edge("step2_classify_chapters", "build_context")
         builder.add_edge("build_context", "independent_review")
         builder.add_edge("independent_review", "plan_debate")
         builder.add_edge("plan_debate", "retrieve_debate_evidence")
@@ -247,7 +249,8 @@ class DebateWorkflow:
         builder.add_edge("targeted_debate", "synthesize_review")
         builder.add_edge("synthesize_review", "step5_workload_evaluation")
         builder.add_edge("step5_workload_evaluation", "compatibility_gate")
-        builder.add_edge("compatibility_gate", "step6_summary_advice")
+        builder.add_edge("compatibility_gate", "retrieve_cleaned_advice")
+        builder.add_edge("retrieve_cleaned_advice", "step6_summary_advice")
         builder.add_edge("step6_summary_advice", "retrieve_score_cases")
         builder.add_edge("retrieve_score_cases", "step7_scoring")
         builder.add_edge("step7_scoring", END)
@@ -808,6 +811,35 @@ class DebateWorkflow:
                 )
         return {}
 
+    async def _retrieve_cleaned_advice(self, state: DebateState) -> dict[str, Any]:
+        """V2 清洗后 RAG：按 Chair 已确认 Finding 检索历史建议。"""
+
+        retriever = getattr(self.services, "clean_advice_retriever", None)
+        if retriever is None:
+            return {}
+
+        synthesis = state["synthesis"]
+        title = state["review_input"].title
+
+        try:
+            items = await retriever.retrieve_from_findings(
+                synthesis, review_title=title
+            )
+        except Exception as exc:
+            return {
+                "issues": [
+                    DebateWorkflowIssue(
+                        node="retrieve_cleaned_advice",
+                        code="cleaned_advice_retrieval_failed",
+                        message=f"V2 历史建议检索失败，跳过：{exc}",
+                        severity=IssueSeverity.WARNING,
+                    )
+                ],
+                "finding_advice": [],
+            }
+
+        return {"finding_advice": items}
+
     async def _step6_summary_advice(self, state: DebateState) -> dict[str, Any]:
         try:
             result = SummaryAdviceResult.model_validate(
@@ -817,9 +849,62 @@ class DebateWorkflow:
                     )
                 )
             )
-            return {"summary_advice": result}
         except Exception as exc:
             raise WorkflowExecutionError(f"Step 6 适配器执行失败：{exc}") from exc
+
+        # V2: 将 RAG 检索到的历史建议审计信息绑定到 SummaryAdviceItem
+        finding_advice = state.get("finding_advice", [])
+        if finding_advice:
+            result = self._enrich_with_finding_advice(result, finding_advice)
+
+        return {"summary_advice": result}
+
+    @staticmethod
+    def _enrich_with_finding_advice(
+        result: SummaryAdviceResult,
+        finding_advice: list[FindingAdviceItem],
+    ) -> SummaryAdviceResult:
+        """将 V2 RAG 的历史建议审计字段绑定到 Step 6 输出。
+        
+        规则：
+        - 按 finding_id 匹配 SummaryAdviceItem 与 FindingAdviceItem
+        - 每条 item 最多绑定 2 条历史建议
+        - 全文总量保持 ≤ 15 条
+        - 不增添新的未确认问题
+        """
+        if not finding_advice:
+            return result
+
+        # 构建 finding_id → 历史建议列表的映射
+        advice_by_finding: dict[str, list[FindingAdviceItem]] = {}
+        for item in finding_advice:
+            advice_by_finding.setdefault(item.finding_id, []).append(item)
+
+        enriched_items: list[SummaryAdviceItem] = []
+        total_advice_bound = 0
+        max_total = 15
+
+        for item in result.items:
+            bound_count = 0
+            for finding_id in item.finding_ids:
+                candidates = advice_by_finding.get(finding_id, [])
+                if not candidates:
+                    continue
+                for cand in candidates:
+                    if bound_count >= 2 or total_advice_bound >= max_total:
+                        break
+                    item.advice_id = cand.advice_id
+                    item.source_collection = cand.source_collection
+                    item.dense_rank = cand.dense_rank
+                    item.bm25_rank = cand.bm25_rank
+                    item.rrf_score = round(cand.rrf_score, 5) if cand.rrf_score is not None else None
+                    item.rerank_score = round(cand.rerank_score, 1) if cand.rerank_score is not None else None
+                    item.index_version = cand.index_version
+                    bound_count += 1
+                    total_advice_bound += 1
+            enriched_items.append(item)
+
+        return result.model_copy(update={"items": enriched_items[:5]})
 
     async def _retrieve_score_cases(self, state: DebateState) -> dict[str, Any]:
         retriever = self.services.historical_score_retriever

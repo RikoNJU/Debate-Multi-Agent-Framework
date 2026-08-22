@@ -151,6 +151,24 @@ class RetrievedAdvice(StrictModel):
     suggestions: list[str] = Field(default_factory=list)
 
 
+class FindingAdviceItem(StrictModel):
+    """V2 清洗后按已确认 Finding 检索到的单条历史建议。"""
+
+    finding_id: str = Field(min_length=1)
+    advice_id: str = Field(min_length=1)
+    suggestion: str = Field(min_length=1)
+    issue_category: str = ""
+    dense_rank: int | None = None
+    bm25_rank: int | None = None
+    rrf_score: float | None = None
+    rerank_score: float | None = None
+    relevance: int | None = None
+    applicability: int | None = None
+    source_collection: str = ""
+    index_version: str = "historical_advice_v2"
+    rerank_reason: str = ""
+
+
 class DebateReviewInput(StrictModel):
     """Debate 模块承接原 Step 1、Step 2 和 Step 3 的输入。"""
 
@@ -462,6 +480,14 @@ class SummaryAdviceItem(StrictModel):
     evidence_ids: list[str] = Field(default_factory=list)
     affected_chapter_ids: list[str] = Field(default_factory=list)
     requires_human_review: bool = False
+    # V2 RAG 审计字段（optional，仅当启用 CleanAdviceRetriever 时填充）
+    advice_id: str = ""
+    source_collection: str = ""
+    dense_rank: int | None = None
+    bm25_rank: int | None = None
+    rrf_score: float | None = None
+    rerank_score: float | None = None
+    index_version: str = ""
 
 
 class SummaryAdviceResult(StrictModel):

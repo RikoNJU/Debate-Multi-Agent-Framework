@@ -13,6 +13,7 @@ from ..schemas import (
     DebateResponse,
     DebateReviewInput,
     DebateWorkflowIssue,
+    FindingAdviceItem,
     HistoricalScoreCase,
     IndependentReview,
     ReviewContext,
@@ -43,6 +44,7 @@ class DebateState(TypedDict, total=False):
     debate_responses: list[DebateResponse]
     synthesis: ReviewSynthesis
     summary_advice: SummaryAdviceResult
+    finding_advice: list[FindingAdviceItem]
     historical_score_cases: list[HistoricalScoreCase]
     final_score: ComprehensiveScoreResult
     issues: Annotated[list[DebateWorkflowIssue], add]
@@ -103,4 +105,5 @@ class DebateWorkflowServices:
     chapter_classifier: ChapterClassifier | None = None
     evidence_retriever: EvidenceRetriever | None = None
     historical_advice_retriever: HistoricalAdviceRetriever | None = None
+    clean_advice_retriever: Any | None = None
     historical_score_retriever: HistoricalScoreRetriever | None = None

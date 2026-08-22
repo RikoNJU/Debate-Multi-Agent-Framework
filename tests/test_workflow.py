@@ -154,7 +154,9 @@ class RecordingHistoricalAdviceRetriever:
         ]
 
 
-def test_historical_advice_is_retrieved_before_context_planning() -> None:
+def test_historical_advice_retriever_is_no_longer_called_before_context() -> None:
+    """V2: 历史建议节点已从 Step2 后移至 Chair 裁决之后。
+    旧 historical_advice_retriever 不再在 build_context 前被调用。"""
     retriever = RecordingHistoricalAdviceRetriever()
     review_input = make_input().model_copy(
         update={
@@ -172,15 +174,13 @@ def test_historical_advice_is_retrieved_before_context_planning() -> None:
         make_services(historical_advice_retriever=retriever)
     ).run(review_input)
 
-    assert retriever.limit == 5
-    assert result.context.step3_advice[0].suggestions == [
-        "补充方法适用边界",
-        "补充复杂度分析",
-    ]
+    # 旧 retriever 不再被调用（节点已移除）：
+    # 若无 clean_advice_retriever，步骤跳过不报错
+    assert retriever.limit is None
 
 
-def test_step1_and_step2_run_before_historical_advice() -> None:
-    retriever = RecordingHistoricalAdviceRetriever()
+def test_step1_and_step2_run_before_build_context() -> None:
+    """V2: 验证 Step1/Step2 分类在 build_context 前正确执行。"""
     classifier = LegacyStep12ClassificationAdapter()
     review_input = make_input().model_copy(
         update={
@@ -196,27 +196,30 @@ def test_step1_and_step2_run_before_historical_advice() -> None:
         }
     )
 
-    DebateWorkflow(
+    result = DebateWorkflow(
         make_services(
-            historical_advice_retriever=retriever,
             paper_classifier=classifier,
             chapter_classifier=classifier,
         )
     ).run(review_input)
 
-    assert retriever.paper_type is PaperType.METHOD
-    assert retriever.chapter_stages == ["引言/绪论", "方法构建", "实验验证"]
+    # 验证分类结果已存入 context
+    assert result.context.profile.paper_type == PaperType.METHOD
+    actual_stages = [ch.stage for ch in result.context.chapters]
+    assert actual_stages == ["引言/绪论", "方法构建", "实验验证"]
 
 
-def test_historical_advice_failure_degrades_to_existing_input() -> None:
+def test_historical_advice_retriever_is_not_called_in_new_workflow() -> None:
+    """V2: 旧 historical_advice_retriever 不再存在于图中，即使配置了也不触发。"""
     retriever = RecordingHistoricalAdviceRetriever(fail=True)
 
     result = DebateWorkflow(
         make_services(historical_advice_retriever=retriever)
     ).run(make_input())
 
-    assert result.context.step3_advice == []
-    assert any(
+    # 旧 retriever 节点已移除：不应有检索失败的错误
+    assert retriever.limit is None
+    assert not any(
         issue.code == "historical_advice_retrieval_failed" for issue in result.issues
     )
 
