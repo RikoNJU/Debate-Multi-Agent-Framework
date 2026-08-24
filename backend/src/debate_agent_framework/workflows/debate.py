@@ -36,6 +36,7 @@ from ..agents import (
     STEP1_RULE_VERSION,
     STEP2_RULE_VERSION,
 )
+from ..agents.legacy_summary import build_summary_advice
 from ..schemas import (
     CompatibleWorkloadEvaluation,
     ComprehensiveScoreResult,
@@ -819,11 +820,9 @@ class DebateWorkflow:
             return {}
 
         synthesis = state["synthesis"]
-        title = state["review_input"].title
-
         try:
             items = await retriever.retrieve_from_findings(
-                synthesis, review_title=title
+                synthesis, state["review_input"]
             )
         except Exception as exc:
             return {
@@ -841,23 +840,46 @@ class DebateWorkflow:
         return {"finding_advice": items}
 
     async def _step6_summary_advice(self, state: DebateState) -> dict[str, Any]:
+        retriever = getattr(self.services, "clean_advice_retriever", None)
+        finding_advice = state.get("finding_advice", [])
+        if getattr(retriever, "mode", "v2") == "shadow_v2":
+            finding_advice = []
         try:
             result = SummaryAdviceResult.model_validate(
                 await _invoke(
-                    lambda: self.services.original_pipeline.summarize_advice(
-                        state["review_input"], state["synthesis"]
-                    )
+                    lambda: self._invoke_summary_adapter(state, finding_advice)
                 )
             )
         except Exception as exc:
             raise WorkflowExecutionError(f"Step 6 适配器执行失败：{exc}") from exc
 
         # V2: 将 RAG 检索到的历史建议审计信息绑定到 SummaryAdviceItem
-        finding_advice = state.get("finding_advice", [])
         if finding_advice:
             result = self._enrich_with_finding_advice(result, finding_advice)
 
         return {"summary_advice": result}
+
+    def _invoke_summary_adapter(
+        self,
+        state: DebateState,
+        finding_advice: list[FindingAdviceItem],
+    ) -> Any:
+        """Pass V2 history to new adapters while preserving the legacy contract."""
+
+        method = self.services.original_pipeline.summarize_advice
+        parameters = inspect.signature(method).parameters.values()
+        supports_finding_advice = any(
+            parameter.name == "finding_advice"
+            or parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        if supports_finding_advice:
+            return method(
+                state["review_input"],
+                state["synthesis"],
+                finding_advice=finding_advice,
+            )
+        return method(state["review_input"], state["synthesis"])
 
     @staticmethod
     def _enrich_with_finding_advice(
@@ -881,28 +903,39 @@ class DebateWorkflow:
             advice_by_finding.setdefault(item.finding_id, []).append(item)
 
         enriched_items: list[SummaryAdviceItem] = []
-        total_advice_bound = 0
-        max_total = 15
-
         for item in result.items:
-            bound_count = 0
+            sources: list[FindingAdviceItem] = []
             for finding_id in item.finding_ids:
-                candidates = advice_by_finding.get(finding_id, [])
-                if not candidates:
-                    continue
-                for cand in candidates:
-                    if bound_count >= 2 or total_advice_bound >= max_total:
+                for candidate in advice_by_finding.get(finding_id, []):
+                    if len(sources) >= 2:
                         break
-                    item.advice_id = cand.advice_id
-                    item.source_collection = cand.source_collection
-                    item.dense_rank = cand.dense_rank
-                    item.bm25_rank = cand.bm25_rank
-                    item.rrf_score = round(cand.rrf_score, 5) if cand.rrf_score is not None else None
-                    item.rerank_score = round(cand.rerank_score, 1) if cand.rerank_score is not None else None
-                    item.index_version = cand.index_version
-                    bound_count += 1
-                    total_advice_bound += 1
-            enriched_items.append(item)
+                    sources.append(candidate)
+            if not sources:
+                enriched_items.append(item)
+                continue
+            primary = sources[0]
+            enriched_items.append(
+                item.model_copy(
+                    update={
+                        "historical_sources": sources,
+                        "advice_id": primary.advice_id,
+                        "source_collection": primary.source_collection,
+                        "dense_rank": primary.dense_rank,
+                        "bm25_rank": primary.bm25_rank,
+                        "rrf_score": (
+                            round(primary.rrf_score, 5)
+                            if primary.rrf_score is not None
+                            else None
+                        ),
+                        "rerank_score": (
+                            round(primary.rerank_score, 1)
+                            if primary.rerank_score is not None
+                            else None
+                        ),
+                        "index_version": primary.index_version,
+                    }
+                )
+            )
 
         return result.model_copy(update={"items": enriched_items[:5]})
 
@@ -943,13 +976,16 @@ class DebateWorkflow:
             }
 
     async def _step7_scoring(self, state: DebateState) -> dict[str, Any]:
+        scoring_summary = build_summary_advice(
+            state["review_input"], state["synthesis"]
+        )
         try:
             score = ComprehensiveScoreResult.model_validate(
                 await _invoke(
                     lambda: self.services.original_pipeline.score(
                         state["review_input"],
                         state["synthesis"],
-                        summary_advice=state["summary_advice"],
+                        summary_advice=scoring_summary,
                         historical_cases=state.get("historical_score_cases", []),
                     )
                 )

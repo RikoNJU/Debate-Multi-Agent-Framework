@@ -2,8 +2,8 @@
 
 ## 文档状态
 
-- 状态：方案已完成整合，真实数据库结构已核验，尚未实施
-- 更新日期：2026-08-21
+- 状态：代码链路已实施并通过自动测试；真实索引构建、人工标注和效果评测待数据环境执行
+- 更新日期：2026-08-24
 - 当前分支：`feature/review-table-export`
 - 适用范围：历史修改建议 RAG
 - 不包含：OpenAlex 外部证据检索、历史评分案例校准 RAG
@@ -19,7 +19,7 @@
 6. 正式混合召回使用 Clean Dense V2、BM25 V2、RRF 和 Reranker。
 7. 旧 Dense 仅用于基线、回退和迁移审计，不默认进入最终三路融合。
 8. 修改建议不进入主问题 Embedding，也不参与第一阶段 BM25 计分。
-9. 修改建议保存在规范化语料和 Chroma metadata 中，在 Reranker 与 Step 6 阶段使用。
+9. 修改建议保存在规范化语料中，通过 `advice_id` 在 Reranker 与 Step 6 阶段补全；Chroma 只保存最小索引 metadata。
 10. 原始 Chunk 永久保留用于审计，清洗过程只产生派生索引。
 
 ## 向量库重建对原方案的影响
@@ -190,7 +190,7 @@ historical_advice_format_clean_v2
 历史证据摘要：论文列出单次结果后，直接认定所提模型性能最好。
 ```
 
-该文本通过 `text-embedding-v4` 生成 2048 维向量。
+该文本通过 `Qwen/Qwen3-Embedding-8B` 生成 4096 维向量。
 
 Clean Dense V2 的召回方式是 Chroma ANN，索引明确采用 HNSW 和 cosine 距离。HNSW 负责近似最近邻候选搜索，cosine 用于衡量 Query 向量与历史问题向量的方向相似度。
 
@@ -678,23 +678,32 @@ E：确认问题后的 Clean Dense V2 + BM25 + Reranker
 13. 进行旁路运行和教师标注。
 14. 验收后通过配置开关正式切换。
 
-## 当前未实施项
+## 实施状态
 
-虽然真实数据库结构已经核验，但以下工作仍未实施：
+已实现并有自动测试覆盖：
 
-- 未生成规范化语料；
-- 未建立 Clean Dense V2；
-- 未建立 BM25 V2；
-- 未实现匿名 advice_id 映射；
-- 未实现问题级 Query；
-- 未实现 RRF；
-- 未接入 Reranker；
-- 未移动历史建议节点；
-- 未建立检索标注集；
-- 未完成新旧索引对比评测；
-- 未将任何新RAG结果接入正式报告。
+- Canonical JSONL、稳定匿名 `advice_id`、三种检索文本视图和 Manifest；
+- `Qwen3-Embedding-8B/4096` Dense V2 旁路构建器；
+- 共享 Jieba Tokenizer 的 BM25 V2 旁路构建器；
+- Finding 级 Dense Top5 + BM25 Top5 + 加权 RRF Top3；
+- BM25 独立命中的 Canonical 记录补全、精确/语义近似去重和组件级降级；
+- `Qwen3-Reranker-0.6B` 批量精排接口；
+- Chair/Step 5 之后、Step 6 之前的检索节点；
+- Step 6 真实消费历史建议，并保留最多两条来源；
+- Step 7 在工作流和真实模型载荷两层隔离历史建议；
+- `off / shadow_v2 / v2` 发布模式；
+- 分离旧新 Embedding 空间的 A-E 标注评测 CLI。
 
-因此目前只能表述为“方案和真实数据契约已确认”，不能表述为“混合RAG已经实现”。
+尚未完成，因而不能对外宣称召回效果已提升：
+
+- 当前仓库不包含敏感旧 Chroma，未在本机生成真实 Dense/BM25 索引；
+- 未建立教师标注的 Query/qrels 集，未产出 Recall/MRR/nDCG 报告；
+- Step 5 格式项目还没有转换为带原文证据的标准 Finding，因此当前在线召回仍以 Chair Finding 为主；
+- metadata 中历史 `paper_type` 缺失较多，尚未启用强制论文类型过滤；
+- 降级会写入结构化服务日志，但 Dense/BM25 分组件 warning 还未单独进入任务 `issues`。
+
+因此当前可以表述为“混合RAG代码链路已实现并通过自动测试”，
+不能表述为“真实数据上的召回质量已验证”。
 
 ## 执行前检查
 

@@ -28,6 +28,7 @@ from debate_agent_framework.schemas import (
     DebateResponse,
     DebateReviewInput,
     FindingSeverity,
+    FindingAdviceItem,
     IndependentReview,
     PaperType,
     ReviewFinding,
@@ -44,6 +45,7 @@ class FakeModelClient:
         self.responses = list(responses)
         self.calls = 0
         self.used_schema_guidance: list[bool] = []
+        self.user_messages: list[str] = []
 
     def complete(
         self,
@@ -59,6 +61,7 @@ class FakeModelClient:
         self.used_schema_guidance.append(
             "严格按以下 JSON Schema 输出" in user_message
         )
+        self.user_messages.append(user_message)
         content = self.responses[self.calls]
         self.calls += 1
         return ModelResponse(content=content)
@@ -550,6 +553,39 @@ def test_real_scoring_adapter_uses_legacy_total_rule() -> None:
     assert result.confidence == 0.82
     assert client.calls == 1
     assert client.used_schema_guidance == [True]
+    assert "测试建议" not in client.user_messages[0]
+
+
+def test_real_summary_adapter_receives_finding_level_history() -> None:
+    context = make_context()
+
+    async def collect_reviews() -> list[IndependentReview]:
+        return list(
+            await asyncio.gather(
+                *(DemoSpecialist(role).review(context) for role in SpecialistRole)
+            )
+        )
+
+    synthesis = DemoReviewChair().synthesize(
+        context,
+        reviews=asyncio.run(collect_reviews()),
+        debate_plan=DebatePlan(),
+        responses=[],
+        external_evidence=[],
+    )
+    finding_id = synthesis.global_review.resolved_findings[0].finding_id
+    history = FindingAdviceItem(
+        finding_id=finding_id,
+        advice_id="adv_000000000000000000000001",
+        suggestion="历史案例建议补充多次重复实验。",
+    )
+    client = FakeModelClient([SUMMARY_JSON])
+
+    RealOriginalPipelineAdapter(model_client=client).summarize_advice(
+        make_input(), synthesis, finding_advice=[history]
+    )
+
+    assert "历史案例建议补充多次重复实验" in client.user_messages[0]
 
 
 PLAN_BAD_JSON = json.dumps(

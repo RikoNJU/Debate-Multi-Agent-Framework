@@ -480,7 +480,12 @@ class SummaryAdviceItem(StrictModel):
     evidence_ids: list[str] = Field(default_factory=list)
     affected_chapter_ids: list[str] = Field(default_factory=list)
     requires_human_review: bool = False
+    historical_sources: list[FindingAdviceItem] = Field(
+        default_factory=list,
+        max_length=2,
+    )
     # V2 RAG 审计字段（optional，仅当启用 CleanAdviceRetriever 时填充）
+    # Singular fields retain API compatibility and mirror historical_sources[0].
     advice_id: str = ""
     source_collection: str = ""
     dense_rank: int | None = None

@@ -1,199 +1,262 @@
 #!/usr/bin/env python3
-"""构建 Clean Dense V2 Chroma 向量库。"""
+"""Build and atomically publish the Qwen3 4096-dimension Dense V2 index."""
 
+from __future__ import annotations
+
+import argparse
 import json
-import os, sys, time, hashlib, requests, shutil
+import os
+import shutil
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+
 import chromadb
+import httpx
 from chromadb.config import Settings
 
-# ── 配置 ──────────────────────────────────────────────────────
-CORPUS_PATH = "/nvme/home/rincug/qhz/backend/data/cleaned_chunks_v2.jsonl"
-CHROMA_DB_PATH = "/nvme/home/rincug/qhz/backend/data/chroma_dense_v2"
-MANIFEST_PATH = "/nvme/home/rincug/qhz/backend/data/chroma_dense_v2/manifest.json"
-
-EMBED_URL = "https://api.siliconflow.cn/v1/embeddings"
-EMBED_MODEL = "Qwen/Qwen3-Embedding-8B"
-EMBED_API_KEY = os.getenv("DEBATE_V2_API_KEY", "")
-EMBED_DIMS = 4096
-EMBED_BATCH = 8
-
-SCHEMA_VERSION = "historical_advice_v2"
-DISTANCE_METRIC = "cosine"
-
-CONTENT_COLL = "historical_advice_content_clean_v2"
-FORMAT_COLL = "historical_advice_format_clean_v2"
+from debate_agent_framework.services.rag_v2_contract import (
+    CONTENT_COLLECTION,
+    DISTANCE_METRIC,
+    EMBEDDING_DIMENSIONS,
+    EMBEDDING_MODEL,
+    FORMAT_COLLECTION,
+    SCHEMA_VERSION,
+    file_checksum,
+    id_set_checksum,
+    load_corpus,
+)
 
 
-# ── 工具 ──────────────────────────────────────────────────────
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--corpus",
+        default=os.getenv(
+            "RAG_V2_CORPUS_PATH",
+            "backend/data/rag_v2/corpus/historical_advice_v2.jsonl",
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        default=os.getenv("DEBATE_V2_CHROMA_PATH", "backend/data/rag_v2/chroma"),
+    )
+    parser.add_argument(
+        "--endpoint",
+        default=os.getenv(
+            "DEBATE_V2_EMBEDDING_ENDPOINT",
+            "https://api.siliconflow.cn/v1/embeddings",
+        ),
+    )
+    parser.add_argument(
+        "--model",
+        default=os.getenv("DEBATE_V2_EMBEDDING_MODEL", EMBEDDING_MODEL),
+    )
+    parser.add_argument(
+        "--dimensions",
+        type=int,
+        default=int(os.getenv("DEBATE_V2_EMBEDDING_DIMENSIONS", "4096")),
+    )
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument("--attempts", type=int, default=3)
+    parser.add_argument("--force", action="store_true")
+    return parser.parse_args()
 
-def embed_batch(texts: list[str]) -> list[list[float]]:
-    """批量调用硅基流动 embedding API，返回 4096 维向量列表。"""
-    headers = {
-        "Authorization": f"Bearer {EMBED_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {"model": EMBED_MODEL, "input": texts}
-    r = requests.post(EMBED_URL, headers=headers, json=payload, timeout=120)
-    r.raise_for_status()
-    data = r.json()
-    items = sorted(data["data"], key=lambda d: d["index"])
-    return [d["embedding"] for d in items]
+
+def embed_batch(
+    client: httpx.Client,
+    *,
+    endpoint: str,
+    api_key: str,
+    model: str,
+    dimensions: int,
+    texts: list[str],
+    attempts: int,
+) -> list[list[float]]:
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    payload = {"model": model, "input": texts, "dimensions": dimensions}
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = client.post(endpoint, headers=headers, json=payload)
+            response.raise_for_status()
+            items = sorted(response.json()["data"], key=lambda item: item["index"])
+            vectors = [item["embedding"] for item in items]
+            if len(vectors) != len(texts):
+                raise ValueError(
+                    f"embedding count mismatch: {len(vectors)} != {len(texts)}"
+                )
+            invalid = [len(vector) for vector in vectors if len(vector) != dimensions]
+            if invalid:
+                raise ValueError(
+                    f"embedding dimension mismatch: expected {dimensions}, got {invalid[:3]}"
+                )
+            return vectors
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+            last_error = exc
+            if attempt < attempts:
+                time.sleep(min(2 ** (attempt - 1), 8))
+    raise RuntimeError(f"embedding request failed after {attempts} attempts: {last_error}")
 
 
-def make_advice_id(source_collection: str, chunk_id: str) -> str:
-    raw = source_collection + chunk_id
-    return "adv_" + hashlib.sha256(raw.encode()).hexdigest()[:16]
+def safe_publish(staging: Path, target: Path, *, force: bool) -> None:
+    target = target.resolve()
+    staging = staging.resolve()
+    if staging.parent != target.parent or staging == target:
+        raise ValueError("staging and target directories are not safe siblings")
+    if target.exists() and not force:
+        raise FileExistsError(f"target already exists; pass --force to replace it: {target}")
+    backup: Path | None = None
+    if target.exists():
+        backup = target.with_name(f".{target.name}.backup-{uuid4().hex}")
+        target.rename(backup)
+    try:
+        staging.rename(target)
+    except Exception:
+        if backup is not None and not target.exists():
+            backup.rename(target)
+        raise
+    if backup is not None:
+        shutil.rmtree(backup)
 
 
-def make_checksum(rec: dict) -> str:
-    raw = rec.get("dense_text", "") + rec.get("advice", "")
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-
-# ── 主入口 ────────────────────────────────────────────────────
-
-def main():
-    t0 = time.time()
-
-    # 读取语料
-    records = []
-    with open(CORPUS_PATH, encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                records.append(json.loads(line))
-    total = len(records)
-    print(f"读取语料: {total} 条", file=sys.stderr)
-
-    # 生成 advice_id 和 checksum
-    for rec in records:
-        rec["advice_id"] = make_advice_id(
-            rec["source_collection"], rec["chunk_id"]
+def main() -> int:
+    args = parse_args()
+    corpus_path = Path(args.corpus).expanduser().resolve()
+    target = Path(args.output).expanduser().resolve()
+    if args.model != EMBEDDING_MODEL:
+        raise ValueError(
+            f"Dense V2 is fixed to {EMBEDDING_MODEL}; received {args.model}"
         )
-        rec["record_checksum"] = make_checksum(rec)
-    print("advice_id 已生成", file=sys.stderr)
+    if args.dimensions != EMBEDDING_DIMENSIONS:
+        raise ValueError(
+            f"Dense V2 is fixed to {EMBEDDING_DIMENSIONS} dimensions; "
+            f"received {args.dimensions}"
+        )
+    if args.batch_size < 1 or args.attempts < 1:
+        raise ValueError("batch size and attempts must be at least 1")
+    if not corpus_path.is_file():
+        raise FileNotFoundError(f"canonical corpus not found: {corpus_path}")
 
-    # 拆分 content / format
-    content_recs = [r for r in records if r["advice_type"] == "content"]
-    format_recs  = [r for r in records if r["advice_type"] == "format"]
-    print(f"content: {len(content_recs)}, format: {len(format_recs)}",
-          file=sys.stderr)
+    records = load_corpus(corpus_path)
+    content_records = [record for record in records if record.advice_type == "content"]
+    format_records = [record for record in records if record.advice_type == "format"]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = target.with_name(f".{target.name}.building-{uuid4().hex}")
+    staging.mkdir()
 
-    # 清空并重建 Chroma 目录
-    if os.path.exists(CHROMA_DB_PATH):
-        shutil.rmtree(CHROMA_DB_PATH)
-    os.makedirs(CHROMA_DB_PATH, exist_ok=True)
-
-    client = chromadb.PersistentClient(
-        path=CHROMA_DB_PATH,
-        settings=Settings(anonymized_telemetry=False),
+    started = time.time()
+    api_key = (
+        os.getenv("DEBATE_V2_API_KEY")
+        or os.getenv("DEBATE_EMBEDDING_API_KEY")
+        or os.getenv("CLOUD_API_KEY")
+        or ""
     )
+    try:
+        client = chromadb.PersistentClient(
+            path=str(staging),
+            settings=Settings(anonymized_telemetry=False),
+        )
+        collections = {
+            "content": client.create_collection(
+                CONTENT_COLLECTION,
+                metadata={"hnsw:space": DISTANCE_METRIC},
+            ),
+            "format": client.create_collection(
+                FORMAT_COLLECTION,
+                metadata={"hnsw:space": DISTANCE_METRIC},
+            ),
+        }
+        with httpx.Client(timeout=args.timeout) as http_client:
+            for advice_type, subset in (
+                ("content", content_records),
+                ("format", format_records),
+            ):
+                collection = collections[advice_type]
+                for start in range(0, len(subset), args.batch_size):
+                    batch = subset[start : start + args.batch_size]
+                    texts = [record.dense_text for record in batch]
+                    vectors = embed_batch(
+                        http_client,
+                        endpoint=args.endpoint,
+                        api_key=api_key,
+                        model=args.model,
+                        dimensions=args.dimensions,
+                        texts=texts,
+                        attempts=args.attempts,
+                    )
+                    collection.add(
+                        ids=[record.advice_id for record in batch],
+                        embeddings=vectors,
+                        documents=texts,
+                        metadatas=[
+                            {
+                                "advice_id": record.advice_id,
+                                "source_collection": record.source_collection,
+                                "advice_type": record.advice_type,
+                                "paper_type": record.paper_type,
+                                "chapter_stage": record.chapter_stage,
+                                "issue_category": record.issue_category,
+                                "record_checksum": record.record_checksum,
+                                "schema_version": SCHEMA_VERSION,
+                            }
+                            for record in batch
+                        ],
+                    )
+                    print(
+                        f"[{advice_type}] {min(start + args.batch_size, len(subset))}/"
+                        f"{len(subset)}",
+                        file=sys.stderr,
+                    )
 
-    content_col = client.create_collection(
-        name=CONTENT_COLL,
-        metadata={"hnsw:space": DISTANCE_METRIC},
-    )
-    format_col = client.create_collection(
-        name=FORMAT_COLL,
-        metadata={"hnsw:space": DISTANCE_METRIC},
-    )
+        if collections["content"].count() != len(content_records):
+            raise RuntimeError("content collection count mismatch")
+        if collections["format"].count() != len(format_records):
+            raise RuntimeError("format collection count mismatch")
 
-    # ── 批量 embed + 写入 ──
-    def build_collection(recs, col, label):
-        ids = [r["advice_id"] for r in recs]
-        nums = list(range(len(recs)))
-        total_embeddings = 0
-        total_tokens = 0
+        manifest = {
+            "schema_version": SCHEMA_VERSION,
+            "builder_version": "build_chroma_dense_v2_v2",
+            "embedding_model": args.model,
+            "embedding_dimensions": args.dimensions,
+            "distance_metric": DISTANCE_METRIC,
+            "query_instruction_version": "thesis-finding-zh-v1",
+            "corpus_checksum": file_checksum(corpus_path),
+            "advice_id_checksum": id_set_checksum(
+                {record.advice_id for record in records}
+            ),
+            "total_records": len(records),
+            "content_count": len(content_records),
+            "format_count": len(format_records),
+            "collections": {
+                "content": CONTENT_COLLECTION,
+                "format": FORMAT_COLLECTION,
+            },
+            "build_time": datetime.now(timezone.utc).isoformat(),
+            "build_elapsed_seconds": round(time.time() - started, 3),
+        }
+        (staging / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        system = getattr(client, "_system", None)
+        if system is not None and hasattr(system, "stop"):
+            system.stop()
+        del collections, client
+        safe_publish(staging, target, force=args.force)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise
 
-        for start in range(0, len(recs), EMBED_BATCH):
-            batch = recs[start : start + EMBED_BATCH]
-            texts = [r["dense_text"] for r in batch]
-            try:
-                vecs = embed_batch(texts)
-            except Exception as e:
-                print(f"  [{label}] embed 失败 start={start}: {e}",
-                      file=sys.stderr)
-                raise
-
-            metadatas = []
-            for r in batch:
-                metadatas.append({
-                    "advice_id": r["advice_id"],
-                    "chunk_id": r["chunk_id"],
-                    "source_collection": r["source_collection"],
-                    "advice_type": r["advice_type"],
-                    "chapter_stage": r.get("chapter_stage", ""),
-                    "issue_category": r.get("issue_category", ""),
-                    "suggestion": r.get("advice", ""),
-                    "schema_version": SCHEMA_VERSION,
-                    "record_checksum": r["record_checksum"],
-                })
-
-            col.add(
-                ids=[r["advice_id"] for r in batch],
-                embeddings=vecs,
-                documents=texts,
-                metadatas=metadatas,
-            )
-
-            total_embeddings += len(batch)
-            total_tokens += sum(len(t) for t in texts)
-
-            progress = min(start + EMBED_BATCH, len(recs))
-            elapsed = time.time() - t0
-            print(f"  [{label}] {progress}/{len(recs)} 已写入 "
-                  f"({elapsed:.1f}s)", file=sys.stderr)
-
-        return total_embeddings, total_tokens
-
-    print("构建 content collection ...", file=sys.stderr)
-    c_emb, c_tok = build_collection(content_recs, content_col, "content")
-
-    print("构建 format collection ...", file=sys.stderr)
-    f_emb, f_tok = build_collection(format_recs, format_col, "format")
-
-    elapsed = time.time() - t0
-
-    # ── 校验 ──
-    assert content_col.count() == len(content_recs), \
-        f"content count mismatch: {content_col.count()} vs {len(content_recs)}"
-    assert format_col.count() == len(format_recs), \
-        f"format count mismatch: {format_col.count()} vs {len(format_recs)}"
-
-    # ── 更新语料 JSONL（回写 advice_id）──
-    os.rename(CORPUS_PATH, CORPUS_PATH + ".bak")
-    with open(CORPUS_PATH, "w", encoding="utf-8") as f:
-        for rec in records:
-            json.dump(rec, f, ensure_ascii=False)
-            f.write("\n")
-
-    # ── Manifest ──
-    manifest = {
-        "schema_version": SCHEMA_VERSION,
-        "embedding_model": EMBED_MODEL,
-        "embedding_dimensions": EMBED_DIMS,
-        "distance_metric": DISTANCE_METRIC,
-        "total_records": total,
-        "content_count": len(content_recs),
-        "format_count": len(format_recs),
-        "total_embeddings": c_emb + f_emb,
-        "build_time_seconds": round(elapsed, 1),
-        "builder_version": "build_chroma_dense_v2_v1",
-    }
-    with open(MANIFEST_PATH, "w", encoding="utf-8") as mf:
-        json.dump(manifest, mf, ensure_ascii=False, indent=2)
-        mf.write("\n")
-
-    # ── 输出 ──
-    print(file=sys.stderr)
-    print(f"=== 构建完成 ===", file=sys.stderr)
-    for k, v in manifest.items():
-        print(f"  {k}: {v}", file=sys.stderr)
-    print(f"  DB 路径: {CHROMA_DB_PATH}", file=sys.stderr)
-    print(f"  content collection: {CONTENT_COLL} ({content_col.count()} 条)",
-          file=sys.stderr)
-    print(f"  format collection:  {FORMAT_COLL} ({format_col.count()} 条)",
-          file=sys.stderr)
+    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

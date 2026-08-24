@@ -17,6 +17,7 @@ from ..schemas import (
     DimensionEvaluation,
     EvidenceKind,
     FindingSeverity,
+    FindingAdviceItem,
     GlobalReview,
     HistoricalScoreCase,
     IndependentReview,
@@ -369,6 +370,8 @@ class DemoOriginalPipelineAdapter:
         self,
         review_input: DebateReviewInput,
         synthesis: ReviewSynthesis,
+        *,
+        finding_advice: Sequence[FindingAdviceItem] = (),
     ) -> SummaryAdviceResult:
         from .legacy_summary import build_summary_advice
 

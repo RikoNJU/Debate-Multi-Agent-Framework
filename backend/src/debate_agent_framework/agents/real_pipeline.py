@@ -10,6 +10,7 @@ from backend.env import ModelClient
 from ..schemas import (
     ComprehensiveScoreResult,
     DebateReviewInput,
+    FindingAdviceItem,
     HistoricalScoreCase,
     ReviewSynthesis,
     SummaryAdviceResult,
@@ -51,13 +52,20 @@ class RealOriginalPipelineAdapter:
         self,
         review_input: DebateReviewInput,
         synthesis: ReviewSynthesis,
+        *,
+        finding_advice: Sequence[FindingAdviceItem] = (),
     ) -> SummaryAdviceResult:
         if self.model_client is None:
             raise NotImplementedError("RealOriginalPipelineAdapter 需要注入 ModelClient")
         prompt = files("debate_agent_framework.prompts.summary").joinpath("step6.md").read_text(encoding="utf-8")
         data = complete_json(
             self.model_client,
-            system_prompt="你是论文评审流程的 Step 6 建议汇总员。只能选择已给出的已裁决问题，不得伪造 finding_id 或 evidence_id。",
+            system_prompt=(
+                "你是论文评审流程的 Step 6 建议汇总员。只能选择已给出的已裁决问题，"
+                "不得伪造 finding_id 或 evidence_id。历史建议只能用于改写已确认问题的"
+                "修改方案，不得照抄，不得新增问题、改变严重程度或引入当前论文"
+                "中没有证据的事实。"
+            ),
             user_prompt=prompt,
             payload={
                 "title": review_input.title,
@@ -71,12 +79,26 @@ class RealOriginalPipelineAdapter:
                     item.model_dump(mode="json")
                     for item in synthesis.global_review.resolved_findings
                 ],
+                "historical_advice_by_finding": self._group_finding_advice(
+                    finding_advice
+                ),
             },
             schema=SummaryAdviceResult.model_json_schema(),
             temperature=self.temperature,
         )
         proposed = SummaryAdviceResult.model_validate(data)
         return build_summary_advice(review_input, synthesis, proposed.items)
+
+    @staticmethod
+    def _group_finding_advice(
+        finding_advice: Sequence[FindingAdviceItem],
+    ) -> dict[str, list[dict[str, object]]]:
+        grouped: dict[str, list[dict[str, object]]] = {}
+        for item in finding_advice:
+            grouped.setdefault(item.finding_id, []).append(
+                item.model_dump(mode="json")
+            )
+        return grouped
 
     def score(
         self,
@@ -109,7 +131,6 @@ class RealOriginalPipelineAdapter:
                 for key, envelope in synthesis.chapter_evaluation.items()
             },
             "workload_evaluation": synthesis.workload_evaluation.model_dump(mode="json"),
-            "summary_advice": summary_advice.model_dump(mode="json"),
             "historical_score_cases": [
                 case.model_dump(mode="json") for case in historical_cases
             ],

@@ -1,313 +1,309 @@
 #!/usr/bin/env python3
-"""
-批量清洗脚本：从旧 Chroma 两个 collection 导出并清洗，产出 JSONL 规范化语料 + Manifest。
-失败记录跳过不中断，错误明细记入 errors.jsonl。
-"""
+"""Export legacy Chroma advice into the canonical historical-advice V2 corpus."""
 
-import re, html, json, sys, hashlib, os, time
+from __future__ import annotations
+
+import argparse
+import html
+import json
+import os
+import re
+import sys
+import time
 from datetime import datetime, timezone
+from pathlib import Path
+
 import chromadb
 
-# ── 配置 ──────────────────────────────────────────────────────
-OLD_CHROMA_PATH = "/nvme/home/rincug/qinhaozhe/backend/data/databases/user_result_cloud"
-OUTPUT_DIR      = "/nvme/home/rincug/qhz/backend/data/corpus"
-COLLECTIONS     = [
-    "user_result_content_collection_cloud",
-    "user_result_format_collection_cloud",
-]
-SCHEMA_VERSION = "historical_advice_v2"
-EMBEDDING_MODEL = "text-embedding-v4"
-EMBEDDING_DIMS  = 2048
-DISTANCE_METRIC = "cosine"
-BATCH_SIZE      = 200
+from debate_agent_framework.services.rag_v2_contract import (
+    AdviceCorpusRecord,
+    DISTANCE_METRIC,
+    EMBEDDING_DIMENSIONS,
+    EMBEDDING_MODEL,
+    SCHEMA_VERSION,
+    id_set_checksum,
+    normalize_chapter_stage,
+    record_checksum,
+    sha256_text,
+    stable_advice_id,
+)
 
-FIELD_LABELS = ["论文标题:", "所属章节:", "问题位置:", "上下文:", "修改建议:", "分析过程:", "原文片段:"]
 
-# ── 解析 ──────────────────────────────────────────────────────
+FIELD_LABELS = (
+    "论文标题:",
+    "所属章节:",
+    "问题位置:",
+    "上下文:",
+    "修改建议:",
+    "分析过程:",
+    "原文片段:",
+)
 
-def parse_seven_fields(doc):
-    fields = {}
-    pattern = "(" + "|".join(re.escape(l) for l in FIELD_LABELS) + ")"
-    parts = re.split(pattern, doc)
-    cur = None
-    for p in parts:
-        if p in FIELD_LABELS:
-            cur = p.rstrip(":")
-        elif cur and p.strip():
-            if cur not in fields:
-                fields[cur] = p.strip()
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--source-db",
+        default=os.getenv("LEGACY_CHROMA_PATH"),
+        required=not bool(os.getenv("LEGACY_CHROMA_PATH")),
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=os.getenv("RAG_V2_CORPUS_DIR", "backend/data/rag_v2/corpus"),
+    )
+    parser.add_argument(
+        "--content-collection",
+        default=os.getenv(
+            "LEGACY_CONTENT_COLLECTION",
+            "user_result_content_collection_cloud_4b",
+        ),
+    )
+    parser.add_argument(
+        "--format-collection",
+        default=os.getenv(
+            "LEGACY_FORMAT_COLLECTION",
+            "user_result_format_collection_cloud_4b",
+        ),
+    )
+    parser.add_argument("--batch-size", type=int, default=200)
+    parser.add_argument("--limit", type=int, help="Limit each collection for a smoke build")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail the build when any source record cannot be cleaned",
+    )
+    return parser.parse_args()
+
+
+def parse_seven_fields(document: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    pattern = "(" + "|".join(re.escape(label) for label in FIELD_LABELS) + ")"
+    parts = re.split(pattern, document)
+    current: str | None = None
+    for part in parts:
+        if part in FIELD_LABELS:
+            current = part.rstrip(":")
+        elif current and part.strip() and current not in fields:
+            fields[current] = part.strip()
     return fields
 
-# ── 清洗函数 ──────────────────────────────────────────────────
 
-def clean_html_entities(t):
-    return html.unescape(t)
-
-def clean_ws(t):
-    t = re.sub(r"[ \t\v\f]+", " ", t)
-    t = re.sub(r"\n{3,}", "\n\n", t)
-    t = re.sub(r"(?<!\n)\n(?!\n)", " ", t)
-    return t.strip()
-
-def clean_md_escapes(t):
-    return re.sub(r"\\([*_#\[\]])", r"\1", t)
-
-def clean_parser_markers(t):
-    t = re.sub(r"##\s*块\s*\d+\s*/\s*\d+\s*\[.*?\]", "", t)
-    t = re.sub(r"块\s*\d+\s*/\s*\d+", "", t)
-    return t
-
-def clean_field_label_dup(t):
-    for l in FIELD_LABELS:
-        t = t.replace(l, "", 1)
-    return t
-
-def clean_html_tags(t):
-    return re.sub(r"<[^>]+>", " ", t)
-
-def clean_low_value(t):
-    t = re.sub(r"从\s*原[文始]?\s*块?\s*\d*\s*可以\s*看[出到]", "", t)
-    t = re.sub(r"根据评审建议第\d+条", "", t)
-    t = re.sub(r"检查原文块\d+发现", "", t)
-    return t
-
-def clean_personal(t):
-    t = re.sub(r"\b2[01]\d{6}\b", "[学号已脱敏]", t)
-    t = re.sub(r"\b1\d{6,8}\b", "[学号已脱敏]", t)
-    t = re.sub(r"/[\w/.-]*\.(?:pdf|tex|md|txt|docx?)\b", "[路径已脱敏]", t)
-    return t
-
-def normalize_hw(t):
-    r = []
-    for ch in t:
-        c = ord(ch)
-        if 0xFF21 <= c <= 0xFF3A:
-            r.append(chr(c - 0xFEE0))
-        elif 0xFF41 <= c <= 0xFF5A:
-            r.append(chr(c - 0xFEE0))
-        elif 0xFF10 <= c <= 0xFF19:
-            r.append(chr(c - 0xFEE0))
-        elif c == 0x3000:
-            r.append(" ")
-        else:
-            r.append(ch)
-    return "".join(r)
-
-def clean_latex_formula(t):
-    t = re.sub(r"\$\$.*?\$\$", "[公式]", t, flags=re.DOTALL)
-    t = re.sub(r"\$[^$]+\$", "[公式]", t)
-    t = re.sub(r"\$", "", t)
-    t = re.sub(r"\\[a-zA-Z]+(?:\{[^}]*\})*", "", t)
-    t = re.sub(r"\[公式\](?:\s*\[公式\])+", "[公式]", t)
-    t = re.sub(r"\s+\[公式\]", "[公式]", t)
-    t = re.sub(r"\[公式\]\s+", "[公式]", t)
-    t = re.sub(r"[，,]\s*\[公式\]\s*[。.]", "[公式]。", t)
-    t = re.sub(r"[，,]\s*\[公式\]\s*[，,]", "[公式]，", t)
-    return t
-
-def clean_image_markdown(t):
-    t = re.sub(r"!\[.*?\]\(.*?\)", "[图片]", t)
-    t = re.sub(r"\[图片\](?:\s*\[图片\])+", "[图片]", t)
-    return t
-
-def clean_field(fname, text):
-    if not text:
-        return text
-    text = clean_html_entities(text)
-    text = clean_md_escapes(text)
-    text = normalize_hw(text)
-    text = clean_personal(text)
-    if fname == "原文片段":
-        text = clean_html_tags(text)
-        text = clean_image_markdown(text)
-        text = clean_latex_formula(text)
-        text = clean_parser_markers(text)
-        text = clean_ws(text)
-    else:
-        text = clean_parser_markers(text)
-        text = clean_field_label_dup(text)
-        text = clean_image_markdown(text)
-        text = clean_latex_formula(text)
-        text = clean_html_tags(text)
-        text = clean_ws(text)
-        if fname == "分析过程":
-            text = clean_low_value(text)
-    return text.strip()
+def clean_whitespace(text: str) -> str:
+    text = re.sub(r"[ \t\v\f]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return re.sub(r"(?<!\n)\n(?!\n)", " ", text).strip()
 
 
-# ── 构建检索文本 ──────────────────────────────────────────────
-
-def build_dense_text(rec):
-    lines = []
-    if rec.get("issue_category"):
-        lines.append(f"问题类型：{rec['issue_category']}")
-    if rec.get("chapter_stage"):
-        lines.append(f"章节阶段：{rec['chapter_stage']}")
-    if rec.get("problem_location"):
-        lines.append(f"问题位置：{rec['problem_location']}")
-    if rec.get("analysis"):
-        lines.append(f"历史问题诊断：{rec['analysis']}")
-    if rec.get("context"):
-        lines.append(f"历史上下文：{rec['context']}")
-    if rec.get("original_excerpt"):
-        lines.append(f"历史证据摘要：{rec['original_excerpt']}")
-    return "\n".join(lines)
-
-def build_bm25_text(rec):
-    parts = []
-    for k in ["issue_category", "chapter_stage", "problem_location",
-              "analysis", "context", "original_excerpt"]:
-        v = rec.get(k, "")
-        if v:
-            parts.append(v)
-    return " ".join(parts)
-
-def build_rerank_text(rec):
-    text = build_dense_text(rec)
-    if rec.get("advice"):
-        text += f"\n历史修改建议：{rec['advice']}"
-    return text
+def clean_personal_data(text: str) -> str:
+    text = re.sub(r"\b2[01]\d{6}\b", "[学号已脱敏]", text)
+    text = re.sub(r"\b1\d{6,8}\b", "[学号已脱敏]", text)
+    return re.sub(
+        r"(?:[A-Za-z]:)?[/\\][\w\-./\\ ]*\.(?:pdf|tex|md|txt|docx?)\b",
+        "[路径已脱敏]",
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
-# ── 清洗一条记录 ──────────────────────────────────────────────
+def clean_field(field_name: str, value: str) -> str:
+    if not value:
+        return ""
+    text = html.unescape(value)
+    text = re.sub(r"\\([*_#\[\]])", r"\1", text)
+    text = clean_personal_data(text)
+    text = re.sub(r"##\s*块\s*\d+\s*/\s*\d+\s*\[.*?\]", "", text)
+    text = re.sub(r"块\s*\d+\s*/\s*\d+", "", text)
+    text = re.sub(r"!\[.*?\]\(.*?\)", "[图片]", text)
+    text = re.sub(r"\$\$.*?\$\$", "[公式]", text, flags=re.DOTALL)
+    text = re.sub(r"\$[^$]+\$", "[公式]", text)
+    text = re.sub(r"<!--\s*formula\s*-->", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    if field_name == "分析过程":
+        text = re.sub(r"从\s*原[文始]?\s*块?\s*\d*\s*可以\s*看[出到]", "", text)
+        text = re.sub(r"检查原文块\d+发现", "", text)
+    return clean_whitespace(text)
 
-def clean_one(chunk_id, raw_doc, meta, coll_name):
-    old_fields = parse_seven_fields(raw_doc)
 
-    paper_title  = clean_field("论文标题", old_fields.get("论文标题", ""))
-    chapter      = clean_field("所属章节", old_fields.get("所属章节", ""))
-    position     = clean_field("问题位置", old_fields.get("问题位置", ""))
-    context      = clean_field("上下文",   old_fields.get("上下文", ""))
-    advice       = clean_field("修改建议", old_fields.get("修改建议", ""))
-    analysis     = clean_field("分析过程", old_fields.get("分析过程", ""))
-    excerpt      = clean_field("原文片段", old_fields.get("原文片段", ""))
+def build_dense_text(record: dict[str, str]) -> str:
+    labels = (
+        ("问题类型", "issue_category"),
+        ("章节阶段", "chapter_stage"),
+        ("问题位置", "problem_location"),
+        ("历史问题诊断", "analysis"),
+        ("历史上下文", "context"),
+        ("历史证据摘要", "evidence_excerpt"),
+    )
+    return "\n".join(
+        f"{label}：{record[key]}" for label, key in labels if record.get(key)
+    )
 
-    record = {
-        "chunk_id":         chunk_id,
-        "source_collection": coll_name,
-        "advice_type":      meta.get("advice_type", ""),
-        "paper_title":      paper_title,
-        "chapter":          chapter,
-        "issue_category":   meta.get("type", ""),
-        "chapter_stage":    chapter,
+
+def build_bm25_text(record: dict[str, str]) -> str:
+    return " ".join(
+        record[key]
+        for key in (
+            "issue_category",
+            "chapter_stage",
+            "problem_location",
+            "analysis",
+            "context",
+            "evidence_excerpt",
+        )
+        if record.get(key)
+    )
+
+
+def clean_one(
+    legacy_chunk_id: str,
+    raw_document: str,
+    metadata: dict[str, object],
+    collection_name: str,
+) -> AdviceCorpusRecord:
+    fields = parse_seven_fields(raw_document)
+    chapter = clean_field("所属章节", fields.get("所属章节", ""))
+    position = clean_field("问题位置", fields.get("问题位置", ""))
+    original_text = clean_field("原文片段", fields.get("原文片段", ""))
+    advice_type = str(metadata.get("advice_type", "")).lower()
+    if advice_type not in {"content", "format"}:
+        advice_type = "format" if "format" in collection_name.lower() else "content"
+
+    raw_checksum = sha256_text(raw_document)
+    base: dict[str, object] = {
+        "advice_id": stable_advice_id(collection_name, legacy_chunk_id, raw_checksum),
+        "legacy_chunk_id": legacy_chunk_id,
+        "source_collection": collection_name,
+        "advice_type": advice_type,
+        "paper_title": clean_field("论文标题", fields.get("论文标题", "")),
+        "paper_type": str(metadata.get("paper_type", "")),
+        "chapter": chapter,
+        "chapter_stage": normalize_chapter_stage(chapter, position),
         "problem_location": position,
-        "context":          context,
-        "advice":           advice,
-        "analysis":         analysis,
-        "original_excerpt": excerpt,
+        "issue_category": str(metadata.get("type", metadata.get("issue_category", ""))),
+        "context": clean_field("上下文", fields.get("上下文", "")),
+        "advice": clean_field("修改建议", fields.get("修改建议", "")),
+        "analysis": clean_field("分析过程", fields.get("分析过程", "")),
+        "evidence_excerpt": original_text[:300],
+        "original_text": original_text,
+        "raw_checksum": raw_checksum,
+        "clean_version": SCHEMA_VERSION,
     }
-    record["dense_text"]    = build_dense_text(record)
-    record["bm25_text"]     = build_bm25_text(record)
-    record["rerank_text"]   = build_rerank_text(record)
-    record["clean_version"] = SCHEMA_VERSION
-    record["source_database"] = OLD_CHROMA_PATH
-    return record
+    text_view = {key: str(value) for key, value in base.items()}
+    base["dense_text"] = build_dense_text(text_view)
+    base["bm25_text"] = build_bm25_text(text_view)
+    base["rerank_text"] = (
+        f"{base['dense_text']}\n历史修改建议：{base['advice']}"
+    )
+    base["record_checksum"] = record_checksum(base)
+    return AdviceCorpusRecord.model_validate(base)
 
 
-# ── 主入口 ────────────────────────────────────────────────────
+def main() -> int:
+    args = parse_args()
+    source_db = Path(args.source_db).expanduser().resolve()
+    output_dir = Path(args.output_dir).expanduser().resolve()
+    if not source_db.exists():
+        raise FileNotFoundError(f"legacy Chroma path does not exist: {source_db}")
+    if args.batch_size < 1:
+        raise ValueError("--batch-size must be at least 1")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-def main():
-    t0 = time.time()
-    client = chromadb.PersistentClient(path=OLD_CHROMA_PATH)
+    output_path = output_dir / "historical_advice_v2.jsonl"
+    error_path = output_dir / "historical_advice_v2_errors.jsonl"
+    manifest_path = output_dir / "manifest_v2.json"
+    collections = (args.content_collection, args.format_collection)
+    client = chromadb.PersistentClient(path=str(source_db))
+    available = {item.name for item in client.list_collections()}
+    missing = [name for name in collections if name not in available]
+    if missing:
+        raise ValueError(
+            f"legacy collections not found: {missing}; available={sorted(available)}"
+        )
 
-    output_path = os.path.join(OUTPUT_DIR, f"historical_advice_v2.jsonl")
-    error_path  = os.path.join(OUTPUT_DIR, f"historical_advice_v2_errors.jsonl")
-
-    total_cleaned = 0
-    total_errors  = 0
-    content_count = 0
-    format_count  = 0
-
-    with open(output_path, "w", encoding="utf-8") as out_f, \
-         open(error_path,  "w", encoding="utf-8") as err_f:
-
-        for coll_name in COLLECTIONS:
-            col = client.get_collection(coll_name)
-            total = col.count()
-            print(f"[{coll_name}] 共 {total} 条记录", file=sys.stderr)
-
-            for start in range(0, total, BATCH_SIZE):
-                end = min(start + BATCH_SIZE, total)
-                results = col.get(limit=end-start, offset=start,
-                                  include=["documents", "metadatas"])
-
-                for i in range(len(results["ids"])):
-                    chunk_id = results["ids"][i]
-                    raw_doc  = results["documents"][i]
-                    meta     = results["metadatas"][i]
-
+    started = time.time()
+    counts = {"content": 0, "format": 0}
+    errors = 0
+    advice_ids: set[str] = set()
+    source_fingerprints: list[str] = []
+    with output_path.open("w", encoding="utf-8") as output, error_path.open(
+        "w", encoding="utf-8"
+    ) as error_output:
+        for collection_name in collections:
+            collection = client.get_collection(collection_name)
+            total = collection.count()
+            if args.limit is not None:
+                total = min(total, args.limit)
+            for offset in range(0, total, args.batch_size):
+                batch = collection.get(
+                    limit=min(args.batch_size, total - offset),
+                    offset=offset,
+                    include=["documents", "metadatas"],
+                )
+                for legacy_id, document, metadata in zip(
+                    batch["ids"], batch["documents"], batch["metadatas"], strict=True
+                ):
                     try:
-                        record = clean_one(chunk_id, raw_doc, meta, coll_name)
-                        json.dump(record, out_f, ensure_ascii=False)
-                        out_f.write("\n")
+                        record = clean_one(
+                            legacy_id,
+                            document or "",
+                            metadata or {},
+                            collection_name,
+                        )
+                        if record.advice_id in advice_ids:
+                            raise ValueError(f"duplicate advice_id: {record.advice_id}")
+                        advice_ids.add(record.advice_id)
+                        source_fingerprints.append(
+                            f"{collection_name}\0{legacy_id}\0{record.raw_checksum}"
+                        )
+                        counts[record.advice_type] += 1
+                        output.write(record.model_dump_json() + "\n")
+                    except Exception as exc:
+                        errors += 1
+                        error_output.write(
+                            json.dumps(
+                                {
+                                    "legacy_chunk_id": legacy_id,
+                                    "source_collection": collection_name,
+                                    "error": str(exc),
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
+                print(
+                    f"[{collection_name}] {min(offset + args.batch_size, total)}/{total}",
+                    file=sys.stderr,
+                )
 
-                        if record["advice_type"] == "content":
-                            content_count += 1
-                        else:
-                            format_count += 1
-                        total_cleaned += 1
-
-                    except Exception as e:
-                        err_entry = {
-                            "chunk_id": chunk_id,
-                            "collection": coll_name,
-                            "error": str(e),
-                        }
-                        json.dump(err_entry, err_f, ensure_ascii=False)
-                        err_f.write("\n")
-                        total_errors += 1
-
-                print(f"  [{coll_name}] {min(end, total)}/{total} 已处理, "
-                      f"成功 {total_cleaned}, 失败 {total_errors}",
-                      file=sys.stderr)
-
-    elapsed = time.time() - t0
-
-    # ── 输出统计到 stderr ──
-    print(file=sys.stderr)
-    print(f"总成功记录:  {total_cleaned}", file=sys.stderr)
-    print(f"  - content:  {content_count}", file=sys.stderr)
-    print(f"  - format:   {format_count}", file=sys.stderr)
-    print(f"总失败记录:  {total_errors}", file=sys.stderr)
-    print(f"耗时:        {elapsed:.1f}s", file=sys.stderr)
-    print(f"输出文件:    {output_path}", file=sys.stderr)
-    if total_errors:
-        print(f"错误文件:    {error_path}", file=sys.stderr)
-
-    # ── 写入 Manifest ──
-    manifest_path = os.path.join(OUTPUT_DIR, "manifest_v2.json")
-    with open(output_path, "rb") as f:
-        sha = hashlib.sha256()
-        while True:
-            chunk = f.read(8192)
-            if not chunk:
-                break
-            sha.update(chunk)
-        corpus_checksum = sha.hexdigest()
+    if args.strict and errors:
+        output_path.unlink(missing_ok=True)
+        raise RuntimeError(f"strict clean failed with {errors} invalid records")
+    if not advice_ids:
+        raise RuntimeError("cleaning produced no valid records")
 
     manifest = {
-        "schema_version":         SCHEMA_VERSION,
-        "output_corpus_checksum": corpus_checksum,
-        "source_database_path":   OLD_CHROMA_PATH,
-        "record_count":           total_cleaned,
-        "content_count":          content_count,
-        "format_count":           format_count,
-        "error_count":            total_errors,
-        "embedding_model":        EMBEDDING_MODEL,
-        "embedding_dimensions":   EMBEDDING_DIMS,
-        "distance_metric":        DISTANCE_METRIC,
-        "build_time":             datetime.now(timezone.utc).isoformat(),
-        "build_elapsed_seconds":  round(elapsed, 1),
-        "builder_version":        "batch_clean_v1",
+        "schema_version": SCHEMA_VERSION,
+        "builder_version": "batch_clean_v2",
+        "source_database_path": str(source_db),
+        "source_collections": list(collections),
+        "source_fingerprint": sha256_text("\n".join(sorted(source_fingerprints))),
+        "record_count": len(advice_ids),
+        "content_count": counts["content"],
+        "format_count": counts["format"],
+        "error_count": errors,
+        "advice_id_checksum": id_set_checksum(advice_ids),
+        "embedding_model": EMBEDDING_MODEL,
+        "embedding_dimensions": EMBEDDING_DIMENSIONS,
+        "distance_metric": DISTANCE_METRIC,
+        "build_time": datetime.now(timezone.utc).isoformat(),
+        "build_elapsed_seconds": round(time.time() - started, 3),
     }
-
-    with open(manifest_path, "w", encoding="utf-8") as mf:
-        json.dump(manifest, mf, ensure_ascii=False, indent=2)
-        mf.write("\n")
-
-    print(f"Manifest:    {manifest_path}", file=sys.stderr)
-    print(json.dumps(manifest, ensure_ascii=False, indent=2), file=sys.stderr)
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

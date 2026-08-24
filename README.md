@@ -159,13 +159,28 @@ user_result_format_collection_cloud_4b
 不要修改 `DEBATE_EMBEDDING_MODEL` 或 `DEBATE_EMBEDDING_DIMENSIONS`，否则查询向量
 会与库内向量不兼容。也可以用 `DEBATE_RAG_CHROMA_PATH` 显式指定 Chroma 目录。
 
+历史建议 V2 不覆盖旧库。它从旧库导出 Canonical JSONL，再分别建立
+`Qwen3-Embedding-8B/4096` Dense V2 和 Jieba BM25 V2：
+
+```powershell
+python scripts/batch_clean.py --source-db D:\paper-review-backend\backend\data\databases\user_result_cloud --strict
+python scripts/build_chroma_dense_v2.py
+python scripts/build_bm25_v2.py
+```
+
+两个构建器只读同一份 `historical_advice_v2.jsonl`，并在 Manifest 中校验
+语料校验和、匿名 `advice_id`集合、Embedding 模型、维度和分词版本。
+构建完成后配置 `RAG_V2_CORPUS_PATH`、`DEBATE_V2_CHROMA_PATH` 和
+`DEBATE_V2_BM25_PATH`，先使用 `DEBATE_V2_MODE=shadow_v2`，验证后再切换为 `v2`。
+
 ## 当前真实工作流
 
 ```text
-Step 1 论文类型分类 -> Step 2 章节阶段分类 -> 历史建议 RAG -> Context Planner
+Step 1 论文类型分类 -> Step 2 章节阶段分类 -> Context Planner
 -> 三专家并发独立初审 -> Chair 争议计划
 -> 外部证据检索（未配置时显式降级）-> 定向 Debate -> Chair 综合裁决
 -> Step 4 兼容装配 -> Step 5 三类论文结构/工作量评价 -> 兼容性校验
+-> 已确认 Finding 的 Dense V2 + BM25 + RRF + Reranker
 -> Step 6 关键建议汇总 -> 历史评分检索（未配置时为空）
 -> Step 7 十二维评分
 ```
@@ -178,7 +193,9 @@ Step 1 论文类型分类 -> Step 2 章节阶段分类 -> 历史建议 RAG -> Co
 Step 5 已复用旧项目理论研究、方法创新、工程实现三套标准。摘要、目录、章节、
 参考文献和致谢等可确定事实由代码计算，模型只结合论文类型与 Agent 裁决撰写整体
 工作量分析。Step 6 延续“最多五条且覆盖不同章节”的旧规则，每条建议额外保留
-严重程度、`finding_id`、`evidence_id`、受影响章节和人工复核标记。
+严重程度、`finding_id`、`evidence_id`、受影响章节、人工复核标记和最多两条
+历史建议来源。历史建议只帮助 Step 6 改写方案；Step 7 使用独立的
+RAG-free 基础汇总，评分载荷不包含历史建议。
 
 Step 7 直接复用旧项目 `dev` 分支的十二项定义和总分算法：五个 Step 5 结构项、
 一个参考文献项和十二个语义项先转换为 18 个 `0-3` 等级项，再按旧
@@ -196,6 +213,8 @@ Step 7 直接复用旧项目 `dev` 分支的十二项定义和总分算法：五
   但尚无独立任务队列和自动恢复执行能力。
 - 已实现教师/管理员认证授权、论文分配、人工评审和审计日志；尚无组织隔离和申诉流程。
 - 尚无经过脱敏真实论文验证的解析准确率、评分校准和多智能体回归评测报告。
+- 历史建议 V2 的构建、在线混合召回和标注评测工具已实现；当前仓库不包含
+  敏感旧库、生成后的索引或人工相关性标注，因此不宣称已取得召回率改善。
 
 ## 教师与教务工作台
 

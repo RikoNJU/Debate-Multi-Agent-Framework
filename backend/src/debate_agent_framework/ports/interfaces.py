@@ -14,6 +14,7 @@ from ..schemas import (
     DebateQuestion,
     DebateResponse,
     DebateReviewInput,
+    FindingAdviceItem,
     HistoricalScoreCase,
     IndependentReview,
     PaperClassificationResult,
@@ -140,6 +141,8 @@ class OriginalPipelineAdapter(Protocol):
         self,
         review_input: DebateReviewInput,
         synthesis: ReviewSynthesis,
+        *,
+        finding_advice: Sequence[FindingAdviceItem] = (),
     ) -> MaybeAwaitable[SummaryAdviceResult]:
         ...
 

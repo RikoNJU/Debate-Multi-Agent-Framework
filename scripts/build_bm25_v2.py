@@ -1,96 +1,128 @@
 #!/usr/bin/env python3
-"""构建 BM25 V2 检索索引。"""
+"""Build and atomically publish BM25 V2 from the canonical advice corpus."""
 
-import json, sys, time, os, pickle
-import jieba
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import pickle
+import shutil
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+
 from rank_bm25 import BM25Okapi
 
-CORPUS_PATH = "/nvme/home/rincug/qhz/backend/data/cleaned_chunks_v2.jsonl"
-BM25_DIR = "/nvme/home/rincug/qhz/backend/data/bm25_v2"
+from debate_agent_framework.services.rag_v2_contract import (
+    SCHEMA_VERSION,
+    TOKENIZER_VERSION,
+    file_checksum,
+    id_set_checksum,
+    load_corpus,
+    tokenize_bm25,
+)
 
 
-def tokenize(text: str) -> list[str]:
-    """jieba 分词，过滤纯标点/空白 token。"""
-    tokens = jieba.lcut(text)
-    result = []
-    for t in tokens:
-        t = t.strip()
-        if not t:
-            continue
-        if len(t) == 1 and not t.isalnum() and '\u4e00' <= t <= '\u9fff':
-            result.append(t)
-        elif len(t) == 1 and not t.isalnum():
-            continue
-        else:
-            result.append(t)
-    return result
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--corpus",
+        default=os.getenv(
+            "RAG_V2_CORPUS_PATH",
+            "backend/data/rag_v2/corpus/historical_advice_v2.jsonl",
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        default=os.getenv("DEBATE_V2_BM25_PATH", "backend/data/rag_v2/bm25"),
+    )
+    parser.add_argument("--force", action="store_true")
+    return parser.parse_args()
 
 
-def main():
-    t0 = time.time()
+def publish(staging: Path, target: Path, *, force: bool) -> None:
+    staging = staging.resolve()
+    target = target.resolve()
+    if staging.parent != target.parent or staging == target:
+        raise ValueError("staging and target directories are not safe siblings")
+    if target.exists() and not force:
+        raise FileExistsError(f"target already exists; pass --force to replace it: {target}")
+    backup: Path | None = None
+    if target.exists():
+        backup = target.with_name(f".{target.name}.backup-{uuid4().hex}")
+        target.rename(backup)
+    try:
+        staging.rename(target)
+    except Exception:
+        if backup is not None and not target.exists():
+            backup.rename(target)
+        raise
+    if backup is not None:
+        shutil.rmtree(backup)
 
-    with open(CORPUS_PATH, encoding="utf-8") as f:
-        records = [json.loads(line) for line in f if line.strip()]
-    print(f"读取语料: {len(records)} 条", file=sys.stderr)
 
-    content_recs = [r for r in records if r["advice_type"] == "content"]
-    format_recs  = [r for r in records if r["advice_type"] == "format"]
+def main() -> int:
+    args = parse_args()
+    corpus_path = Path(args.corpus).expanduser().resolve()
+    target = Path(args.output).expanduser().resolve()
+    if not corpus_path.is_file():
+        raise FileNotFoundError(f"canonical corpus not found: {corpus_path}")
+    records = load_corpus(corpus_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = target.with_name(f".{target.name}.building-{uuid4().hex}")
+    staging.mkdir()
+    started = time.time()
 
-    os.makedirs(BM25_DIR, exist_ok=True)
+    try:
+        counts: dict[str, int] = {}
+        token_count = 0
+        for advice_type in ("content", "format"):
+            subset = [record for record in records if record.advice_type == advice_type]
+            ids = [record.advice_id for record in subset]
+            tokenized = [tokenize_bm25(record.bm25_text) for record in subset]
+            if not tokenized or any(not tokens for tokens in tokenized):
+                raise ValueError(f"{advice_type} BM25 corpus contains an empty document")
+            index = BM25Okapi(tokenized)
+            with (staging / f"{advice_type}_bm25.pkl").open("wb") as output:
+                pickle.dump(index, output, protocol=pickle.HIGHEST_PROTOCOL)
+            (staging / f"{advice_type}_bm25_id_map.json").write_text(
+                json.dumps(ids, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            counts[advice_type] = len(ids)
+            token_count += sum(len(tokens) for tokens in tokenized)
 
-    def build_index(recs, label, filename):
-        print(f"[{label}] 分词 {len(recs)} 条文档 ...", file=sys.stderr)
-        tokenized = []
-        ids = []
-        for r in recs:
-            text = r.get("bm25_text", "") or r.get("dense_text", "")
-            tokens = tokenize(text)
-            tokenized.append(tokens)
-            ids.append(r["advice_id"])
+        manifest = {
+            "schema_version": SCHEMA_VERSION,
+            "builder_version": "build_bm25_v2_v2",
+            "tokenizer": TOKENIZER_VERSION,
+            "bm25_library": "rank_bm25",
+            "corpus_checksum": file_checksum(corpus_path),
+            "advice_id_checksum": id_set_checksum(
+                {record.advice_id for record in records}
+            ),
+            "total_documents": len(records),
+            "content_documents": counts["content"],
+            "format_documents": counts["format"],
+            "total_tokens": token_count,
+            "build_time": datetime.now(timezone.utc).isoformat(),
+            "build_elapsed_seconds": round(time.time() - started, 3),
+        }
+        (staging / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        publish(staging, target, force=args.force)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise
 
-        print(f"[{label}] 构建 BM25 索引 ...", file=sys.stderr)
-        bm25 = BM25Okapi(tokenized)
-
-        idx_path = os.path.join(BM25_DIR, f"{filename}.pkl")
-        with open(idx_path, "wb") as f:
-            pickle.dump(bm25, f)
-
-        id_path = os.path.join(BM25_DIR, f"{filename}_id_map.json")
-        with open(id_path, "w", encoding="utf-8") as f:
-            json.dump(ids, f, ensure_ascii=False)
-
-        tok_path = os.path.join(BM25_DIR, f"{filename}_tokenized.json")
-        with open(tok_path, "w", encoding="utf-8") as f:
-            json.dump(tokenized, f, ensure_ascii=False)
-
-        print(f"[{label}] 已保存: {idx_path}", file=sys.stderr)
-        return len(tokenized), sum(len(t) for t in tokenized)
-
-    c_docs, c_tokens = build_index(content_recs, "content", "content_bm25")
-    f_docs, f_tokens = build_index(format_recs, "format", "format_bm25")
-
-    elapsed = time.time() - t0
-
-    manifest = {
-        "schema_version": "historical_advice_v2",
-        "total_documents": c_docs + f_docs,
-        "content_documents": c_docs,
-        "format_documents": f_docs,
-        "total_tokens": c_tokens + f_tokens,
-        "tokenizer": "jieba",
-        "bm25_library": "rank_bm25",
-        "build_time_seconds": round(elapsed, 1),
-    }
-    with open(os.path.join(BM25_DIR, "manifest.json"), "w", encoding="utf-8") as mf:
-        json.dump(manifest, mf, ensure_ascii=False, indent=2)
-        mf.write("\n")
-
-    print(file=sys.stderr)
-    print("=== BM25 V2 构建完成 ===", file=sys.stderr)
-    for k, v in manifest.items():
-        print(f"  {k}: {v}", file=sys.stderr)
-    print(f"  路径: {BM25_DIR}", file=sys.stderr)
+    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
