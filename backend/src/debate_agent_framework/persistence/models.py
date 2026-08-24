@@ -44,6 +44,13 @@ class PaperRevisionRecord(Base):
         ForeignKey("papers.id", ondelete="CASCADE"), index=True
     )
     sha256: Mapped[str] = mapped_column(String(64), index=True)
+    content_sha256: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    parent_revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("paper_revisions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    chapter_hashes_json: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    change_ratio: Mapped[float | None] = mapped_column(nullable=True)
+    change_summary_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     pdf_path: Mapped[str] = mapped_column(Text)
     structured_input_path: Mapped[str] = mapped_column(Text)
     mineru_batch_id: Mapped[str] = mapped_column(String(255))
@@ -79,6 +86,9 @@ class ReviewRunRecord(Base):
     task_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     paper_id: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     revision_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    review_fingerprint: Mapped[str | None] = mapped_column(
+        String(64), index=True, nullable=True
+    )
     status: Mapped[str] = mapped_column(String(32), index=True)
     current_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
     result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

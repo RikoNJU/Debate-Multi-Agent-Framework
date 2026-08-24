@@ -20,6 +20,7 @@ class RunStore(Protocol):
         *,
         paper_id: str | None = None,
         revision_id: str | None = None,
+        review_fingerprint: str | None = None,
     ) -> RunSnapshot: ...
 
     def mark_running(self, task_id: str) -> RunSnapshot: ...
@@ -45,6 +46,10 @@ class RunStore(Protocol):
 
     def list_for_paper(self, paper_id: str) -> list[RunSnapshot]: ...
 
+    def find_succeeded_by_fingerprint(
+        self, review_fingerprint: str
+    ) -> RunSnapshot | None: ...
+
 
 class DebateWorkflowService:
     def __init__(
@@ -65,8 +70,33 @@ class DebateWorkflowService:
         *,
         paper_id: str | None = None,
         revision_id: str | None = None,
+        review_fingerprint: str | None = None,
     ) -> RunSnapshot:
-        return self.store.create(paper_id=paper_id, revision_id=revision_id)
+        return self.store.create(
+            paper_id=paper_id,
+            revision_id=revision_id,
+            review_fingerprint=review_fingerprint,
+        )
+
+    def find_reusable_run(self, review_fingerprint: str) -> RunSnapshot | None:
+        return self.store.find_succeeded_by_fingerprint(review_fingerprint)
+
+    def create_reused_run(
+        self,
+        *,
+        source: RunSnapshot,
+        paper_id: str,
+        revision_id: str,
+        review_fingerprint: str,
+    ) -> RunSnapshot:
+        if source.result is None:
+            raise ValueError("可复用评审缺少结果")
+        created = self.create_run(
+            paper_id=paper_id,
+            revision_id=revision_id,
+            review_fingerprint=review_fingerprint,
+        )
+        return self.store.mark_succeeded(created.task_id, source.result)
 
     async def execute(self, task_id: str, review_input: DebateReviewInput) -> None:
         self.store.mark_running(task_id)

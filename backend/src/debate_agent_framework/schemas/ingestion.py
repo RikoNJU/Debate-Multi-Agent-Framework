@@ -39,3 +39,7 @@ class PaperReviewSubmission(StrictModel):
     title: str = Field(min_length=1)
     chapter_count: int = Field(ge=1)
     batch_id: str = Field(min_length=1)
+    revision_id: str | None = None
+    reused: bool = False
+    change_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
+    changed_chapter_ids: list[str] = Field(default_factory=list)

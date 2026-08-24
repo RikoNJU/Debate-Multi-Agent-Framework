@@ -13,6 +13,11 @@ from uuid import uuid4
 
 from ..persistence.repositories import PaperRepository
 from ..schemas import DebateReviewInput, MinerUParseResult
+from .review_identity import (
+    AUTO_LINEAGE_THRESHOLD,
+    RevisionComparison,
+    compare_revisions,
+)
 
 
 @dataclass(frozen=True)
@@ -20,6 +25,7 @@ class PersistedPaperRevision:
     revision_id: str
     pdf_sha256: str
     revision_dir: Path
+    comparison: RevisionComparison
 
 
 class PaperPersistenceService:
@@ -38,9 +44,11 @@ class PaperPersistenceService:
         parsed: MinerUParseResult,
         source_pdf: str | Path,
         source_filename: str,
+        comparison: RevisionComparison | None = None,
     ) -> PersistedPaperRevision:
         source_path = Path(source_pdf)
         pdf_sha256 = self._sha256(source_path)
+        comparison = comparison or compare_revisions(review_input, None)
         revision_id = uuid4().hex
         paper_key = hashlib.sha256(
             review_input.paper_id.encode("utf-8")
@@ -79,6 +87,15 @@ class PaperPersistenceService:
                 ),
                 mineru_batch_id=parsed.batch_id,
                 artifacts=artifacts,
+                content_sha256=comparison.content_sha256,
+                parent_revision_id=comparison.parent_revision_id,
+                chapter_hashes=comparison.chapter_hashes,
+                change_ratio=comparison.change_ratio,
+                change_summary={
+                    "match_method": comparison.match_method,
+                    "similarity": comparison.similarity,
+                    "changed_chapter_ids": comparison.changed_chapter_ids,
+                },
             )
         except Exception:
             shutil.rmtree(staging, ignore_errors=True)
@@ -89,6 +106,62 @@ class PaperPersistenceService:
             revision_id=revision_id,
             pdf_sha256=pdf_sha256,
             revision_dir=final_dir,
+            comparison=comparison,
+        )
+
+    def resolve_revision_identity(
+        self,
+        review_input: DebateReviewInput,
+        *,
+        explicit_paper_id: bool,
+    ) -> tuple[DebateReviewInput, RevisionComparison]:
+        """Link a conservative near-duplicate to a stable paper lineage."""
+
+        if explicit_paper_id:
+            paper = self.repository.get_paper(review_input.paper_id)
+            if paper is None:
+                return review_input, compare_revisions(
+                    review_input, None, match_method="explicit_new_paper"
+                )
+            revision_id = str(paper["current_revision_id"])
+            previous = self.load_review_input(revision_id)
+            return review_input, compare_revisions(
+                review_input,
+                previous,
+                parent_revision_id=revision_id,
+                match_method="explicit_paper_id",
+            )
+
+        best: tuple[float, dict[str, object], DebateReviewInput] | None = None
+        for candidate in self.repository.list_current_revision_candidates(
+            review_input.title
+        ):
+            previous = self.load_review_input(str(candidate["revision_id"]))
+            comparison = compare_revisions(review_input, previous)
+            similarity = comparison.similarity or 0.0
+            if best is None or similarity > best[0]:
+                best = (similarity, candidate, previous)
+        if best is None or best[0] < AUTO_LINEAGE_THRESHOLD:
+            return review_input, compare_revisions(
+                review_input, None, match_method="new_paper"
+            )
+
+        similarity, candidate, previous = best
+        paper_id = str(candidate["paper_id"])
+        revision_id = str(candidate["revision_id"])
+        metadata = {
+            **review_input.metadata,
+            "revision_match_method": "title_and_content_similarity",
+            "revision_similarity": f"{similarity:.6f}",
+        }
+        linked_input = review_input.model_copy(
+            update={"paper_id": paper_id, "metadata": metadata}
+        )
+        return linked_input, compare_revisions(
+            linked_input,
+            previous,
+            parent_revision_id=revision_id,
+            match_method="title_and_content_similarity",
         )
 
     def _artifact_manifest(self, revision_dir: Path) -> list[dict[str, object]]:
@@ -159,3 +232,7 @@ class PaperPersistenceService:
             while chunk := source.read(1024 * 1024):
                 digest.update(chunk)
         return digest.hexdigest()
+
+    @classmethod
+    def file_sha256(cls, path: str | Path) -> str:
+        return cls._sha256(Path(path))

@@ -195,3 +195,56 @@ def test_pdf_review_endpoint_auto_classifies_without_paper_type(
     assert result["result"]["context"]["chapters"][0]["stage"] == (
         "引言/绪论（包含相关工作）"
     )
+
+
+def test_identical_pdf_reuses_successful_review_before_mineru(
+    monkeypatch, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    import debate_agent_framework.routers.papers as papers_router
+
+    class CountingMinerUClient:
+        calls = 0
+
+        def __init__(self, config) -> None:  # type: ignore[no-untyped-def]
+            self.config = config
+
+        async def parse_pdf(self, pdf_path, *, output_root):  # type: ignore[no-untyped-def]
+            type(self).calls += 1
+            markdown = "# 唯一复用测试论文\n\n## 第一章 绪论\n这是待评审的论文正文。"
+            markdown_path = tmp_path / "reuse.md"
+            markdown_path.write_text(markdown, encoding="utf-8")
+            return MinerUParseResult(
+                batch_id="batch-reuse",
+                markdown=markdown,
+                output_dir=str(tmp_path),
+                markdown_path=str(markdown_path),
+            )
+
+    monkeypatch.setenv("DEBATE_MINERU_TOKEN", "test-token")
+    monkeypatch.setattr(papers_router, "MinerUClient", CountingMinerUClient)
+    upload = {
+        "pdf": (
+            "unique-reuse.pdf",
+            b"%PDF-1.7\nunique exact reuse payload",
+            "application/pdf",
+        )
+    }
+
+    with TestClient(create_app()) as client:
+        first = client.post(
+            "/api/debate/papers/review",
+            data={"paper_type": "方法创新"},
+            files=upload,
+        )
+        second = client.post(
+            "/api/debate/papers/review",
+            data={"paper_type": "方法创新"},
+            files=upload,
+        )
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert second.json()["reused"] is True
+    assert second.json()["task_id"] == first.json()["task_id"]
+    assert second.json()["revision_id"] == first.json()["revision_id"]
+    assert CountingMinerUClient.calls == 1

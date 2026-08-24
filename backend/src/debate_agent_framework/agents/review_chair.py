@@ -48,7 +48,7 @@ class DebateReviewChairAgent(ReviewChair):
         self,
         model_client: ModelClient | None = None,
         *,
-        temperature: float = 0.2,
+        temperature: float = 0.05,
     ) -> None:
         self.model_client = model_client
         self.temperature = temperature
@@ -117,6 +117,7 @@ class DebateReviewChairAgent(ReviewChair):
             user_prompt=(
                 "请综合原文、独立初审、Debate 回应和外部证据，输出 GlobalReview JSON。"
                 "resolved_findings 必须逐条给出证据和最终判断，不能使用多数投票；"
+                "裁决已有问题时应保留独立初审中的 finding_id，以便固定评审小项追踪；"
                 "高严重度且无证据的问题必须标记为 insufficient 或 human_review 并降低置信度。"
             ),
             payload=payload,
@@ -126,7 +127,7 @@ class DebateReviewChairAgent(ReviewChair):
         global_review = self._validate_global_review(
             self._repair_global_review(data)
         )
-        return assemble_review_synthesis(context, global_review)
+        return assemble_review_synthesis(context, global_review, reviews=reviews)
 
     def _complete_json(
         self,

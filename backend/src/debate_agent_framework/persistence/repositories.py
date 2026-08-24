@@ -39,12 +39,14 @@ class SqlAlchemyRunStore:
         *,
         paper_id: str | None = None,
         revision_id: str | None = None,
+        review_fingerprint: str | None = None,
     ) -> RunSnapshot:
         now = datetime.now(UTC)
         record = ReviewRunRecord(
             task_id=uuid4().hex,
             paper_id=paper_id,
             revision_id=revision_id,
+            review_fingerprint=review_fingerprint,
             status=RunStatus.QUEUED.value,
             current_stage="queued",
             created_at=now,
@@ -165,6 +167,25 @@ class SqlAlchemyRunStore:
                 for record in records
             ]
 
+    def find_succeeded_by_fingerprint(
+        self, review_fingerprint: str
+    ) -> RunSnapshot | None:
+        with self.database.session() as session:
+            record = session.scalar(
+                select(ReviewRunRecord)
+                .where(
+                    ReviewRunRecord.review_fingerprint == review_fingerprint,
+                    ReviewRunRecord.status == RunStatus.SUCCEEDED.value,
+                )
+                .order_by(ReviewRunRecord.updated_at.desc())
+                .limit(1)
+            )
+            return (
+                self._snapshot(record, self._stage_events(session, record.task_id))
+                if record
+                else None
+            )
+
     def mark_interrupted(self) -> int:
         changed = 0
         with self.database.session() as session:
@@ -245,6 +266,7 @@ class SqlAlchemyRunStore:
             error=record.error,
             paper_id=record.paper_id,
             revision_id=record.revision_id,
+            review_fingerprint=record.review_fingerprint,
             current_stage=record.current_stage,
             current_stage_label=(
                 current_event.label
@@ -280,6 +302,11 @@ class PaperRepository:
         structured_input_path: str,
         mineru_batch_id: str,
         artifacts: list[dict[str, Any]],
+        content_sha256: str,
+        parent_revision_id: str | None,
+        chapter_hashes: dict[str, str],
+        change_ratio: float | None,
+        change_summary: dict[str, Any],
     ) -> None:
         now = datetime.now(UTC)
         with self.database.session() as session:
@@ -313,6 +340,11 @@ class PaperRepository:
                     id=revision_id,
                     paper_id=review_input.paper_id,
                     sha256=pdf_sha256,
+                    content_sha256=content_sha256,
+                    parent_revision_id=parent_revision_id,
+                    chapter_hashes_json=chapter_hashes,
+                    change_ratio=change_ratio,
+                    change_summary_json=change_summary,
                     pdf_path=pdf_path,
                     structured_input_path=structured_input_path,
                     mineru_batch_id=mineru_batch_id,
@@ -356,6 +388,10 @@ class PaperRepository:
                     {
                         "revision_id": revision.id,
                         "sha256": revision.sha256,
+                        "content_sha256": revision.content_sha256,
+                        "parent_revision_id": revision.parent_revision_id,
+                        "change_ratio": revision.change_ratio,
+                        "change_summary": revision.change_summary_json,
                         "mineru_batch_id": revision.mineru_batch_id,
                         "parse_status": revision.parse_status,
                         "created_at": _aware(revision.created_at),
@@ -373,10 +409,55 @@ class PaperRepository:
             return {
                 "revision_id": revision.id,
                 "paper_id": revision.paper_id,
+                "sha256": revision.sha256,
+                "content_sha256": revision.content_sha256,
+                "parent_revision_id": revision.parent_revision_id,
+                "chapter_hashes": revision.chapter_hashes_json,
+                "change_ratio": revision.change_ratio,
+                "change_summary": revision.change_summary_json,
                 "pdf_path": revision.pdf_path,
                 "structured_input_path": revision.structured_input_path,
+                "mineru_batch_id": revision.mineru_batch_id,
                 "parse_status": revision.parse_status,
             }
+
+    def find_revision_by_pdf_sha256(self, pdf_sha256: str) -> dict[str, Any] | None:
+        with self.database.session() as session:
+            revision = session.scalar(
+                select(PaperRevisionRecord)
+                .where(PaperRevisionRecord.sha256 == pdf_sha256)
+                .order_by(PaperRevisionRecord.created_at.desc())
+                .limit(1)
+            )
+            if revision is None:
+                return None
+            paper = session.get(PaperRecord, revision.paper_id)
+            return {
+                "revision_id": revision.id,
+                "paper_id": revision.paper_id,
+                "title": paper.title if paper else "",
+                "content_sha256": revision.content_sha256,
+                "mineru_batch_id": revision.mineru_batch_id,
+            }
+
+    def list_current_revision_candidates(self, title: str) -> list[dict[str, Any]]:
+        with self.database.session() as session:
+            rows = session.execute(
+                select(PaperRecord, PaperRevisionRecord)
+                .join(
+                    PaperRevisionRecord,
+                    PaperRevisionRecord.id == PaperRecord.current_revision_id,
+                )
+                .where(func.lower(PaperRecord.title) == title.casefold())
+            ).all()
+            return [
+                {
+                    "paper_id": paper.id,
+                    "revision_id": revision.id,
+                    "structured_input_path": revision.structured_input_path,
+                }
+                for paper, revision in rows
+            ]
 
 
 class PortalRepository:

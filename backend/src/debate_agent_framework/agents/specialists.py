@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import os
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -19,6 +20,7 @@ from ..schemas import (
 )
 from ..ports import SpecialistAgent
 from .json_client import complete_json, review_context_payload
+from .chapter_rubric import expected_rubric_items, normalize_specialist_assessments
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts" / "specialists"
 
@@ -35,7 +37,7 @@ class DebateSpecialistAgent(SpecialistAgent):
         role: SpecialistRole,
         model_client: ModelClient | None = None,
         *,
-        temperature: float = 0.2,
+        temperature: float = 0.1,
     ) -> None:
         self.role = role
         self.model_client = model_client
@@ -47,7 +49,11 @@ class DebateSpecialistAgent(SpecialistAgent):
                 "DebateSpecialistAgent 需要注入 ModelClient"
             )
 
-        payload = {"context": review_context_payload(context)}
+        rubric_items = expected_rubric_items(context, self.role)
+        payload = {
+            "context": review_context_payload(context),
+            "required_rubric_items": rubric_items,
+        }
         data = complete_json(
             self.model_client,
             system_prompt=self._system_prompt(),
@@ -63,10 +69,16 @@ class DebateSpecialistAgent(SpecialistAgent):
                 "对应的 block_id；系统将校正 chunk_id、page_number 和 bbox。"
                 "输出保持精炼：strengths 不超过 3 条，findings 保留最重要的 3 至 4 条，"
                 "author_questions 不超过 3 条，避免重复论述。"
+                "必须逐一输出 required_rubric_items 中的固定小项到 rubric_assessments，"
+                "item_id 和 chapter_id 必须原样保留。judgement 只能是 excellent、good、"
+                "acceptable、poor、critical、human_review。poor 或 critical 必须同时创建"
+                "有论文证据的 finding，并把 finding_id 写入该小项的 finding_ids；"
+                "不能可靠判断时使用 human_review，禁止把未检查等同于无问题。"
             ),
             payload=payload,
             schema=IndependentReview.model_json_schema(),
             temperature=self.temperature,
+            max_tokens=int(os.getenv("DEBATE_SPECIALIST_MAX_TOKENS", "8192")),
         )
         try:
             review = IndependentReview.model_validate(data)
@@ -75,6 +87,12 @@ class DebateSpecialistAgent(SpecialistAgent):
                 "DebateSpecialistAgent 输出不符合 IndependentReview"
             ) from exc
         review.role = self.role
+        review.rubric_assessments = normalize_specialist_assessments(
+            expected=rubric_items,
+            supplied=review.rubric_assessments,
+            role=self.role,
+            finding_ids={finding.finding_id for finding in review.findings},
+        )
         return review
 
     def respond(

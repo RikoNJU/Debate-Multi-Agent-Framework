@@ -18,6 +18,7 @@ from ..schemas import (
 from .json_client import complete_json
 from .legacy_scoring import calculate_legacy_score
 from .legacy_summary import build_summary_advice
+from .chapter_rubric import rubric_anchor_scores, stabilize_semantic_scores
 
 
 SCORE_DIMENSIONS = {
@@ -43,10 +44,12 @@ class RealOriginalPipelineAdapter:
         self,
         model_client: ModelClient | None = None,
         *,
-        temperature: float = 0.2,
+        summary_temperature: float = 0.2,
+        scoring_temperature: float = 0.1,
     ) -> None:
         self.model_client = model_client
-        self.temperature = temperature
+        self.summary_temperature = summary_temperature
+        self.scoring_temperature = scoring_temperature
 
     def summarize_advice(
         self,
@@ -84,7 +87,7 @@ class RealOriginalPipelineAdapter:
                 ),
             },
             schema=SummaryAdviceResult.model_json_schema(),
-            temperature=self.temperature,
+            temperature=self.summary_temperature,
         )
         proposed = SummaryAdviceResult.model_validate(data)
         return build_summary_advice(review_input, synthesis, proposed.items)
@@ -131,6 +134,10 @@ class RealOriginalPipelineAdapter:
                 for key, envelope in synthesis.chapter_evaluation.items()
             },
             "workload_evaluation": synthesis.workload_evaluation.model_dump(mode="json"),
+            "rubric_version": synthesis.rubric_version,
+            "rubric_assessments": [
+                item.model_dump(mode="json") for item in synthesis.rubric_assessments
+            ],
             "historical_score_cases": [
                 case.model_dump(mode="json") for case in historical_cases
             ],
@@ -141,11 +148,28 @@ class RealOriginalPipelineAdapter:
             user_prompt=self._scoring_prompt(),
             payload=payload,
             schema=ComprehensiveScoreResult.model_json_schema(),
-            temperature=self.temperature,
+            temperature=self.scoring_temperature,
         )
         data.pop("legacy_raw_scores", None)
         data.pop("legacy_level_scores", None)
+        data.pop("model_raw_scores", None)
+        data.pop("rubric_anchor_scores", None)
+        data.pop("rubric_version", None)
         score = ComprehensiveScoreResult.model_validate(data)
+        model_raw_scores = dict(score.scores)
+        anchor_scores = rubric_anchor_scores(synthesis.rubric_assessments)
+        if anchor_scores:
+            score.scores = stabilize_semantic_scores(model_raw_scores, anchor_scores)
+            score.model_raw_scores = model_raw_scores
+            score.rubric_anchor_scores = anchor_scores
+            score.rubric_version = synthesis.rubric_version
+            score.calibration_notes = [
+                *score.calibration_notes,
+                (
+                    "十二项语义分由固定章节评审小项锚定；模型候选分仅在同一旧等级区间内"
+                    "相对锚点提供最多约 1 分的微调。"
+                ),
+            ]
         calculation = calculate_legacy_score(
             semantic_scores=score.scores,
             structure=synthesis.workload_evaluation.structure_evaluation,
@@ -155,7 +179,11 @@ class RealOriginalPipelineAdapter:
         score.grade = calculation.grade
         score.legacy_raw_scores = calculation.raw_scores
         score.legacy_level_scores = calculation.level_scores
-        score.scoring_rule = "legacy_step7_v1"
+        score.scoring_rule = (
+            "legacy_step7_rubric_stabilized_v2"
+            if anchor_scores
+            else "legacy_step7_v1"
+        )
         return score
 
     @staticmethod
@@ -176,6 +204,8 @@ class RealOriginalPipelineAdapter:
             "评价项不得高于 80 分，但选题契合度、选题工作量适宜度、选题学术价值及"
             "文献检索和分析能力不受这一上限影响。"
             "重点依据有原文证据的 resolved_findings、章节评价中的不足及问题严重程度扣分。"
+            "rubric_assessments 是版本化固定章节小项，必须优先作为稳定评分依据；"
+            "human_review 小项不得用于自动加分或扣分。"
             "先判断各项属于优秀、良好、一般或较差，再在档位内给出具体分数："
             "优秀 90-100，良好 80-90，一般 60-80，较差低于 60。"
             "不得让大部分分数相同，并避免输出 75、80、85 这三个定级边界分数。"

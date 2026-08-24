@@ -48,6 +48,7 @@ class RunSnapshot(BaseModel):
     error: str | None = None
     paper_id: str | None = None
     revision_id: str | None = None
+    review_fingerprint: str | None = None
     current_stage: str | None = None
     current_stage_label: str | None = None
     progress_percent: int = Field(default=0, ge=0, le=100)
@@ -67,6 +68,7 @@ class InMemoryRunStore:
         *,
         paper_id: str | None = None,
         revision_id: str | None = None,
+        review_fingerprint: str | None = None,
     ) -> RunSnapshot:
         now = datetime.now(UTC)
         snapshot = RunSnapshot(
@@ -76,6 +78,7 @@ class InMemoryRunStore:
             updated_at=now,
             paper_id=paper_id,
             revision_id=revision_id,
+            review_fingerprint=review_fingerprint,
             current_stage="queued",
             current_stage_label="等待开始",
             progress_percent=0,
@@ -206,6 +209,20 @@ class InMemoryRunStore:
                 for snapshot in self._runs.values()
                 if snapshot.paper_id == paper_id
             ]
+
+    def find_succeeded_by_fingerprint(
+        self, review_fingerprint: str
+    ) -> RunSnapshot | None:
+        with self._lock:
+            matches = [
+                snapshot
+                for snapshot in self._runs.values()
+                if snapshot.review_fingerprint == review_fingerprint
+                and snapshot.status is RunStatus.SUCCEEDED
+            ]
+            if not matches:
+                return None
+            return max(matches, key=lambda item: item.updated_at).model_copy(deep=True)
 
     def _update(self, task_id: str, **changes: Any) -> RunSnapshot:
         with self._lock:

@@ -75,6 +75,17 @@ class ResolutionStatus(StrEnum):
     HUMAN_REVIEW = "human_review"
 
 
+class RubricJudgement(StrEnum):
+    """固定章节评审小项的有限等级。"""
+
+    EXCELLENT = "excellent"
+    GOOD = "good"
+    ACCEPTABLE = "acceptable"
+    POOR = "poor"
+    CRITICAL = "critical"
+    HUMAN_REVIEW = "human_review"
+
+
 class IssueSeverity(StrEnum):
     WARNING = "warning"
     ERROR = "error"
@@ -275,6 +286,19 @@ class ReviewFinding(StrictModel):
         return self
 
 
+class RubricAssessment(StrictModel):
+    """Specialist 对一个版本化章节小项的结构化判断。"""
+
+    item_id: str = Field(min_length=1)
+    chapter_id: str = Field(min_length=1)
+    role: SpecialistRole
+    judgement: RubricJudgement
+    rationale: str = Field(min_length=1)
+    finding_ids: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+    requires_human_review: bool = False
+
+
 class IndependentReview(StrictModel):
     """一个 Specialist 在不读取其他意见时形成的独立初审。"""
 
@@ -283,6 +307,7 @@ class IndependentReview(StrictModel):
     paper_summary: str = Field(min_length=1)
     strengths: list[str] = Field(default_factory=list)
     findings: list[ReviewFinding] = Field(default_factory=list)
+    rubric_assessments: list[RubricAssessment] = Field(default_factory=list)
     author_questions: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
 
@@ -462,6 +487,8 @@ class ReviewSynthesis(StrictModel):
     global_review: GlobalReview
     chapter_evaluation: dict[str, CompatibleChapterEnvelope]
     workload_evaluation: CompatibleWorkloadEvaluation
+    rubric_assessments: list[RubricAssessment] = Field(default_factory=list)
+    rubric_version: str = ""
 
     @model_validator(mode="after")
     def validate_chapter_keys(self) -> "ReviewSynthesis":
@@ -536,6 +563,9 @@ class ComprehensiveScoreResult(StrictModel):
     legacy_raw_scores: list[float] = Field(default_factory=list)
     legacy_level_scores: list[int] = Field(default_factory=list)
     scoring_rule: str = "legacy_step7_v1"
+    model_raw_scores: dict[str, float] = Field(default_factory=dict)
+    rubric_anchor_scores: dict[str, float] = Field(default_factory=dict)
+    rubric_version: str = ""
 
     @model_validator(mode="after")
     def validate_original_dimensions(self) -> "ComprehensiveScoreResult":

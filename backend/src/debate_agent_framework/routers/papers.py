@@ -27,6 +27,7 @@ from ..schemas import (
 from ..services import DebateWorkflowService
 from ..services.jobs import RunSnapshot
 from ..services.paper_storage import PaperPersistenceService
+from ..services.review_identity import build_review_fingerprint
 from .dependencies import get_debate_workflow_service, get_paper_persistence_service
 
 router = APIRouter(prefix="/papers", tags=["papers"])
@@ -100,6 +101,28 @@ async def parse_and_review_paper(
                     if size > config.max_pdf_bytes:
                         raise InvalidPdfError("PDF exceeds configured size limit")
                     target.write(chunk)
+            pdf_sha256 = persistence.file_sha256(pdf_path)
+            known_revision = request.app.state.paper_repository.find_revision_by_pdf_sha256(
+                pdf_sha256
+            )
+            if known_revision and known_revision.get("content_sha256"):
+                fingerprint = build_review_fingerprint(
+                    str(known_revision["content_sha256"]), paper_type
+                )
+                reusable = service.find_reusable_run(fingerprint)
+                if reusable is not None and reusable.result is not None:
+                    context = reusable.result.get("context", {})
+                    chapters = context.get("chapters", [])
+                    return PaperReviewSubmission(
+                        task_id=reusable.task_id,
+                        status=reusable.status.value,
+                        paper_id=str(known_revision["paper_id"]),
+                        title=str(known_revision["title"]),
+                        chapter_count=max(1, len(chapters)),
+                        batch_id=str(known_revision["mineru_batch_id"]),
+                        revision_id=str(known_revision["revision_id"]),
+                        reused=True,
+                    )
             parsed = await MinerUClient(config).parse_pdf(
                 pdf_path,
                 output_root=output_root,
@@ -116,18 +139,39 @@ async def parse_and_review_paper(
                 review_input = MinerUContentListAdapter().enrich(
                     review_input, parsed.content_list_path
                 )
+            review_input, comparison = await asyncio.to_thread(
+                persistence.resolve_revision_identity,
+                review_input,
+                explicit_paper_id=bool(paper_id),
+            )
+            review_fingerprint = build_review_fingerprint(
+                comparison.content_sha256, paper_type
+            )
             persisted = await asyncio.to_thread(
                 persistence.persist,
                 review_input=review_input,
                 parsed=parsed,
                 source_pdf=pdf_path,
                 source_filename=pdf.filename,
+                comparison=comparison,
             )
-        snapshot = service.create_run(
-            paper_id=review_input.paper_id,
-            revision_id=persisted.revision_id,
-        )
-        background_tasks.add_task(service.execute, snapshot.task_id, review_input)
+        reusable = service.find_reusable_run(review_fingerprint)
+        if reusable is not None:
+            snapshot = service.create_reused_run(
+                source=reusable,
+                paper_id=review_input.paper_id,
+                revision_id=persisted.revision_id,
+                review_fingerprint=review_fingerprint,
+            )
+            reused = True
+        else:
+            snapshot = service.create_run(
+                paper_id=review_input.paper_id,
+                revision_id=persisted.revision_id,
+                review_fingerprint=review_fingerprint,
+            )
+            background_tasks.add_task(service.execute, snapshot.task_id, review_input)
+            reused = False
         return PaperReviewSubmission(
             task_id=snapshot.task_id,
             status=snapshot.status.value,
@@ -135,6 +179,10 @@ async def parse_and_review_paper(
             title=review_input.title,
             chapter_count=len(review_input.chapters),
             batch_id=parsed.batch_id,
+            revision_id=persisted.revision_id,
+            reused=reused,
+            change_ratio=persisted.comparison.change_ratio,
+            changed_chapter_ids=persisted.comparison.changed_chapter_ids,
         )
     except InvalidPdfError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

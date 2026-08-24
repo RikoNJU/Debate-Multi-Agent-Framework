@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class HealthResponse(BaseModel):
@@ -20,6 +20,10 @@ class PaperRevisionSummary(BaseModel):
 
     revision_id: str
     sha256: str
+    content_sha256: str | None = None
+    parent_revision_id: str | None = None
+    change_ratio: float | None = None
+    change_summary: dict[str, object] = Field(default_factory=dict)
     mineru_batch_id: str
     parse_status: str
     created_at: datetime

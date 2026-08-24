@@ -17,17 +17,21 @@ from ..schemas import (
     CompatibleWorkloadEvaluation,
     FindingSeverity,
     GlobalReview,
+    IndependentReview,
     ResolvedFinding,
     ReviewContext,
     ReviewSynthesis,
     SectionStructure,
     WorkloadItem,
 )
+from .chapter_rubric import RUBRIC_VERSION, resolve_rubric_assessments
 
 
 def assemble_review_synthesis(
     context: ReviewContext,
     global_review: GlobalReview,
+    *,
+    reviews: Sequence[IndependentReview] = (),
 ) -> ReviewSynthesis:
     """把模型判断结果 GlobalReview 装配为原流程兼容的完整输出。"""
 
@@ -86,6 +90,8 @@ def assemble_review_synthesis(
         global_review=global_review,
         chapter_evaluation=chapter_evaluation,
         workload_evaluation=workload,
+        rubric_assessments=resolve_rubric_assessments(reviews, global_review),
+        rubric_version=RUBRIC_VERSION,
     )
 
 

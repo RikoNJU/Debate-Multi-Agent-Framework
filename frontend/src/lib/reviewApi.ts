@@ -16,6 +16,10 @@ export type ReviewSubmission = {
   title: string;
   chapter_count: number;
   batch_id: string;
+  revision_id?: string | null;
+  reused: boolean;
+  change_ratio?: number | null;
+  changed_chapter_ids: string[];
 };
 
 export type RunSnapshot = {
