@@ -16,7 +16,6 @@ backend/local.db
 .env.*
 !.env.example
 !**/.env.example
-!backend/.env
 backend/src/*/data/*
 !backend/src/*/data/.gitignore
 
