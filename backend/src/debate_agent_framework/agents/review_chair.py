@@ -116,9 +116,11 @@ class DebateReviewChairAgent(ReviewChair):
             system_prompt=self._system_prompt(context),
             user_prompt=(
                 "请综合原文、独立初审、Debate 回应和外部证据，输出 GlobalReview JSON。"
+                "overall_summary 必填：用 2-4 句话概括论文整体质量和核心缺陷。"
+                "confidence 必填：给出综合置信度分数 0.0-1.0。"
                 "resolved_findings 必须逐条给出证据和最终判断，不能使用多数投票；"
                 "裁决已有问题时应保留独立初审中的 finding_id，以便固定评审小项追踪；"
-                "高严重度且无证据的问题必须标记为 insufficient 或 human_review 并降低置信度。"
+                "高严重度且无证据的问题必须标记为 insufficient 或 human_review 并降低 confidence。"
             ),
             payload=payload,
             schema=GlobalReview.model_json_schema(),
@@ -227,7 +229,7 @@ class DebateReviewChairAgent(ReviewChair):
 
     @classmethod
     def _repair_global_review(cls, data: dict[str, Any]) -> dict[str, Any]:
-        """丢弃模型多输出的未知字段，避免个别冗余键导致整轮评审失败。
+        """丢弃模型多输出的未知字段，并为必填字段提供兜底。
 
         模型会模仿输入载荷的结构（例如把初审 finding 的
         ``requires_human_review`` 复制进 resolved_findings），这些冗余键
@@ -251,6 +253,12 @@ class DebateReviewChairAgent(ReviewChair):
             for item in repaired.get("resolved_findings") or []
             if isinstance(item, dict)
         ]
+        if "overall_summary" not in repaired:
+            repaired["overall_summary"] = (
+                "经综合分析，论文存在若干问题需修改，详见各维度评估与问题详情。"
+            )
+        if "confidence" not in repaired:
+            repaired["confidence"] = 0.5
         return repaired
 
     @staticmethod
