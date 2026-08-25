@@ -118,7 +118,8 @@ def test_workflow_reports_node_and_specialist_progress() -> None:
         )
     )
 
-    assert ("step1_classify_paper", "running", 2) in events
+    assert ("resolve_discipline_skill", "running", 2) in events
+    assert ("step1_classify_paper", "running", 4) in events
     assert ("step7_scoring", "succeeded", 99) in events
     for role in SpecialistRole:
         assert (f"specialist_{role.value}", "succeeded", 50) in events

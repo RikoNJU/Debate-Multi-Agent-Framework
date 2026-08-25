@@ -56,7 +56,7 @@ class DebateSpecialistAgent(SpecialistAgent):
         }
         data = complete_json(
             self.model_client,
-            system_prompt=self._system_prompt(),
+            system_prompt=self._system_prompt(context),
             user_prompt=(
                 "请以本角色视角独立完成论文初审，输出 IndependentReview JSON。"
                 "review_id、paper_summary、strengths、findings、author_questions 和 "
@@ -124,7 +124,7 @@ class DebateSpecialistAgent(SpecialistAgent):
         }
         data = complete_json(
             self.model_client,
-            system_prompt=self._system_prompt(),
+            system_prompt=self._system_prompt(context),
             user_prompt=(
                 "请回应 Review Chair 定向发送的争议问题，输出 DebateResponse JSON。"
                 "response_id、response、position、revised_findings 和 confidence 由你"
@@ -146,6 +146,13 @@ class DebateSpecialistAgent(SpecialistAgent):
         response.question_id = question.question_id
         return response
 
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, context: ReviewContext) -> str:
+        profile = context.review_profile
+        configured = (
+            profile.specialist_prompts.get(self.role.value) if profile else None
+        )
+        if isinstance(configured, str) and configured.strip():
+            base = profile.base_guidance.strip() if profile else ""
+            return f"{base}\n\n专业角色指引：\n{configured}" if base else configured
         prompt_file = _PROMPTS_DIR / f"{self.role.value}.md"
         return prompt_file.read_text(encoding="utf-8")

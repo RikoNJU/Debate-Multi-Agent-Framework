@@ -501,8 +501,8 @@ def test_real_workflow_runs_legacy_step1_and_step2_before_agents() -> None:
         "方法构建",
         "实验验证",
     ]
-    assert result.context.metadata["paper_type_rule_version"] == "legacy_step1_v1"
-    assert result.context.metadata["chapter_stage_rule_version"] == "legacy_step2_v1"
+    assert result.context.metadata["paper_type_rule_version"] == "ai_paper_type_v2"
+    assert result.context.metadata["chapter_stage_rule_version"] == "ai_method_chapters_v2"
     assert client.calls == 11
 
 

@@ -146,9 +146,40 @@ def test_migrate_adopts_unversioned_legacy_database(tmp_path: Path) -> None:
     tables = set(inspector.get_table_names())
     database.dispose()
 
-    assert revision == "20260824_0006"
+    assert revision == "20260825_0008"
     assert {"users", "review_run_stages"}.issubset(tables)
     assert "student_task_access" not in tables
+
+
+def test_resolved_skill_audit_is_persisted(tmp_path: Path) -> None:
+    database = Database(database_url(tmp_path / "skill-audit.db"))
+    database.create_schema()
+    store = SqlAlchemyRunStore(database)
+    created = store.create(discipline_id="artificial_intelligence")
+    profile_hash = "a" * 64
+
+    saved = store.mark_succeeded(
+        created.task_id,
+        {
+            "review_profile": {
+                "skill_id": "ai.method.v2",
+                "discipline_id": "artificial_intelligence",
+                "version": "2.0.0",
+                "profile_hash": profile_hash,
+                "base_version": "1.0.0",
+                "discipline_version": "1.1.0",
+                "classification_version": "ai_method_classification_v2",
+                "rubric_version": "ai_method_rubric_v2",
+                "score_schema_id": "legacy_18_dimensions_v1",
+            }
+        },
+    )
+    database.dispose()
+
+    assert saved.skill_id == "ai.method.v2"
+    assert saved.skill_version == "2.0.0"
+    assert saved.skill_profile_hash == profile_hash
+    assert saved.skill_versions["discipline_version"] == "1.1.0"
 
 
 def test_paper_files_and_artifacts_are_archived_safely(tmp_path: Path) -> None:

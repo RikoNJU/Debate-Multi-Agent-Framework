@@ -21,6 +21,8 @@ class RunStore(Protocol):
         paper_id: str | None = None,
         revision_id: str | None = None,
         review_fingerprint: str | None = None,
+        discipline_id: str | None = None,
+        skill_selection_hash: str | None = None,
     ) -> RunSnapshot: ...
 
     def mark_running(self, task_id: str) -> RunSnapshot: ...
@@ -71,15 +73,27 @@ class DebateWorkflowService:
         paper_id: str | None = None,
         revision_id: str | None = None,
         review_fingerprint: str | None = None,
+        discipline_id: str | None = None,
+        skill_selection_hash: str | None = None,
     ) -> RunSnapshot:
         return self.store.create(
             paper_id=paper_id,
             revision_id=revision_id,
             review_fingerprint=review_fingerprint,
+            discipline_id=discipline_id,
+            skill_selection_hash=skill_selection_hash,
         )
 
     def find_reusable_run(self, review_fingerprint: str) -> RunSnapshot | None:
         return self.store.find_succeeded_by_fingerprint(review_fingerprint)
+
+    def skill_selection_hash(
+        self, discipline_id: str, paper_type: object | None
+    ) -> str:
+        resolver = self.workflow.services.skill_resolver
+        if resolver is None:
+            raise ValueError("Review Skill Resolver is not configured")
+        return resolver.selection_hash(discipline_id, paper_type)
 
     def create_reused_run(
         self,
@@ -88,6 +102,8 @@ class DebateWorkflowService:
         paper_id: str,
         revision_id: str,
         review_fingerprint: str,
+        discipline_id: str = "artificial_intelligence",
+        skill_selection_hash: str | None = None,
     ) -> RunSnapshot:
         if source.result is None:
             raise ValueError("可复用评审缺少结果")
@@ -95,6 +111,8 @@ class DebateWorkflowService:
             paper_id=paper_id,
             revision_id=revision_id,
             review_fingerprint=review_fingerprint,
+            discipline_id=discipline_id,
+            skill_selection_hash=skill_selection_hash,
         )
         return self.store.mark_succeeded(created.task_id, source.result)
 

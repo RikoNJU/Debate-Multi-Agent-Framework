@@ -107,6 +107,9 @@ def text_similarity(left: str, right: str) -> float:
 def build_review_fingerprint(
     normalized_content_sha256: str,
     paper_type: PaperType | str | None,
+    *,
+    discipline_id: str = "artificial_intelligence",
+    skill_selection_hash: str = "legacy-skill-selection",
 ) -> str:
     """Fingerprint every input/version that is allowed to affect a saved result."""
 
@@ -114,6 +117,8 @@ def build_review_fingerprint(
     payload = {
         "content_sha256": normalized_content_sha256,
         "paper_type": type_value or "auto",
+        "discipline_id": discipline_id,
+        "skill_selection_hash": skill_selection_hash,
         "model": os.getenv("DEBATE_MODEL", "deepseek-ai/DeepSeek-V4-Pro"),
         "pipeline_version": PIPELINE_VERSION,
         "rubric_version": RUBRIC_VERSION,

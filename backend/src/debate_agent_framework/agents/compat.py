@@ -91,7 +91,11 @@ def assemble_review_synthesis(
         chapter_evaluation=chapter_evaluation,
         workload_evaluation=workload,
         rubric_assessments=resolve_rubric_assessments(reviews, global_review),
-        rubric_version=RUBRIC_VERSION,
+        rubric_version=(
+            context.review_profile.rubric_version
+            if context.review_profile
+            else RUBRIC_VERSION
+        ),
     )
 
 

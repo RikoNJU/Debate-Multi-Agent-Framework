@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+from dataclasses import replace
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from typing import Any, Literal, TypeVar, cast
@@ -60,6 +61,7 @@ from ..schemas import (
     SummaryAdviceResult,
 )
 from .state import DebateState, DebateWorkflowConfig, DebateWorkflowServices
+from ..skills import build_default_skill_resolver
 
 T = TypeVar("T")
 REQUIRED_ROLES = frozenset(SpecialistRole)
@@ -75,8 +77,10 @@ _progress_callback: ContextVar[ProgressCallback | None] = ContextVar(
 )
 
 WORKFLOW_STAGES: dict[str, tuple[str, int, int]] = {
-    "step1_classify_paper": ("识别论文类型", 2, 8),
-    "step2_classify_chapters": ("识别章节阶段", 8, 14),
+    "resolve_discipline_skill": ("加载专业通用 Skill", 2, 4),
+    "step1_classify_paper": ("识别论文类型", 4, 8),
+    "resolve_review_skill": ("加载论文类型 Skill", 8, 10),
+    "step2_classify_chapters": ("识别章节阶段", 10, 14),
     "build_context": ("构造评审上下文", 14, 22),
     "independent_review": ("三位专家独立初审", 22, 52),
     "plan_debate": ("Chair 识别争议", 52, 60),
@@ -151,6 +155,7 @@ class DebateWorkflow:
                 historical_score_retriever=DemoHistoricalScoreRetriever(),
                 original_pipeline=DemoOriginalPipelineAdapter(),
                 workload_evaluator=DeterministicLegacyWorkloadEvaluator(),
+                skill_resolver=build_default_skill_resolver(),
             ),
             checkpointer=checkpointer,
         )
@@ -168,7 +173,7 @@ class DebateWorkflow:
         与历史评分服务保持为空，禁止 Demo 数据污染真实评审。
         """
 
-        from ..services.clean_advice import build_clean_advice_retriever_from_env
+        from ..services.advice_registry import build_advice_registry_from_env
         from ..services.external_evidence import build_evidence_retriever_from_env
         from ..services.historical_advice import (
             build_historical_advice_retriever_from_env,
@@ -194,9 +199,10 @@ class DebateWorkflow:
                     build_historical_advice_retriever_from_env()
                 ),
                 historical_score_retriever=build_historical_score_retriever_from_env(),
-                clean_advice_retriever=build_clean_advice_retriever_from_env(),
+                clean_advice_retriever=build_advice_registry_from_env(),
                 original_pipeline=RealOriginalPipelineAdapter(model_client=client),
                 workload_evaluator=RealLegacyWorkloadEvaluator(client),
+                skill_resolver=build_default_skill_resolver(),
             ),
             config=DebateWorkflowConfig.from_env(),
             checkpointer=checkpointer,
@@ -209,10 +215,14 @@ class DebateWorkflow:
         *,
         checkpointer: BaseCheckpointSaver | None = None,
     ) -> None:
-        self.services = services
+        self.services = (
+            services
+            if services.skill_resolver is not None
+            else replace(services, skill_resolver=build_default_skill_resolver())
+        )
         self.config = config or DebateWorkflowConfig()
         self.checkpointer = checkpointer or MemorySaver()
-        registered_roles = set(services.specialists)
+        registered_roles = set(self.services.specialists)
         if registered_roles != REQUIRED_ROLES:
             missing = sorted(role.value for role in REQUIRED_ROLES - registered_roles)
             extra = sorted(str(role) for role in registered_roles - REQUIRED_ROLES)
@@ -222,7 +232,9 @@ class DebateWorkflow:
     def _build_graph(self) -> Any:
         builder = StateGraph(DebateState)
         nodes = {
+            "resolve_discipline_skill": self._resolve_discipline_skill,
             "step1_classify_paper": self._step1_classify_paper,
+            "resolve_review_skill": self._resolve_review_skill,
             "step2_classify_chapters": self._step2_classify_chapters,
             "build_context": self._build_context,
             "independent_review": self._independent_review,
@@ -240,8 +252,10 @@ class DebateWorkflow:
         for name, handler in nodes.items():
             builder.add_node(name, self._with_progress(name, handler))
 
-        builder.add_edge(START, "step1_classify_paper")
-        builder.add_edge("step1_classify_paper", "step2_classify_chapters")
+        builder.add_edge(START, "resolve_discipline_skill")
+        builder.add_edge("resolve_discipline_skill", "step1_classify_paper")
+        builder.add_edge("step1_classify_paper", "resolve_review_skill")
+        builder.add_edge("resolve_review_skill", "step2_classify_chapters")
         builder.add_edge("step2_classify_chapters", "build_context")
         builder.add_edge("build_context", "independent_review")
         builder.add_edge("independent_review", "plan_debate")
@@ -279,6 +293,23 @@ class DebateWorkflow:
 
         return tracked
 
+    async def _resolve_discipline_skill(self, state: DebateState) -> dict[str, Any]:
+        """Load the active discipline-level contract before Step 1 classification."""
+
+        review_input = state["review_input"]
+        resolver = self.services.skill_resolver
+        if resolver is None:
+            raise WorkflowExecutionError("未配置 Review Skill Resolver")
+        try:
+            profile = resolver.resolve_discipline(review_input.discipline_id)
+        except Exception as exc:
+            raise WorkflowExecutionError(f"专业通用 Skill 加载失败：{exc}") from exc
+        metadata = {**review_input.metadata, **profile.audit_summary()}
+        return {
+            "discipline_profile": profile,
+            "review_input": review_input.model_copy(update={"metadata": metadata}),
+        }
+
     async def _step1_classify_paper(self, state: DebateState) -> dict[str, Any]:
         """自动补齐旧 Step 1；显式类型保持不变并记录来源。"""
 
@@ -292,15 +323,26 @@ class DebateWorkflow:
         if classifier is None:
             raise WorkflowExecutionError("论文未提供 paper_type，且未配置 Step 1 分类器")
         try:
+            method = classifier.classify_paper
+            parameters = inspect.signature(method).parameters
             result = PaperClassificationResult.model_validate(
-                await _invoke(lambda: classifier.classify_paper(review_input))
+                await _invoke(
+                    lambda: method(
+                        review_input,
+                        discipline_profile=state["discipline_profile"],
+                    )
+                    if "discipline_profile" in parameters
+                    else method(review_input)
+                )
             )
         except Exception as exc:
             raise WorkflowExecutionError(f"Step 1 论文类型分类失败：{exc}") from exc
         metadata.update(
             {
-                "paper_type_source": "legacy_step1",
-                "paper_type_rule_version": STEP1_RULE_VERSION,
+                "paper_type_source": "discipline_skill_step1",
+                "paper_type_rule_version": state[
+                    "discipline_profile"
+                ].classification_version,
                 "paper_type_confidence": f"{result.confidence:.4f}",
                 "paper_type_rationale": result.rationale,
             }
@@ -309,6 +351,30 @@ class DebateWorkflow:
             "review_input": review_input.model_copy(
                 update={"paper_type": result.paper_type, "metadata": metadata}
             )
+        }
+
+    async def _resolve_review_skill(self, state: DebateState) -> dict[str, Any]:
+        """Freeze one validated Skill profile after Step 1 selects the paper type."""
+
+        review_input = state["review_input"]
+        if review_input.paper_type is None:
+            raise WorkflowExecutionError("加载专业 Skill 时 paper_type 仍为空")
+        resolver = self.services.skill_resolver
+        if resolver is None:
+            raise WorkflowExecutionError("未配置 Review Skill Resolver")
+        try:
+            profile = resolver.resolve(
+                review_input.discipline_id, review_input.paper_type
+            )
+        except Exception as exc:
+            raise WorkflowExecutionError(f"专业评审 Skill 加载失败：{exc}") from exc
+        metadata = {
+            **review_input.metadata,
+            **profile.audit_summary(),
+        }
+        return {
+            "review_profile": profile,
+            "review_input": review_input.model_copy(update={"metadata": metadata}),
         }
 
     async def _step2_classify_chapters(self, state: DebateState) -> dict[str, Any]:
@@ -333,13 +399,29 @@ class DebateWorkflow:
         if classifier is None:
             raise WorkflowExecutionError("MinerU 章节需要自动分类，但未配置 Step 2 分类器")
         try:
+            method = classifier.classify_chapters
+            parameters = inspect.signature(method).parameters
             result = ChapterClassificationResult.model_validate(
-                await _invoke(lambda: classifier.classify_chapters(review_input))
+                await _invoke(
+                    lambda: method(
+                        review_input,
+                        review_profile=state["review_profile"],
+                    )
+                    if "review_profile" in parameters
+                    else method(review_input)
+                )
             )
         except Exception as exc:
             raise WorkflowExecutionError(f"Step 2 章节阶段分类失败：{exc}") from exc
 
         stage_by_id = {item.chapter_id: item.stage for item in result.chapters}
+        profile = state["review_profile"]
+        allowed_stages = set(profile.chapter_taxonomy.allowed_labels)
+        unknown_stages = sorted(set(stage_by_id.values()) - allowed_stages)
+        if unknown_stages:
+            raise WorkflowExecutionError(
+                f"Step 2 返回了 Skill 未声明的章节阶段：{unknown_stages}"
+            )
         chapters = [
             chapter.model_copy(update={"stage": stage_by_id[chapter.chapter_id]})
             if chapter.reviewable
@@ -347,8 +429,8 @@ class DebateWorkflow:
             for chapter in review_input.chapters
         ]
         metadata = dict(review_input.metadata)
-        metadata["chapter_stage_source"] = "legacy_step2"
-        metadata["chapter_stage_rule_version"] = STEP2_RULE_VERSION
+        metadata["chapter_stage_source"] = "paper_type_skill_step2"
+        metadata["chapter_stage_rule_version"] = profile.classification_version
         return {
             "review_input": review_input.model_copy(
                 update={"chapters": chapters, "metadata": metadata}
@@ -481,6 +563,9 @@ class DebateWorkflow:
             raise WorkflowExecutionError(f"Context Planner 输出不合法：{exc}") from exc
         if context.paper_id != state["review_input"].paper_id:
             raise WorkflowExecutionError("ReviewContext.paper_id 与输入论文不一致")
+        context = context.model_copy(
+            update={"review_profile": state["review_profile"]}
+        )
         logger.info("上下文构造完成，章节数=%d", len(context.chapters))
         return {"context": context}
 
@@ -821,9 +906,19 @@ class DebateWorkflow:
 
         synthesis = state["synthesis"]
         try:
-            items = await retriever.retrieve_from_findings(
-                synthesis, state["review_input"]
-            )
+            parameters = inspect.signature(
+                retriever.retrieve_from_findings
+            ).parameters
+            if len(parameters) >= 3:
+                items = await retriever.retrieve_from_findings(
+                    synthesis,
+                    state["review_input"],
+                    state["review_profile"],
+                )
+            else:
+                items = await retriever.retrieve_from_findings(
+                    synthesis, state["review_input"]
+                )
         except Exception as exc:
             return {
                 "issues": [
@@ -1070,6 +1165,7 @@ class DebateWorkflow:
             raise WorkflowExecutionError(f"Debate 工作流结束时缺少状态：{sorted(missing)}")
 
         return DebateRunResult(
+            review_profile=final["review_profile"],
             context=final["context"],
             independent_reviews=final.get("independent_reviews", []),
             debate_plan=final["debate_plan"],

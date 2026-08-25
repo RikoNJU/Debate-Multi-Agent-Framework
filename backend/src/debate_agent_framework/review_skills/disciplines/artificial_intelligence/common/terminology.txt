@@ -1,0 +1,12 @@
+Transformer
+大语言模型
+大型语言模型
+LLM
+RAG
+LoRA
+消融实验
+基线模型
+Precision
+Recall
+F1
+Embedding

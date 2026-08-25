@@ -76,6 +76,7 @@ async def parse_and_review_paper(
     background_tasks: BackgroundTasks,
     pdf: UploadFile = File(...),
     paper_type: PaperType | None = Form(None),
+    discipline_id: str = Form("artificial_intelligence"),
     paper_id: str | None = Form(None),
     title: str | None = Form(None),
     service: DebateWorkflowService = Depends(get_debate_workflow_service),
@@ -90,6 +91,12 @@ async def parse_and_review_paper(
     ):
         raise HTTPException(status_code=422, detail="paper_id 格式不合法")
     config = MinerUConfig.from_env()
+    try:
+        skill_selection_hash = service.skill_selection_hash(
+            discipline_id, paper_type
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     output_root = Path(request.app.state.settings.mineru_output_dir)
     try:
         with tempfile.TemporaryDirectory(prefix="debate-mineru-upload-") as temp_dir:
@@ -107,7 +114,10 @@ async def parse_and_review_paper(
             )
             if known_revision and known_revision.get("content_sha256"):
                 fingerprint = build_review_fingerprint(
-                    str(known_revision["content_sha256"]), paper_type
+                    str(known_revision["content_sha256"]),
+                    paper_type,
+                    discipline_id=discipline_id,
+                    skill_selection_hash=skill_selection_hash,
                 )
                 reusable = service.find_reusable_run(fingerprint)
                 if reusable is not None and reusable.result is not None:
@@ -135,6 +145,9 @@ async def parse_and_review_paper(
                 source_filename=pdf.filename,
                 mineru_batch_id=parsed.batch_id,
             )
+            review_input = review_input.model_copy(
+                update={"discipline_id": discipline_id}
+            )
             if parsed.content_list_path:
                 review_input = MinerUContentListAdapter().enrich(
                     review_input, parsed.content_list_path
@@ -145,7 +158,10 @@ async def parse_and_review_paper(
                 explicit_paper_id=bool(paper_id),
             )
             review_fingerprint = build_review_fingerprint(
-                comparison.content_sha256, paper_type
+                comparison.content_sha256,
+                paper_type,
+                discipline_id=discipline_id,
+                skill_selection_hash=skill_selection_hash,
             )
             persisted = await asyncio.to_thread(
                 persistence.persist,
@@ -162,6 +178,8 @@ async def parse_and_review_paper(
                 paper_id=review_input.paper_id,
                 revision_id=persisted.revision_id,
                 review_fingerprint=review_fingerprint,
+                discipline_id=discipline_id,
+                skill_selection_hash=skill_selection_hash,
             )
             reused = True
         else:
@@ -169,6 +187,8 @@ async def parse_and_review_paper(
                 paper_id=review_input.paper_id,
                 revision_id=persisted.revision_id,
                 review_fingerprint=review_fingerprint,
+                discipline_id=discipline_id,
+                skill_selection_hash=skill_selection_hash,
             )
             background_tasks.add_task(service.execute, snapshot.task_id, review_input)
             reused = False

@@ -28,7 +28,13 @@ async def create_run(
     snapshot = service.create_run()
     background_tasks.add_task(service.execute, snapshot.task_id, review_input)
     return RunSubmissionResponse(
-        **snapshot.model_dump(exclude={"review_fingerprint"}), published_review=None
+        **snapshot.model_dump(
+            exclude={
+                "review_fingerprint", "discipline_id", "skill_selection_hash",
+                "skill_id", "skill_version", "skill_profile_hash", "skill_versions",
+            }
+        ),
+        published_review=None,
     )
 
 
@@ -63,7 +69,12 @@ async def retry_run(
     snapshot = service.prepare_resume(task_id)
     background_tasks.add_task(service.resume_run, task_id, review_input)
     return RunSubmissionResponse(
-        **snapshot.model_dump(exclude={"review_fingerprint"}),
+        **snapshot.model_dump(
+            exclude={
+                "review_fingerprint", "discipline_id", "skill_selection_hash",
+                "skill_id", "skill_version", "skill_profile_hash", "skill_versions",
+            }
+        ),
         published_review=None,
     )
 
@@ -83,7 +94,12 @@ async def get_run(
         else None
     )
     return StudentTaskResponse(
-        **snapshot.model_dump(exclude={"review_fingerprint"}),
+        **snapshot.model_dump(
+            exclude={
+                "review_fingerprint", "discipline_id", "skill_selection_hash",
+                "skill_id", "skill_version", "skill_profile_hash", "skill_versions",
+            }
+        ),
         paper_title=portal.paper_title_for_task(task_id),
         published_review=published,
     )

@@ -89,6 +89,12 @@ class ReviewRunRecord(Base):
     review_fingerprint: Mapped[str | None] = mapped_column(
         String(64), index=True, nullable=True
     )
+    discipline_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    skill_selection_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    skill_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    skill_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    skill_profile_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    skill_versions_json: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(32), index=True)
     current_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
     result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

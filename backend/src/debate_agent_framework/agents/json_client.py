@@ -22,6 +22,12 @@ def review_context_payload(context: ReviewContext) -> dict[str, Any]:
     packet_excerpt_chars = 2500
 
     payload = context.model_dump(mode="json")
+    if context.review_profile:
+        profile = context.review_profile
+        payload["review_profile"] = {
+            **profile.audit_summary(),
+            "rules": [item.model_dump(mode="json") for item in profile.rules],
+        }
     payload["chapters"] = [
         {
             "chapter_id": chapter.chapter_id,

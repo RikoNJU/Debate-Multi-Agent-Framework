@@ -22,11 +22,14 @@ from debate_agent_framework.services.rag_v2_contract import (
     sha256_text,
     stable_advice_id,
 )
+from debate_agent_framework.skills.models import RetrievalOverlay
 from debate_agent_framework.workflows.debate import DebateWorkflow
 from scripts.batch_clean import clean_one
 
 
-def make_record(seed: str, *, advice_type: str = "content") -> AdviceCorpusRecord:
+def make_record(
+    seed: str, *, advice_type: str = "content", paper_type: str = "method"
+) -> AdviceCorpusRecord:
     raw_checksum = sha256_text(f"raw-{seed}")
     advice_id = stable_advice_id("legacy-content", seed, raw_checksum)
     data: dict[str, object] = {
@@ -35,7 +38,7 @@ def make_record(seed: str, *, advice_type: str = "content") -> AdviceCorpusRecor
         "source_collection": "legacy-content",
         "advice_type": advice_type,
         "paper_title": "历史论文",
-        "paper_type": "method",
+        "paper_type": paper_type,
         "chapter": "第四章 实验",
         "chapter_stage": "experiment",
         "problem_location": "4.2 实验结果",
@@ -104,6 +107,33 @@ def test_rrf_hydrates_bm25_only_candidate_from_canonical_records() -> None:
     bm25_only = next(item for item in fused if item["advice_id"] == bm25_record.advice_id)
     assert bm25_only["dense_rank"] is None
     assert bm25_only["record"].advice == bm25_record.advice
+
+
+def test_type_overlay_boosts_matching_candidate_without_changing_physical_corpus() -> None:
+    method_record = make_record("method", paper_type="method")
+    theory_record = make_record("theory", paper_type="theory")
+    retriever = make_retriever()
+    retriever._records = {
+        method_record.advice_id: method_record,
+        theory_record.advice_id: theory_record,
+    }
+    overlay = RetrievalOverlay(
+        paper_type_values=["method"],
+        filter_mode="prefer",
+        preferred_boost=2.0,
+        rerank_instruction_file="unused.md",
+    )
+
+    fused = retriever._rrf_fuse(
+        [
+            {"advice_id": theory_record.advice_id, "rank": 1},
+            {"advice_id": method_record.advice_id, "rank": 2},
+        ],
+        [],
+        overlay,
+    )
+
+    assert fused[0]["advice_id"] == method_record.advice_id
 
 
 def test_finding_query_uses_actual_paper_evidence_and_chapter_context() -> None:

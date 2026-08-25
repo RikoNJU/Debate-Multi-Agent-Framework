@@ -16,6 +16,7 @@ from ..schemas import (
     PaperClassificationResult,
     PaperType,
 )
+from ..skills.models import ResolvedDisciplineProfile, ResolvedReviewProfile
 from .json_client import complete_json
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts" / "classification"
@@ -77,29 +78,50 @@ class LegacyStep12ClassificationAdapter(PaperClassifier, ChapterClassifier):
         self.chapter_preview_chars = chapter_preview_chars
 
     def classify_paper(
-        self, review_input: DebateReviewInput
+        self,
+        review_input: DebateReviewInput,
+        *,
+        discipline_profile: ResolvedDisciplineProfile | None = None,
     ) -> PaperClassificationResult:
         if self.model_client is None:
-            return self._classify_paper_deterministically(review_input)
+            return self._classify_paper_deterministically(
+                review_input, discipline_profile=discipline_profile
+            )
+
+        candidates = (
+            [item.legacy_value for item in discipline_profile.paper_types]
+            if discipline_profile
+            else [item.value for item in PaperType]
+        )
 
         data = complete_json(
             self.model_client,
-            system_prompt=self._read_prompt("step1.md"),
+            system_prompt=(
+                discipline_profile.paper_classifier_prompt
+                if discipline_profile
+                else self._read_prompt("step1.md")
+            ),
             user_prompt=(
-                "按照旧 Step 1 标准完成论文类型分类。paper_type 只能是理论研究、"
-                "方法创新或工程实现；同时给出简短依据和置信度。"
+                f"在当前专业允许的论文类型 {candidates} 中完成分类；"
+                "同时给出简短依据和置信度。"
             ),
             payload=self._paper_payload(review_input),
             schema=PaperClassificationResult.model_json_schema(),
             temperature=self.temperature,
         )
         try:
-            return PaperClassificationResult.model_validate(data)
+            result = PaperClassificationResult.model_validate(data)
         except ValidationError as exc:
             raise ValueError("Step 1 输出不符合 PaperClassificationResult") from exc
+        if result.paper_type.value not in candidates:
+            raise ValueError("Step 1 返回了 Discipline Skill 未声明的论文类型")
+        return result
 
     def classify_chapters(
-        self, review_input: DebateReviewInput
+        self,
+        review_input: DebateReviewInput,
+        *,
+        review_profile: ResolvedReviewProfile | None = None,
     ) -> ChapterClassificationResult:
         paper_type = review_input.paper_type
         if paper_type is None:
@@ -114,7 +136,11 @@ class LegacyStep12ClassificationAdapter(PaperClassifier, ChapterClassifier):
                     ChapterStageClassification(
                         chapter_id=chapter.chapter_id,
                         chapter_name=chapter.chapter_name,
-                        stage=self._deterministic_stage(review_input, chapter.chapter_id),
+                        stage=self._deterministic_stage(
+                            review_input,
+                            chapter.chapter_id,
+                            review_profile=review_profile,
+                        ),
                     )
                     for chapter in reviewable
                 ]
@@ -127,12 +153,18 @@ class LegacyStep12ClassificationAdapter(PaperClassifier, ChapterClassifier):
             }[paper_type]
             data = complete_json(
                 self.model_client,
-                system_prompt=self._read_prompt(prompt_name),
+                system_prompt=(
+                    review_profile.chapter_classifier_prompt
+                    if review_profile
+                    else self._read_prompt(prompt_name)
+                ),
                 user_prompt=(
                     "一次性分类输入中的全部可评审章节。必须原样返回每个 chapter_id 和 "
                     "chapter_name，stage 只能选用提示词规定的标签，不得遗漏或新增章节。"
                 ),
-                payload=self._chapter_payload(review_input),
+                payload=self._chapter_payload(
+                    review_input, review_profile=review_profile
+                ),
                 schema=ChapterClassificationResult.model_json_schema(),
                 temperature=self.temperature,
             )
@@ -141,13 +173,17 @@ class LegacyStep12ClassificationAdapter(PaperClassifier, ChapterClassifier):
             except ValidationError as exc:
                 raise ValueError("Step 2 输出不符合 ChapterClassificationResult") from exc
 
-        self._validate_chapter_result(review_input, result)
+        self._validate_chapter_result(
+            review_input, result, review_profile=review_profile
+        )
         return result
 
     def _validate_chapter_result(
         self,
         review_input: DebateReviewInput,
         result: ChapterClassificationResult,
+        *,
+        review_profile: ResolvedReviewProfile | None = None,
     ) -> None:
         expected = {
             chapter.chapter_id: chapter.chapter_name
@@ -162,7 +198,11 @@ class LegacyStep12ClassificationAdapter(PaperClassifier, ChapterClassifier):
                 f"Step 2 章节集合不一致，期望 {sorted(expected)}，实际 {sorted(actual_ids)}"
             )
         assert review_input.paper_type is not None
-        allowed = set(STEP2_LABELS[review_input.paper_type])
+        allowed = set(
+            review_profile.chapter_taxonomy.allowed_labels
+            if review_profile
+            else STEP2_LABELS[review_input.paper_type]
+        )
         for item in result.chapters:
             if item.chapter_name != expected[item.chapter_id]:
                 raise ValueError(f"Step 2 章节名与 {item.chapter_id} 不一致")
@@ -187,14 +227,23 @@ class LegacyStep12ClassificationAdapter(PaperClassifier, ChapterClassifier):
             ],
         }
 
-    def _chapter_payload(self, review_input: DebateReviewInput) -> dict[str, object]:
+    def _chapter_payload(
+        self,
+        review_input: DebateReviewInput,
+        *,
+        review_profile: ResolvedReviewProfile | None = None,
+    ) -> dict[str, object]:
         assert review_input.paper_type is not None
         return {
             "title": review_input.title,
             "abstract": review_input.abstract[:2_000],
             "keywords": review_input.keywords,
             "paper_type": review_input.paper_type.value,
-            "allowed_stages": STEP2_LABELS[review_input.paper_type],
+            "allowed_stages": (
+                review_profile.chapter_taxonomy.allowed_labels
+                if review_profile
+                else STEP2_LABELS[review_input.paper_type]
+            ),
             "chapter_count": sum(chapter.reviewable for chapter in review_input.chapters),
             "chapters": [
                 {
@@ -212,9 +261,11 @@ class LegacyStep12ClassificationAdapter(PaperClassifier, ChapterClassifier):
     def _read_prompt(filename: str) -> str:
         return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
 
-    @staticmethod
     def _classify_paper_deterministically(
+        self,
         review_input: DebateReviewInput,
+        *,
+        discipline_profile: ResolvedDisciplineProfile | None = None,
     ) -> PaperClassificationResult:
         text = "\n".join(
             [
@@ -225,11 +276,18 @@ class LegacyStep12ClassificationAdapter(PaperClassifier, ChapterClassifier):
                   for chapter in review_input.chapters if chapter.reviewable),
             ]
         )
-        signals = {
-            PaperType.THEORY: ("定理", "证明", "复杂性", "收敛", "理论分析"),
-            PaperType.METHOD: ("算法", "模型", "方法", "优化", "创新"),
-            PaperType.ENGINEERING: ("系统", "平台", "架构", "模块", "部署", "实现"),
-        }
+        signals = (
+            {
+                PaperType(item.legacy_value): tuple(item.signals)
+                for item in discipline_profile.paper_types
+            }
+            if discipline_profile
+            else {
+                PaperType.THEORY: ("定理", "证明", "复杂性", "收敛", "理论分析"),
+                PaperType.METHOD: ("算法", "模型", "方法", "优化", "创新"),
+                PaperType.ENGINEERING: ("系统", "平台", "架构", "模块", "部署", "实现"),
+            }
+        )
         scores = {
             paper_type: sum(text.count(signal) for signal in words)
             for paper_type, words in signals.items()
@@ -247,12 +305,27 @@ class LegacyStep12ClassificationAdapter(PaperClassifier, ChapterClassifier):
         )
 
     def _deterministic_stage(
-        self, review_input: DebateReviewInput, chapter_id: str
+        self,
+        review_input: DebateReviewInput,
+        chapter_id: str,
+        *,
+        review_profile: ResolvedReviewProfile | None = None,
     ) -> str:
         chapter = next(item for item in review_input.chapters if item.chapter_id == chapter_id)
         text = " ".join(
             [chapter.chapter_name, *chapter.section_titles, chapter.content[:2_000]]
         ).casefold()
+        if review_profile is not None:
+            for rule in review_profile.chapter_taxonomy.deterministic_rules:
+                all_match = all(term.casefold() in text for term in rule.all_terms)
+                any_match = (
+                    any(term.casefold() in text for term in rule.any_terms)
+                    if rule.any_terms
+                    else True
+                )
+                if all_match and any_match:
+                    return rule.label
+            return review_profile.chapter_taxonomy.fallback_label
         has_related = any(word in text for word in ("相关工作", "研究现状", "文献综述"))
         if any(word in text for word in ("绪论", "引言", "introduction")):
             return "引言/绪论（包含相关工作）" if has_related else "引言/绪论"

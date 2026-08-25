@@ -10,12 +10,14 @@ import pytest
 from backend.env import ChatMessage, ModelCallOptions, ModelResponse
 from debate_agent_framework.agents import LegacyStep12ClassificationAdapter
 from debate_agent_framework.schemas import ChapterInput, DebateReviewInput, PaperType
+from debate_agent_framework.skills import build_default_skill_resolver
 
 
 class FakeModelClient:
     def __init__(self, responses: Sequence[dict[str, object]]) -> None:
         self.responses = list(responses)
         self.calls = 0
+        self.messages: list[Sequence[ChatMessage]] = []
 
     def complete(
         self,
@@ -23,6 +25,7 @@ class FakeModelClient:
         *,
         options: ModelCallOptions | None = None,
     ) -> ModelResponse:
+        self.messages.append(messages)
         response = self.responses[self.calls]
         self.calls += 1
         return ModelResponse(content=json.dumps(response, ensure_ascii=False))
@@ -83,10 +86,17 @@ def test_model_adapter_reuses_step1_and_method_step2_labels() -> None:
     )
     adapter = LegacyStep12ClassificationAdapter(model_client=client)
     review_input = make_unclassified_input()
+    resolver = build_default_skill_resolver()
+    discipline_profile = resolver.resolve_discipline("artificial_intelligence")
+    review_profile = resolver.resolve("artificial_intelligence", PaperType.METHOD)
 
-    paper = adapter.classify_paper(review_input)
+    paper = adapter.classify_paper(
+        review_input, discipline_profile=discipline_profile
+    )
     classified_input = review_input.model_copy(update={"paper_type": paper.paper_type})
-    chapters = adapter.classify_chapters(classified_input)
+    chapters = adapter.classify_chapters(
+        classified_input, review_profile=review_profile
+    )
 
     assert paper.paper_type is PaperType.METHOD
     assert [item.stage for item in chapters.chapters] == [
@@ -94,6 +104,8 @@ def test_model_adapter_reuses_step1_and_method_step2_labels() -> None:
         "实验验证与结果分析",
     ]
     assert client.calls == 2
+    assert client.messages[0][0].content == discipline_profile.paper_classifier_prompt
+    assert client.messages[1][0].content == review_profile.chapter_classifier_prompt
 
 
 def test_step2_rejects_label_from_another_paper_type() -> None:

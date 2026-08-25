@@ -9,7 +9,13 @@ from uuid import uuid4
 from sqlalchemy import func, select
 
 from ..schemas import DebateReviewInput
-from ..services.jobs import RunSnapshot, RunStageEvent, RunStageStatus, RunStatus
+from ..services.jobs import (
+    RunSnapshot,
+    RunStageEvent,
+    RunStageStatus,
+    RunStatus,
+    resolved_skill_audit,
+)
 from .database import Database
 from .models import (
     AuditLogRecord,
@@ -40,6 +46,8 @@ class SqlAlchemyRunStore:
         paper_id: str | None = None,
         revision_id: str | None = None,
         review_fingerprint: str | None = None,
+        discipline_id: str | None = None,
+        skill_selection_hash: str | None = None,
     ) -> RunSnapshot:
         now = datetime.now(UTC)
         record = ReviewRunRecord(
@@ -47,6 +55,8 @@ class SqlAlchemyRunStore:
             paper_id=paper_id,
             revision_id=revision_id,
             review_fingerprint=review_fingerprint,
+            discipline_id=discipline_id,
+            skill_selection_hash=skill_selection_hash,
             status=RunStatus.QUEUED.value,
             current_stage="queued",
             created_at=now,
@@ -113,13 +123,23 @@ class SqlAlchemyRunStore:
             return self._snapshot(record, events)
 
     def mark_succeeded(self, task_id: str, result: dict[str, Any]) -> RunSnapshot:
-        return self._update(
-            task_id,
-            status=RunStatus.SUCCEEDED,
-            current_stage="completed",
-            result_json=result,
-            error=None,
-        )
+        audit = resolved_skill_audit(result)
+        with self.database.session() as session:
+            record = session.get(ReviewRunRecord, task_id)
+            if record is None:
+                raise KeyError(task_id)
+            record.status = RunStatus.SUCCEEDED.value
+            record.current_stage = "completed"
+            record.result_json = result
+            record.error = None
+            record.updated_at = datetime.now(UTC)
+            record.discipline_id = audit.get("discipline_id") or record.discipline_id
+            record.skill_id = audit.get("skill_id")
+            record.skill_version = audit.get("skill_version")
+            record.skill_profile_hash = audit.get("skill_profile_hash")
+            record.skill_versions_json = audit.get("skill_versions", {})
+            session.flush()
+            return self._snapshot(record, self._stage_events(session, task_id))
 
     def mark_resuming(self, task_id: str) -> RunSnapshot:
         """失败重试：恢复为运行中，但保留已完成步骤的进度记录。"""
@@ -267,6 +287,12 @@ class SqlAlchemyRunStore:
             paper_id=record.paper_id,
             revision_id=record.revision_id,
             review_fingerprint=record.review_fingerprint,
+            discipline_id=record.discipline_id,
+            skill_selection_hash=record.skill_selection_hash,
+            skill_id=record.skill_id,
+            skill_version=record.skill_version,
+            skill_profile_hash=record.skill_profile_hash,
+            skill_versions=record.skill_versions_json or {},
             current_stage=record.current_stage,
             current_stage_label=(
                 current_event.label

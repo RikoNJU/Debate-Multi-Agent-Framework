@@ -33,10 +33,13 @@ from ..ports import (
     SpecialistRegistry,
     WorkloadEvaluator,
 )
+from ..skills.models import ResolvedDisciplineProfile, ResolvedReviewProfile
 
 
 class DebateState(TypedDict, total=False):
     review_input: DebateReviewInput
+    discipline_profile: ResolvedDisciplineProfile
+    review_profile: ResolvedReviewProfile
     context: ReviewContext
     independent_reviews: list[IndependentReview]
     debate_plan: DebatePlan
@@ -107,3 +110,4 @@ class DebateWorkflowServices:
     historical_advice_retriever: HistoricalAdviceRetriever | None = None
     clean_advice_retriever: Any | None = None
     historical_score_retriever: HistoricalScoreRetriever | None = None
+    skill_resolver: Any | None = None

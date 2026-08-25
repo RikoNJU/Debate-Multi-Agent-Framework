@@ -45,7 +45,12 @@ where = ["backend/src", "."]
 namespaces = false
 
 [tool.setuptools.package-data]
-debate_agent_framework = ["prompts/**/*.md"]
+debate_agent_framework = [
+    "prompts/**/*.md",
+    "review_skills/**/*.json",
+    "review_skills/**/*.md",
+    "review_skills/**/*.txt",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["backend/src", "."]

@@ -49,6 +49,12 @@ class RunSnapshot(BaseModel):
     paper_id: str | None = None
     revision_id: str | None = None
     review_fingerprint: str | None = None
+    discipline_id: str | None = None
+    skill_selection_hash: str | None = None
+    skill_id: str | None = None
+    skill_version: str | None = None
+    skill_profile_hash: str | None = None
+    skill_versions: dict[str, str] = Field(default_factory=dict)
     current_stage: str | None = None
     current_stage_label: str | None = None
     progress_percent: int = Field(default=0, ge=0, le=100)
@@ -69,6 +75,8 @@ class InMemoryRunStore:
         paper_id: str | None = None,
         revision_id: str | None = None,
         review_fingerprint: str | None = None,
+        discipline_id: str | None = None,
+        skill_selection_hash: str | None = None,
     ) -> RunSnapshot:
         now = datetime.now(UTC)
         snapshot = RunSnapshot(
@@ -79,6 +87,8 @@ class InMemoryRunStore:
             paper_id=paper_id,
             revision_id=revision_id,
             review_fingerprint=review_fingerprint,
+            discipline_id=discipline_id,
+            skill_selection_hash=skill_selection_hash,
             current_stage="queued",
             current_stage_label="等待开始",
             progress_percent=0,
@@ -175,6 +185,7 @@ class InMemoryRunStore:
             return updated.model_copy(deep=True)
 
     def mark_succeeded(self, task_id: str, result: dict[str, Any]) -> RunSnapshot:
+        audit = resolved_skill_audit(result)
         return self._update(
             task_id,
             status=RunStatus.SUCCEEDED,
@@ -184,6 +195,7 @@ class InMemoryRunStore:
             current_stage_label="评审已完成",
             progress_percent=100,
             stage_started_at=None,
+            **audit,
         )
 
     def mark_failed(self, task_id: str, error: str) -> RunSnapshot:
@@ -235,3 +247,29 @@ class InMemoryRunStore:
             )
             self._runs[task_id] = updated
             return updated.model_copy(deep=True)
+
+
+def resolved_skill_audit(result: dict[str, Any]) -> dict[str, Any]:
+    """Extract a compact, typed audit snapshot from a serialized run result."""
+
+    profile = result.get("review_profile")
+    if not isinstance(profile, dict):
+        return {}
+    versions = {
+        key: str(profile[key])
+        for key in (
+            "base_version",
+            "discipline_version",
+            "classification_version",
+            "rubric_version",
+            "score_schema_id",
+        )
+        if profile.get(key)
+    }
+    return {
+        "discipline_id": profile.get("discipline_id"),
+        "skill_id": profile.get("skill_id"),
+        "skill_version": profile.get("version"),
+        "skill_profile_hash": profile.get("profile_hash"),
+        "skill_versions": versions,
+    }

@@ -1,0 +1,18 @@
+{
+  "skill_id": "ai.common.v1",
+  "discipline_id": "artificial_intelligence",
+  "version": "1.1.0",
+  "status": "active",
+  "classification_version": "ai_paper_type_v2",
+  "paper_types": [
+    {"paper_type_id":"theory","legacy_value":"理论研究","description":"以理论模型、性质分析、形式化推导或证明为主要贡献。","signals":["定理","证明","复杂性","收敛","理论分析","形式化"]},
+    {"paper_type_id":"method","legacy_value":"方法创新","description":"以算法、模型或技术方法创新并通过实验验证为主要贡献。","signals":["算法","模型","方法","优化","创新","消融"]},
+    {"paper_type_id":"engineering","legacy_value":"工程实现","description":"以系统、平台、架构或工程实现及测试为主要贡献。","signals":["系统","平台","架构","模块","部署","实现"]}
+  ],
+  "paper_classifier_prompt_file": "disciplines/artificial_intelligence/common/paper_classifier.md",
+  "specialists_file": "disciplines/artificial_intelligence/common/specialists.json",
+  "rubric_file": "disciplines/artificial_intelligence/common/rubric.json",
+  "rules_file": "disciplines/artificial_intelligence/common/rules.json",
+  "retrieval_file": "disciplines/artificial_intelligence/common/retrieval.json",
+  "terminology_file": "disciplines/artificial_intelligence/common/terminology.txt"
+}

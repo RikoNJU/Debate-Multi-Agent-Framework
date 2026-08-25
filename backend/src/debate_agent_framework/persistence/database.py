@@ -70,6 +70,20 @@ class Database:
                     text("SELECT version_num FROM alembic_version LIMIT 1")
                 ).scalar_one_or_none():
                     return None
+        review_run_columns = {
+            item["name"] for item in inspector.get_columns("review_runs")
+        }
+        has_skill_prerequisites = {
+            "users", "human_reviews", "review_run_stages"
+        }.issubset(tables)
+        if has_skill_prerequisites and {
+            "skill_id", "skill_version", "skill_profile_hash", "skill_versions_json"
+        }.issubset(review_run_columns):
+            return "20260825_0008"
+        if has_skill_prerequisites and {
+            "discipline_id", "skill_selection_hash"
+        }.issubset(review_run_columns):
+            return "20260825_0007"
         if "student_task_access" in tables:
             return "20260819_0003"
         if "users" in tables and "human_reviews" in tables:

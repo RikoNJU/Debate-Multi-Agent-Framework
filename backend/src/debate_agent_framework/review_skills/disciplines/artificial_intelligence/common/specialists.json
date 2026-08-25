@@ -1,0 +1,23 @@
+[
+  {
+    "role": "scientific_soundness",
+    "persona_id": "ai_scientific_soundness_v1",
+    "display_name": "科学性与方法合理性专家",
+    "prompt_file": "disciplines/artificial_intelligence/common/prompts/scientific_soundness.md",
+    "checks": ["research_problem_clear", "method_logic_valid", "contribution_supported"]
+  },
+  {
+    "role": "empirical_evidence",
+    "persona_id": "ai_empirical_evidence_v1",
+    "display_name": "实验证据与可复现性专家",
+    "prompt_file": "disciplines/artificial_intelligence/common/prompts/empirical_evidence.md",
+    "checks": ["dataset_description", "baseline_comparison", "metric_definition", "ablation_study"]
+  },
+  {
+    "role": "global_quality",
+    "persona_id": "ai_global_quality_v1",
+    "display_name": "学术写作与全局质量专家",
+    "prompt_file": "disciplines/artificial_intelligence/common/prompts/global_quality.md",
+    "checks": ["academic_expression", "section_role", "terminology_consistency", "workload_depth"]
+  }
+]

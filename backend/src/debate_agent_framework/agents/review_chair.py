@@ -74,7 +74,7 @@ class DebateReviewChairAgent(ReviewChair):
             ],
         }
         data = self._complete_json(
-            system_prompt=self._system_prompt(),
+            system_prompt=self._system_prompt(context),
             user_prompt=(
                 "请识别独立评审中的关键争议、遗漏和证据缺口，输出 DebatePlan JSON。"
                 "每个 issue 的 participating_roles 必须是至少两个不同角色的列表；"
@@ -113,7 +113,7 @@ class DebateReviewChairAgent(ReviewChair):
             ],
         }
         data = self._complete_json(
-            system_prompt=self._system_prompt(),
+            system_prompt=self._system_prompt(context),
             user_prompt=(
                 "请综合原文、独立初审、Debate 回应和外部证据，输出 GlobalReview JSON。"
                 "resolved_findings 必须逐条给出证据和最终判断，不能使用多数投票；"
@@ -265,12 +265,17 @@ class DebateReviewChairAgent(ReviewChair):
             ) from exc
 
     @staticmethod
-    def _system_prompt() -> str:
+    def _system_prompt(context: ReviewContext | None = None) -> str:
         """Review Chair 的稳定系统职责说明。"""
 
-        return (
+        base = (
             "你是论文评审 Debate Multi-Agent 系统的 Review Chair。"
             "你负责汇总独立评审、识别关键争议、生成定向质疑、综合证据并形成最终裁决。"
             "你不能用简单多数投票替代判断，也不能凭空增加原文或外部证据。"
             "最终输出必须严格符合调用方要求的 JSON schema，并保持原评审流程兼容。"
         )
+        profile = context.review_profile if context else None
+        base_guidance = profile.base_guidance if profile else ""
+        guidance = profile.chair_guidance if profile else ""
+        sections = [base, base_guidance, str(guidance)]
+        return "\n\n".join(section for section in sections if section)

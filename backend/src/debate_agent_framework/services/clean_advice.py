@@ -20,6 +20,7 @@ from ..schemas.domain import (
     ResolvedFinding,
     ReviewSynthesis,
 )
+from ..skills.models import ResolvedReviewProfile, RetrievalOverlay
 from .rag_v2_contract import (
     CONTENT_COLLECTION,
     EMBEDDING_DIMENSIONS,
@@ -66,6 +67,9 @@ class CleanAdviceRetriever:
         timeout_seconds: float = 120.0,
         max_concurrency: int = 2,
         mode: str = "v2",
+        route_id: str = "historical_advice_ai_v2",
+        bm25_index_id: str = "historical_advice_ai_bm25_v2",
+        terminology_version: str = "ai_terms_v1",
     ) -> None:
         if embed_model != EMBEDDING_MODEL:
             raise ValueError(f"Dense V2 requires embedding model {EMBEDDING_MODEL}")
@@ -92,6 +96,9 @@ class CleanAdviceRetriever:
         self.max_advice_per_finding = max_advice_per_finding
         self.timeout_seconds = timeout_seconds
         self.mode = mode
+        self.route_id = route_id
+        self.bm25_index_id = bm25_index_id
+        self.terminology_version = terminology_version
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
         self._client: chromadb.PersistentClient | None = None
@@ -160,6 +167,7 @@ class CleanAdviceRetriever:
         self,
         synthesis: ReviewSynthesis,
         review_input: DebateReviewInput,
+        review_profile: ResolvedReviewProfile | None = None,
     ) -> list[FindingAdviceItem]:
         """Retrieve history only after the Chair confirms a paper-grounded issue."""
 
@@ -172,8 +180,51 @@ class CleanAdviceRetriever:
         ]
         if not confirmed:
             return []
+        route = review_profile.physical_retrieval if review_profile else None
+        top_k = route.top_k.model_dump() if route else {}
+        expected = {
+            "dense": self.dense_top_k,
+            "bm25": self.bm25_top_k,
+            "rrf": self.rrf_top_k,
+            "max_per_finding": self.max_advice_per_finding,
+        }
+        if top_k and top_k != expected:
+            raise ValueError(
+                f"Skill retrieval TopK {top_k} does not match loaded V2 indexes {expected}"
+            )
+        if route:
+            configured = {
+                route.content_collection,
+                route.format_collection,
+            }
+            loaded = {CONTENT_COLLECTION, FORMAT_COLLECTION}
+            if configured != loaded:
+                raise ValueError(
+                    f"Skill physical route {sorted(configured)} does not match "
+                    f"loaded collections {sorted(loaded)}"
+                )
+            loaded_identity = (
+                self.route_id,
+                self.bm25_index_id,
+                self.terminology_version,
+            )
+            configured_identity = (
+                route.route_id,
+                route.bm25_index_id,
+                route.terminology_version,
+            )
+            if configured_identity != loaded_identity:
+                raise ValueError(
+                    f"Skill physical route identity {configured_identity} does not "
+                    f"match loaded retriever {loaded_identity}"
+                )
+        instruction = review_profile.rerank_instruction if review_profile else ""
+        overlay = review_profile.retrieval_overlay if review_profile else None
         results = await asyncio.gather(
-            *(self._retrieve_finding(finding, review_input) for finding in confirmed)
+            *(
+                self._retrieve_finding(finding, review_input, instruction, overlay)
+                for finding in confirmed
+            )
         )
         return [item for group in results for item in group]
 
@@ -181,6 +232,8 @@ class CleanAdviceRetriever:
         self,
         finding: ResolvedFinding,
         review_input: DebateReviewInput,
+        rerank_instruction: str = "",
+        overlay: RetrievalOverlay | None = None,
     ) -> list[FindingAdviceItem]:
         async with self._semaphore:
             dense_query, bm25_query = self._build_finding_query(finding, review_input)
@@ -192,20 +245,25 @@ class CleanAdviceRetriever:
             dense_hits: list[dict[str, Any]] = []
             bm25_hits: list[dict[str, Any]] = []
             try:
-                dense_hits = await self._dense_search(collection, dense_query)
+                dense_hits = await self._dense_search(collection, dense_query, overlay)
             except Exception as exc:
                 logger.warning("Dense V2 failed for %s: %s", finding.finding_id, exc)
             try:
-                bm25_hits = await self._bm25_search(bm25, ids, bm25_query)
+                bm25_hits = await self._bm25_search(bm25, ids, bm25_query, overlay)
             except Exception as exc:
                 logger.warning("BM25 V2 failed for %s: %s", finding.finding_id, exc)
             if not dense_hits and not bm25_hits:
                 return []
 
-            fused = self._rrf_fuse(dense_hits, bm25_hits)[: self.rrf_top_k]
+            fused = self._rrf_fuse(dense_hits, bm25_hits, overlay)[: self.rrf_top_k]
             rerank_results: dict[str, tuple[float, str]] = {}
             try:
-                rerank_results = await self._rerank(dense_query, fused)
+                rerank_query = (
+                    f"{rerank_instruction}\n\n{dense_query}"
+                    if rerank_instruction
+                    else dense_query
+                )
+                rerank_results = await self._rerank(rerank_query, fused)
             except Exception as exc:
                 logger.warning("Reranker failed for %s: %s", finding.finding_id, exc)
 
@@ -244,33 +302,75 @@ class CleanAdviceRetriever:
                 )
             return self._deduplicate(candidates)[: self.max_advice_per_finding]
 
-    async def _dense_search(self, collection: Any, query: str) -> list[dict[str, Any]]:
+    async def _dense_search(
+        self,
+        collection: Any,
+        query: str,
+        overlay: RetrievalOverlay | None = None,
+    ) -> list[dict[str, Any]]:
         embedding = await self._embed(QUERY_INSTRUCTION + query)
-        raw = await asyncio.to_thread(
-            collection.query,
-            query_embeddings=[embedding],
-            n_results=self.dense_top_k,
-            include=["distances"],
-        )
-        return [
-            {
-                "advice_id": advice_id,
-                "rank": rank,
-                "distance": distance,
-            }
-            for rank, (advice_id, distance) in enumerate(
-                zip(raw["ids"][0], raw["distances"][0], strict=True), 1
+        query_args: dict[str, Any] = {
+            "query_embeddings": [embedding],
+            "n_results": self.dense_top_k,
+            "include": ["distances"],
+        }
+        preferred_raw: dict[str, Any] | None = None
+        if overlay and overlay.filter_mode != "none":
+            preferred_raw = await asyncio.to_thread(
+                collection.query,
+                **query_args,
+                where={"paper_type": {"$in": overlay.paper_type_values}},
             )
+        general_raw = (
+            None
+            if overlay and overlay.filter_mode == "strict"
+            else await asyncio.to_thread(collection.query, **query_args)
+        )
+
+        def raw_hits(raw: dict[str, Any] | None) -> list[dict[str, Any]]:
+            if raw is None:
+                return []
+            return [
+                {"advice_id": advice_id, "rank": rank, "distance": distance}
+                for rank, (advice_id, distance) in enumerate(
+                    zip(raw["ids"][0], raw["distances"][0], strict=True), 1
+                )
+            ]
+
+        hits = raw_hits(preferred_raw) + raw_hits(general_raw)
+        seen: set[str] = set()
+        hits = [
+            item
+            for item in hits
+            if not (item["advice_id"] in seen or seen.add(item["advice_id"]))
         ]
+        for rank, item in enumerate(hits, 1):
+            item["rank"] = rank
+        return hits[: self.dense_top_k]
 
     async def _bm25_search(
         self,
         index: Any,
         ids: list[str],
         query: str,
+        overlay: RetrievalOverlay | None = None,
     ) -> list[dict[str, Any]]:
         scores = await asyncio.to_thread(index.get_scores, tokenize_bm25(query))
         ranked = sorted(enumerate(scores), key=lambda pair: -pair[1])
+        if overlay and overlay.filter_mode != "none":
+            preferred = set(overlay.paper_type_values)
+            matching = [
+                pair
+                for pair in ranked
+                if self._records[ids[pair[0]]].paper_type in preferred
+            ]
+            if overlay.filter_mode == "strict":
+                ranked = matching
+            else:
+                matching_positions = {position for position, _ in matching}
+                ranked = matching + [
+                    pair for pair in ranked if pair[0] not in matching_positions
+                ]
         hits: list[dict[str, Any]] = []
         for rank, (position, score) in enumerate(ranked[: self.bm25_top_k], 1):
             if score <= 0:
@@ -342,6 +442,7 @@ class CleanAdviceRetriever:
         self,
         dense_hits: list[dict[str, Any]],
         bm25_hits: list[dict[str, Any]],
+        overlay: RetrievalOverlay | None = None,
     ) -> list[dict[str, Any]]:
         fused: dict[str, dict[str, Any]] = {}
         for hit in dense_hits:
@@ -375,6 +476,11 @@ class CleanAdviceRetriever:
                     "rrf_score": 0.45 / (self.rrf_k + hit["rank"]),
                     "record": record,
                 }
+        if overlay and overlay.filter_mode == "prefer":
+            preferred = set(overlay.paper_type_values)
+            for candidate in fused.values():
+                if candidate["record"].paper_type in preferred:
+                    candidate["rrf_score"] *= overlay.preferred_boost
         return sorted(fused.values(), key=lambda item: -item["rrf_score"])
 
     async def _embed(self, text: str) -> list[float]:
@@ -499,4 +605,11 @@ def build_clean_advice_retriever_from_env() -> CleanAdviceRetriever | None:
         timeout_seconds=float(os.getenv("DEBATE_V2_TIMEOUT_SECONDS", "120")),
         max_concurrency=int(os.getenv("DEBATE_V2_RETRIEVAL_CONCURRENCY", "2")),
         mode=mode,
+        route_id=os.getenv("DEBATE_V2_ROUTE_ID", "historical_advice_ai_v2"),
+        bm25_index_id=os.getenv(
+            "DEBATE_V2_BM25_INDEX_ID", "historical_advice_ai_bm25_v2"
+        ),
+        terminology_version=os.getenv(
+            "DEBATE_V2_TERMINOLOGY_VERSION", "ai_terms_v1"
+        ),
     )

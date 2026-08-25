@@ -26,6 +26,7 @@ from ..schemas import (
     SpecialistRole,
     SummaryAdviceResult,
 )
+from ..skills.models import ResolvedDisciplineProfile, ResolvedReviewProfile
 
 T = TypeVar("T")
 MaybeAwaitable: TypeAlias = T | Awaitable[T]
@@ -42,7 +43,10 @@ class PaperClassifier(Protocol):
     """复用原 Step 1 自动识别论文类型。"""
 
     def classify_paper(
-        self, review_input: DebateReviewInput
+        self,
+        review_input: DebateReviewInput,
+        *,
+        discipline_profile: ResolvedDisciplineProfile | None = None,
     ) -> MaybeAwaitable[PaperClassificationResult]:
         ...
 
@@ -51,7 +55,10 @@ class ChapterClassifier(Protocol):
     """复用原 Step 2 按论文类型识别章节阶段。"""
 
     def classify_chapters(
-        self, review_input: DebateReviewInput
+        self,
+        review_input: DebateReviewInput,
+        *,
+        review_profile: ResolvedReviewProfile | None = None,
     ) -> MaybeAwaitable[ChapterClassificationResult]:
         ...
 

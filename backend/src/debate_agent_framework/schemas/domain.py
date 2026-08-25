@@ -6,6 +6,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..skills.models import ResolvedReviewProfile
+
 
 class StrictModel(BaseModel):
     """拒绝未声明字段，防止 Agent 静默改变协作协议。"""
@@ -184,6 +186,9 @@ class DebateReviewInput(StrictModel):
     """Debate 模块承接原 Step 1、Step 2 和 Step 3 的输入。"""
 
     paper_id: str = Field(min_length=1)
+    discipline_id: str = Field(
+        default="artificial_intelligence", pattern=r"^[a-z0-9_.-]+$"
+    )
     title: str = Field(min_length=1)
     abstract: str = ""
     keywords: list[str] = Field(default_factory=list)
@@ -228,6 +233,7 @@ class ReviewContext(StrictModel):
     step3_advice: list[RetrievedAdvice] = Field(default_factory=list)
     structured_document: StructuredPaperDocument | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
+    review_profile: ResolvedReviewProfile | None = None
 
     @model_validator(mode="after")
     def require_readable_content(self) -> "ReviewContext":
@@ -295,6 +301,7 @@ class RubricAssessment(StrictModel):
     judgement: RubricJudgement
     rationale: str = Field(min_length=1)
     finding_ids: list[str] = Field(default_factory=list)
+    dimension_weights: dict[str, float] = Field(default_factory=dict)
     confidence: float = Field(ge=0.0, le=1.0)
     requires_human_review: bool = False
 
@@ -594,6 +601,7 @@ class DebateWorkflowIssue(StrictModel):
 
 
 class DebateRunResult(StrictModel):
+    review_profile: ResolvedReviewProfile
     context: ReviewContext
     independent_reviews: list[IndependentReview]
     debate_plan: DebatePlan

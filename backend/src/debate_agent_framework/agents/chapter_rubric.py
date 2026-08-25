@@ -226,11 +226,37 @@ def expected_rubric_items(
 ) -> list[dict[str, object]]:
     """Return a stable, compact checklist for one specialist."""
 
+    configured = context.review_profile.rubric_items if context.review_profile else []
     result: list[dict[str, object]] = []
     for chapter in context.chapters:
         if not chapter.reviewable:
             continue
         stage = _stage_key(chapter.stage, chapter.chapter_name)
+        if configured:
+            for definition in configured:
+                stages = definition.stages
+                if definition.role != role.value or not (
+                    "*" in stages or stage in stages
+                ):
+                    continue
+                result.append(
+                    {
+                        "item_id": f"{chapter.chapter_id}:{definition.key}",
+                        "chapter_id": chapter.chapter_id,
+                        "chapter_name": chapter.chapter_name,
+                        "stage": chapter.stage,
+                        "label": definition.label,
+                        "criteria": definition.criteria,
+                        "score_dimensions": [
+                            item.dimension for item in definition.dimensions
+                        ],
+                        "dimension_weights": {
+                            item.dimension: item.weight
+                            for item in definition.dimensions
+                        },
+                    }
+                )
+            continue
         definitions = (*_COMMON_ITEMS, *_STAGE_ITEMS.get(stage, ()))
         for definition in definitions:
             if definition.role is not role:
@@ -244,6 +270,7 @@ def expected_rubric_items(
                     "label": definition.label,
                     "criteria": definition.criteria,
                     "score_dimensions": [item[0] for item in definition.dimensions],
+                    "dimension_weights": dict(definition.dimensions),
                 }
             )
     return result
@@ -273,6 +300,7 @@ def normalize_specialist_assessments(
                     rationale="模型未返回该固定评审小项，不能据此加分或扣分。",
                     confidence=0.0,
                     requires_human_review=True,
+                    dimension_weights=dict(prompt_item.get("dimension_weights", {})),
                 )
             )
             continue
@@ -281,6 +309,7 @@ def normalize_specialist_assessments(
             "chapter_id": str(prompt_item["chapter_id"]),
             "role": role,
             "finding_ids": linked,
+            "dimension_weights": dict(prompt_item.get("dimension_weights", {})),
         }
         if assessment.judgement in {RubricJudgement.POOR, RubricJudgement.CRITICAL} and not linked:
             update.update(
@@ -347,9 +376,12 @@ def rubric_anchor_scores(
     for assessment in assessments:
         score = judgement_scores.get(assessment.judgement)
         definition = _definition_for_item_id(assessment.item_id)
-        if score is None or definition is None:
+        dimensions = tuple(assessment.dimension_weights.items())
+        if not dimensions and definition is not None:
+            dimensions = definition.dimensions
+        if score is None or not dimensions:
             continue
-        for dimension, weight in definition.dimensions:
+        for dimension, weight in dimensions:
             weighted[dimension].append((score, weight))
     return {
         dimension: round(
