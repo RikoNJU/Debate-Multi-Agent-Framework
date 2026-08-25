@@ -44,7 +44,7 @@ async def list_assignments(
 ) -> list[AssignmentResponse]:
     return [
         AssignmentResponse.model_validate(item)
-        for item in repository.list_assignments_for_teacher(user["id"])
+        for item in repository.list_all_papers_for_teacher(user["id"])
     ]
 
 

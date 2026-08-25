@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,6 +19,77 @@ from debate_agent_framework.persistence.models import (
 
 def auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def test_teacher_inbox_sees_all_papers_and_deduplicates_exact_uploads(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    settings = DebateWebSettings(
+        data_dir=str(tmp_path / "data"),
+        database_url=f"sqlite:///{(tmp_path / 'teacher-inbox.db').as_posix()}",
+        bootstrap_admin_username="inbox-admin",
+        bootstrap_admin_password="strong-admin-password",
+        bootstrap_admin_display_name="Inbox Admin",
+    )
+    now = datetime.now(UTC)
+
+    with TestClient(create_app(settings)) as client:
+        with client.app.state.database.session() as session:
+            session.add_all(
+                [
+                    PaperRecord(
+                        id="duplicate-old",
+                        title="Duplicate old",
+                        source_filename="old.pdf",
+                        sha256="a" * 64,
+                        current_revision_id="revision-old",
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                    PaperRecord(
+                        id="duplicate-new",
+                        title="Duplicate new",
+                        source_filename="new.pdf",
+                        sha256="a" * 64,
+                        current_revision_id="revision-new",
+                        created_at=now + timedelta(seconds=1),
+                        updated_at=now + timedelta(seconds=1),
+                    ),
+                    PaperRecord(
+                        id="different-paper",
+                        title="Different paper",
+                        source_filename="different.pdf",
+                        sha256="b" * 64,
+                        current_revision_id="revision-different",
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                ]
+            )
+
+        login = client.post(
+            "/api/debate/portal/auth/login",
+            json={
+                "username": "inbox-admin",
+                "password": "strong-admin-password",
+            },
+        )
+        token = login.json()["access_token"]
+        first = client.get(
+            "/api/debate/portal/teacher/assignments", headers=auth(token)
+        )
+        second = client.get(
+            "/api/debate/portal/teacher/assignments", headers=auth(token)
+        )
+
+    assert first.status_code == 200
+    assert {item["paper_id"] for item in first.json()} == {
+        "duplicate-new",
+        "different-paper",
+    }
+    assert [item["assignment_id"] for item in second.json()] == [
+        item["assignment_id"] for item in first.json()
+    ]
 
 
 def test_teacher_admin_portal_core_workflow(tmp_path) -> None:  # type: ignore[no-untyped-def]

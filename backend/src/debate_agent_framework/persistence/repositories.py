@@ -689,6 +689,65 @@ class PortalRepository:
             ).all()
             return [self._assignment_dict(session, record) for record in records]
 
+    def list_all_papers_for_teacher(self, reviewer_id: str) -> list[dict[str, Any]]:
+        """Return one reviewable assignment per exact PDF across all uploads."""
+
+        now = datetime.now(UTC)
+        with self.database.session() as session:
+            reviewer = session.get(UserRecord, reviewer_id)
+            if (
+                reviewer is None
+                or reviewer.role not in {"teacher", "admin"}
+                or not reviewer.is_active
+            ):
+                raise KeyError("reviewer")
+
+            papers = session.scalars(
+                select(PaperRecord).order_by(PaperRecord.updated_at.desc())
+            ).all()
+            unique_papers: list[PaperRecord] = []
+            seen_hashes: set[str] = set()
+            for paper in papers:
+                if paper.sha256 in seen_hashes:
+                    continue
+                seen_hashes.add(paper.sha256)
+                unique_papers.append(paper)
+
+            assignments: list[PaperAssignmentRecord] = []
+            for paper in unique_papers:
+                assignment = session.scalar(
+                    select(PaperAssignmentRecord).where(
+                        PaperAssignmentRecord.paper_id == paper.id,
+                        PaperAssignmentRecord.reviewer_id == reviewer_id,
+                    )
+                )
+                if assignment is None:
+                    assignment = PaperAssignmentRecord(
+                        id=uuid4().hex,
+                        paper_id=paper.id,
+                        reviewer_id=reviewer_id,
+                        assigned_by_id=reviewer_id,
+                        status="assigned",
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    session.add(assignment)
+                    session.flush()
+                    self._audit(
+                        session,
+                        actor_id=reviewer_id,
+                        action="paper.auto_assigned",
+                        resource_type="assignment",
+                        resource_id=assignment.id,
+                        details={"paper_id": paper.id, "source": "teacher_inbox"},
+                    )
+                assignments.append(assignment)
+
+            return [
+                self._assignment_dict(session, assignment)
+                for assignment in assignments
+            ]
+
     def get_assignment(
         self, assignment_id: str, *, reviewer_id: str | None = None
     ) -> dict[str, Any] | None:

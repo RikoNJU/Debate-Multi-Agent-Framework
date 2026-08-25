@@ -34,7 +34,11 @@ export default function TeacherPortalPage() {
   const load = async () => {
     try {
       const [assignments, criterionList] = await Promise.all([portalApi.assignments(), portalApi.criteria()]);
-      setItems(assignments); setCriteria(criterionList);
+      const uniqueByPaper = new Map<string, Assignment>();
+      assignments.forEach(item => {
+        if (!uniqueByPaper.has(item.paper_id)) uniqueByPaper.set(item.paper_id, item);
+      });
+      setItems(Array.from(uniqueByPaper.values())); setCriteria(criterionList);
     } catch (exc) { setMessage(exc instanceof Error ? exc.message : '工作台加载失败'); }
   };
 
