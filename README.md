@@ -1,266 +1,160 @@
-# Debate 论文评审 Multi-Agent 框架
+# 睿文智评论文评审系统
 
-本项目是一个面向论文评审任务的 Evidence-Grounded Debate Multi-Agent 后端代码框架。它通过三个全文视角 Specialist、Review Chair 和一轮定向 Debate，在保持原 Step 4/5 输出兼容的前提下提升评审质量。
+基于 **FastAPI、LangGraph、MinerU 和混合 RAG** 的可追溯多智能体论文评审系统。系统将论文解析为可定位的结构化证据，由三位 Specialist 独立初审、Review Chair 组织定向讨论并裁决，再生成修改建议和可解释的 18 维评分。
 
-## Multi-Agent 设计简介
+项目包含可运行的学生端、教师端和教务端，当前重点是人工智能学科论文评审，并通过声明式 Review Skill 为后续扩展学科与论文类型保留边界。
 
-Multi-Agent 不是简单顺序调用多个 Prompt，而是把复杂任务拆给多个职责明确的智能体，并设计它们之间的信息共享、任务协作、冲突处理和结果验证机制。
+![论文评审工作流](assets/workflow.svg)
 
-在论文评审任务中，单一模型容易遗漏问题，或者把“章节理解、质量判断、结构评价、评分影响、修改建议”混在一起。该框架将核心评审拆为：
+## 核心能力
+
+- **结构化 PDF 解析**：MinerU VLM/OCR 生成 Markdown、`content_list.json` 和图表资源，保留章节、页码、坐标、公式及稳定 block/chunk ID。
+- **多智能体评审**：三位 Specialist 独立分析（并发度可配置），Chair 识别冲突、发起定向 Debate 并完成证据化裁决。
+- **LangGraph 编排**：显式管理工作流状态、节点进度、失败重试、检查点和降级路径。
+- **混合历史建议 RAG**：对已确认 Finding 执行 Dense + BM25 召回、RRF 融合与 Reranker 精排，历史建议只辅助修改方案，不参与评分。
+- **可解释评分**：复用旧项目三类论文标准，将结构指标和 12 个语义指标汇总为 18 维等级，再通过确定性规则计算总分。
+- **学科 Review Skill**：通过 JSON、Markdown 和 TXT 组合基础规则、学科规则、论文类型 Overlay、专家角色及检索配置，并冻结解析后的配置快照用于审计。
+- **人工复核闭环**：教师在系统初评分上调整并提交终审，教务负责账号、分配、发布、统计、审计和评审表导出。
+- **本地持久化**：SQLite 保存业务数据和 LangGraph 检查点，本地文件系统保存 PDF、MinerU 产物及评审结果。
+
+## 技术栈
+
+| 层次 | 技术 |
+| --- | --- |
+| 后端/API | Python 3.11、FastAPI、Pydantic、SQLAlchemy、Alembic |
+| Agent 编排 | LangGraph、OpenAI-compatible LLM API |
+| PDF 解析 | MinerU VLM/OCR、`content_list.json` |
+| RAG | Chroma、Qwen3-Embedding-8B（4096维）、Jieba BM25、RRF、Qwen3-Reranker-0.6B |
+| 数据 | SQLite、本地文件存储、LangGraph SQLite Checkpoint |
+| 前端 | React 18、TypeScript、Vite、Tailwind CSS |
+| 测试 | Pytest |
+
+## 完整工作流
 
 ```text
-Context Planner 负责构造评审上下文
-Specialist Agents 负责多视角独立初审
-Review Chair 负责识别争议、路由问题和最终裁决
-Evidence Retriever 负责为关键争议补充外部证据
-Original Pipeline Adapter 负责复用原 Step 6/7
+上传 PDF
+  -> MinerU 结构化解析
+  -> Step 1 论文类型分类
+  -> Step 2 章节阶段分类
+  -> 加载并冻结 ResolvedReviewProfile
+  -> Context Planner 构造共享论文证据
+  -> 三位 Specialist 独立初审
+  -> Chair 规划争议与定向讨论
+  -> Specialist 补充证据，Chair 二次裁决
+  -> Step 5 结构、规范与工作量评价
+  -> 已确认 Finding 触发历史建议混合 RAG
+  -> Step 6 汇总关键修改建议
+  -> Step 7 生成 18 维评分与总分
+  -> 教师复核，教务发布
 ```
 
-这样的设计避免用简单多数投票代替判断，而是让最终结论基于证据、争议回应和兼容性校验。
+三位 Specialist 共享同一份只读论文上下文和 Review Skill，但初审意见彼此隔离；只有 Chair 能看到全部初审结果并决定讨论问题。负面判断必须关联可定位 Finding，证据不足且讨论后仍无法确认的判断会被排除并降低置信度，不再产生虚假的 `human_review` 状态。
 
-![Debate 评审流程](assets/workflow.svg)
+## PDF 与 Chunk
 
-## 代码框架简介
+系统不把整篇 PDF 提取成纯文本后按固定 Token 粗切。新论文先经 MinerU 恢复版面和阅读顺序，再从 `content_list.json` 构造带页码、坐标、内容类型和章节归属的结构化 Block；Markdown 解析仅作为降级路径。
 
-框架采用后端工程结构：
+历史建议库采用“一个评审问题一个 Chunk”的语义粒度，典型字段包括问题位置、上下文、修改建议、分析过程和原文证据。公式、HTML、图片路径等噪声会从检索文本中清理，完整原文仍保留在 Canonical JSONL 中供审计。
 
 ```text
-backend/src/debate_agent_framework/
+Canonical JSONL
+  |-- dense_text  -> Qwen3-Embedding-8B -> Chroma Dense V2
+  |-- bm25_text   -> Jieba 分词         -> BM25 V2
+  `-- rerank_text -> Qwen3-Reranker
+
+Dense Top 5 + BM25 Top 5 -> RRF Top 3 -> Reranker
 ```
 
-包内按职责拆分为 Agent、Workflow、Schema、Port、Service、Router 等目录。核心思想是：
+当前 V2 构建脚本从旧系统已经形成的七字段历史问题 Chunk 迁移数据，并不会自动把新评审写回知识库。真实论文、历史库和生成索引均不提交 Git。
 
-- `schemas/` 定义评审输入、争议、证据、回应和兼容输出结构；
-- `ports/` 定义 Specialist、Chair、RAG 和原流程适配接口；
-- `agents/` 放具体 Agent 或 Demo 实现；
-- `backend/env/` 统一模型配置、消息格式和调用入口；
-- `workflows/` 编排独立初审、证据检索、定向 Debate 和 Step 6/7，并提供默认工作流装配入口；
-- `services/` 管理任务生命周期；
-- `routers/` 提供 API 入口。
+## 用户入口
 
-这种结构可以让后续开发者在不重写整体流程的前提下，逐步替换真实 LLM、Evidence RAG、历史评分 RAG 和原睿文智评 Step 6/7 适配器。
+- 学生端：`/student`，无需注册登录，支持单篇或批量上传，并在当前浏览器查看自己的任务。
+- 工作人员端：`/login`，教师与教务统一登录，进入 `/workspace`。
+- 教师端：查看分配的论文、原始 PDF、AI 证据和初评分，保存草稿并提交终审。
+- 教务端：管理账号和分配，发布终审结果，查看统计、审计记录并导出评审表。
+
+## 快速启动
+
+### 1. 后端
+
+```powershell
+conda activate langgraph
+pip install -e ".[dev,web,ingestion,rag]"
+Copy-Item backend/.env.example backend/.env
+python -m debate_agent_framework.main
+```
+
+后端运行于 `http://localhost:8020`，健康检查为 `GET /api/debate/health`。
+
+`backend/.env` 至少需要按运行方式配置：
+
+```env
+DEBATE_RUNTIME=real
+DEBATE_API_KEY=your-model-api-key
+DEBATE_MINERU_TOKEN=your-mineru-token
+
+DEBATE_BOOTSTRAP_ADMIN_USERNAME=admin
+DEBATE_BOOTSTRAP_ADMIN_PASSWORD=replace-with-a-strong-password
+```
+
+首次启动创建管理员后，应从环境文件移除引导密码。未配置真实服务时，可将 `DEBATE_RUNTIME` 设为 `demo` 验证工作流结构。
+
+### 2. 前端
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+浏览器打开 `http://localhost:3000`。Vite 会将 `/api` 请求代理到 `http://localhost:8020`。
+
+### 3. 测试与 CLI
+
+```powershell
+pytest
+debate-demo --input examples\review_input.json --output output\result.json
+python -m debate_agent_framework.cli --runtime real --input examples\review_input.json --output output\result_real.json
+```
 
 ## 项目结构
 
 ```text
-backend/src/debate_agent_framework/    后端源码，按职责拆分 Agent、模型、工作流、接口和服务
-frontend/                              预留前端资源
-examples/                      示例评审输入
-tests/                         工作流与接口测试
-docs/                          设计方案和代码说明
-assets/                        流程图
+backend/src/debate_agent_framework/
+  agents/          Specialist、Chair、评分与兼容适配器
+  ingestion/       MinerU 接入和结构化论文解析
+  review_skills/   声明式学科及论文类型 Skill
+  workflows/       LangGraph 状态与工作流节点
+  services/        任务、持久化和历史建议服务
+  routers/         论文、任务、认证、教师和教务 API
+  persistence/     SQLAlchemy 模型、Repository 与迁移
+frontend/          学生端和工作人员端 React 应用
+scripts/           历史建议清洗、Dense/BM25 构建与评测工具
+tests/             工作流、RAG、评分、权限与持久化测试
+docs/              架构、运行手册和未实施方案
 ```
 
-## 运行
+## 实现边界
 
-```powershell
-conda activate langgraph
-cd D:\debate-multi-agent-framework
-pip install -e ".[dev,web]"
-pytest
-debate-demo --input examples\review_input.json --output output\result.json
-```
+以下能力已有代码，但尚不能宣称达到生产验证标准：
 
-可选接口启动命令：
+- 历史建议 V2 的清洗、索引构建、混合召回和评测工具已实现，但仓库不包含敏感语料、生成索引和人工相关性标注，尚无可报告的召回率提升数据。
+- MinerU 解析、评分稳定性和多智能体效果尚未在脱敏的大规模真实论文集上形成完整评测报告。
+- 服务重启后可查询已持久化任务，运行中的任务会标记为 `interrupted`，但尚无独立任务队列和自动恢复执行能力。
+- 已实现基础教师/管理员权限和审计，尚无多组织隔离、细粒度数据权限及申诉流程。
+- 当前可用 Review Skill 主要围绕人工智能学科；其他学科目录只应视为扩展结构或草案，不能视为已完成适配。
 
-```powershell
-python -m debate_agent_framework.main
-```
+## 文档
 
-### Demo 与真实模型运行模式
+- [工作流说明](docs/workflow-guide.md)
+- [代码框架](docs/code-framework.md)
+- [本地持久化](docs/local-persistence.md)
+- [评分稳定性设计](docs/scoring-reproducibility.md)
+- [历史建议 RAG V2 运行手册](docs/historical-advice-rag-v2-runbook.md)
+- [历史建议 RAG 改造方案](docs/historical-advice-rag-redesign.md)
+- [学科 Review Skill 方案](docs/discipline-review-skills-proposal-v1.md)
 
-项目支持两种运行模式，通过 `--runtime` 或环境变量 `DEBATE_RUNTIME` 切换：
+## 数据安全
 
-```text
-demo  确定性 Demo Agent，用于测试和回归基线（默认）
-real  真实 LLM 驱动的 Agent，用于真实服务集成与评审验证
-```
-
-- [代码框架说明](docs/code-framework.md)
-- [代码框架详细说明](docs/code-framework-detailed.md)
-- [V0 设计方案](docs/design-v0.md)
-
-当前默认工作流装配确定性的 Demo Agent，只用于验证框架闭环和原 Step 4/5 兼容输出。
-真实模式通过 `DebateWorkflow.real()` 使用真实 Specialist 与 Review Chair，并自动读取
-`backend/.env`（参照 `backend/.env.example` 配置 `DEBATE_API_KEY`、`DEBATE_BASE_URL`、
-`DEBATE_MODEL`）。
-
-```bash
-# 真实模型评审
-python -m debate_agent_framework.cli --runtime real \
-  --input examples/review_input.json --output output/result_real.json
-```
-
-真实模式在输入已包含 Step 1/2 结果时，模型调用数为 `8 + 定向问题数`：3 份独立
-初审、1 次争议计划、每个定向问题 1 次回应、1 次综合裁决、1 次 Step 5、1 次
-Step 6 和 1 次 Step 7。
-MinerU 输入会增加 1 次 Step 2 章节分类；未提供论文类型时再增加 1 次 Step 1 分类。
-同步模型客户端会在线程池中并发运行，不阻塞 Web 事件循环。
-
-### 复用旧 MinerU 与历史建议库
-
-安装接入依赖：
-
-```powershell
-pip install -e ".[web,ingestion,rag]"
-```
-
-MinerU 可以直接沿用旧项目的 `MINERU_TOKEN`，也可以使用优先级更高的
-`DEBATE_MINERU_TOKEN`：
-
-```text
-POST /api/debate/papers/parse   只解析 PDF，返回 Markdown 和产物列表
-POST /api/debate/papers/review  解析 PDF、构建结构化论文输入并创建评审任务
-GET  /api/debate/runs/{task_id} 查询任务状态和最终结果
-```
-
-`/papers/review` 使用 multipart 表单上传 `pdf`。`paper_type` 为可选字段，可取
-`理论研究`、`方法创新` 或 `工程实现`；未提供时，真实模式会按旧 Step 1 标准自动分类。
-MinerU 切分出的正文会按分类结果使用旧 Step 2 的对应标签集重新分类。可选提供
-`paper_id` 和 `title`。解析器会从 MinerU Markdown 提取摘要、关键词、章节、小节和
-参考文献，并读取 `content_list.json` 建立稳定 block/chunk ID、页码、坐标、图表、
-公式和章节映射。结构化解析质量低时标记 `requires_parse_review`，不会直接扣论文分。
-未提供 `paper_id` 时根据正文哈希生成稳定标识。
-
-学生端支持一次选择或拖拽多篇 PDF。前端按顺序调用 `/papers/review`，为每篇论文
-分别创建任务并显示提交进度，避免并发请求压垮 MinerU 服务。
-单篇上传仍创建一个独立任务，并在任务内部调用三位 Specialist。失败或中断的任务可
-复用已持久化的 MinerU 结构化输入重新评审，无需再次上传和解析 PDF。
-
-模型调用会对断连、超时、限流和服务端瞬时错误执行有上限的指数退避重试；参数、
-鉴权等普通客户端错误会立即返回。可通过 `DEBATE_MAX_RETRIES`、
-`DEBATE_RETRY_BASE_SECONDS` 和 `DEBATE_RETRY_MAX_SECONDS` 调整重试策略。
-任务状态会持久化每个 LangGraph 节点的开始、完成和失败时间，并分别记录三位
-Specialist 的初审状态。学生任务页显示当前阶段、完成百分比、已用时间和长时间无
-更新提醒。模型客户端已经完成网络重试后，Agent 层不会对同一网络错误再次整轮重试；
-输出结构不合法时仍保留业务校验重试。
-真实模型的长 JSON 请求使用流式响应，默认最多生成 4096 tokens，并通过
-`DEBATE_THINKING_BUDGET` 限制推理预算。三位 Specialist 保持上下文和意见相互独立，
-但通过 `DEBATE_SPECIALIST_CONCURRENCY` 控制同时请求数；
-V4 Pro 建议从 `1` 开始，确认模型服务额度和稳定性后再逐步提高。
-
-历史建议 RAG 可以直接读取旧项目运行时 Chroma 库：
-
-```env
-PAPER_REVIEW_BACKEND_ROOT=D:\paper-review-backend
-CLOUD_API_KEY=your-dashscope-key
-DEBATE_RUNTIME=real
-```
-
-系统会从旧仓根目录推导
-`backend/data/databases/user_result_cloud`，并查询：
-
-```text
-user_result_content_collection_cloud_4b
-user_result_format_collection_cloud_4b
-```
-
-旧库由 DashScope `text-embedding-v4`、2048 维向量建立。除非旧库本身已经重建，
-不要修改 `DEBATE_EMBEDDING_MODEL` 或 `DEBATE_EMBEDDING_DIMENSIONS`，否则查询向量
-会与库内向量不兼容。也可以用 `DEBATE_RAG_CHROMA_PATH` 显式指定 Chroma 目录。
-
-历史建议 V2 不覆盖旧库。它从旧库导出 Canonical JSONL，再分别建立
-`Qwen3-Embedding-8B/4096` Dense V2 和 Jieba BM25 V2：
-
-```powershell
-python scripts/batch_clean.py --source-db D:\paper-review-backend\backend\data\databases\user_result_cloud --strict
-python scripts/build_chroma_dense_v2.py
-python scripts/build_bm25_v2.py
-```
-
-两个构建器只读同一份 `historical_advice_v2.jsonl`，并在 Manifest 中校验
-语料校验和、匿名 `advice_id`集合、Embedding 模型、维度和分词版本。
-构建完成后配置 `RAG_V2_CORPUS_PATH`、`DEBATE_V2_CHROMA_PATH` 和
-`DEBATE_V2_BM25_PATH`，先使用 `DEBATE_V2_MODE=shadow_v2`，验证后再切换为 `v2`。
-
-## 当前真实工作流
-
-```text
-Step 1 论文类型分类 -> Step 2 章节阶段分类 -> Context Planner
--> 三专家并发独立初审 -> Chair 争议计划
--> 外部证据检索（未配置时显式降级）-> 定向 Debate -> Chair 综合裁决
--> Step 4 兼容装配 -> Step 5 三类论文结构/工作量评价 -> 兼容性校验
--> 已确认 Finding 的 Dense V2 + BM25 + RRF + Reranker
--> Step 6 关键建议汇总 -> 历史评分检索（未配置时为空）
--> Step 7 十二维评分
-```
-
-真实模式不会使用 Demo 外部证据或 Demo 历史评分案例。论文内证据必须包含有效
-`chapter_id`，且引用文本能在对应章节原文中定位；有 MinerU 结构时还会校验并补齐
-`block_id`、`chunk_id`、页码和坐标。Step 5、Step 6 或 Step 7 失败时任务会标记
-失败，不会返回缺少最终分数的“成功”结果。
-
-Step 5 已复用旧项目理论研究、方法创新、工程实现三套标准。摘要、目录、章节、
-参考文献和致谢等可确定事实由代码计算，模型只结合论文类型与 Agent 裁决撰写整体
-工作量分析。Step 6 延续“最多五条且覆盖不同章节”的旧规则，每条建议额外保留
-严重程度、`finding_id`、`evidence_id`、受影响章节和最多两条
-历史建议来源。历史建议只帮助 Step 6 改写方案；Step 7 使用独立的
-RAG-free 基础汇总，评分载荷不包含历史建议。
-
-Step 7 直接复用旧项目 `dev` 分支的十二项定义和总分算法：五个 Step 5 结构项、
-一个参考文献项和十二个语义项先转换为 18 个 `0-3` 等级项，再按旧
-`evaluate_paper_score` 的判档及加减分公式生成总分和 `优秀/良好/一般/较差` 等级。
-结果中的 `legacy_raw_scores`、`legacy_level_scores` 和 `scoring_rule` 用于完整追溯。
-
-## 尚未达到生产要求的部分
-
-- 外部学术证据检索已接入 OpenAlex（`DEBATE_EVIDENCE_PROVIDER=openalex`），
-  按查询降级、不拖垮核心评审；历史评分案例检索已支持从匿名 Chroma 索引读取，
-  带异常分数和数据污染检测（`DEBATE_RAG_SCORE_COLLECTION`）。两者均未配置时
-  保持为空并记录 warning。
-- 论文、MinerU 产物、结构化输入、任务状态和最终结果已使用本地文件系统与
-  SQLite 持久化；服务重启后可继续查询。运行中的任务会标记为 `interrupted`，
-  但尚无独立任务队列和自动恢复执行能力。
-- 已实现教师/管理员认证授权、论文分配、人工评审和审计日志；尚无组织隔离和申诉流程。
-- 尚无经过脱敏真实论文验证的解析准确率、评分校准和多智能体回归评测报告。
-- 历史建议 V2 的构建、在线混合召回和标注评测工具已实现；当前仓库不包含
-  敏感旧库、生成后的索引或人工相关性标注，因此不宣称已取得召回率改善。
-
-## 教师与教务工作台
-
-系统在论文持久化和多智能体 Pipeline 上增加了数据库驱动的人工复核闭环：
-
-```text
-AI 评审完成 -> 教务分配教师 -> 教师查看 PDF、AI 证据与初评分
--> 保存人工评审草稿 -> 提交并锁定终审 -> 教务统计与 CSV 导出
-```
-
-首次启动前在 `backend/.env` 配置引导管理员：
-
-```env
-DEBATE_BOOTSTRAP_ADMIN_USERNAME=admin
-DEBATE_BOOTSTRAP_ADMIN_PASSWORD=replace-with-a-strong-password
-DEBATE_BOOTSTRAP_ADMIN_DISPLAY_NAME=系统管理员
-```
-
-管理员创建后应删除密码环境变量。密码使用 PBKDF2-SHA256 加盐存储，登录返回有限期
-不透明会话令牌；教师和管理员接口分别执行服务端角色校验。
-
-系统前端按使用者拆为两个并列入口：
-
-- 学生端 `/student`：无需注册或登录，上传论文后凭任务编号自由查看分析结果；
-- 工作人员端 `/login`：统一登录后进入 `/workspace`，在同一会话中使用论文评审和
-  教务管理功能。`admin` 账号兼具两种能力，普通 `teacher` 账号仅使用评审功能。
-
-登录令牌保存在当前浏览器并由服务端数据库会话校验，默认有效期为 7 天。工作人员
-切换到学生端不会退出；再次进入 `/workspace` 时会自动恢复有效会话，不会重复登录。
-旧地址 `/teacher`、`/admin`、`/teacher/login` 和 `/admin/login` 保留重定向兼容。
-
-学生端无需访问码。上传论文后即可凭任务编号自由查看评审进度、分析结果、原始 PDF
-和已发布的教师终审评分，任务记录保存在当前浏览器中。
-
-门户 API 位于 `/api/debate/portal`：
-
-- `auth`：登录、当前用户、退出；
-- `teacher`：18 项标准、分配任务、PDF、草稿和终审；
-- `admin`：账号、论文分配、终审发布、统计、审计记录和 CSV 导出；
-- `student`：下载学生提交的论文原文和评审表。
-
-人工总分由后端按 `round(sum(18 项评分) / 54 * 100)` 统一换算。终审提交后锁定，
-每次分配、草稿保存、终审提交和教务发布都会写入审计日志。教师提交后结果保持内部
-状态，只有教务显式发布后，学生端才能看到人工总分和公开修改建议；教师内部备注不会
-返回给学生。
-
-教师第一次打开评审任务时，18 项人工评分默认载入系统 Step 7 产生的
-`legacy_level_scores`，教师在此基础上复核调整，无需从全零重新选择。历史任务若只
-保存了系统总分，则按总分生成等价的 18 项初始等级；已保存的人工草稿始终优先恢复。
+论文、解析产物、历史建议语料和索引可能包含敏感信息。提交代码前必须确认这些数据未进入 Git，并在用于 RAG、评测或微调前完成匿名化、授权和数据治理检查。
