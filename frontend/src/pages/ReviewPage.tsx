@@ -1,5 +1,5 @@
-﻿import { ChangeEvent, DragEvent, useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { ChangeEvent, DragEvent, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ArrowRight, Clock3, CircleAlert, FileText, FolderOpen, LoaderCircle, Plus, Search, UploadCloud, X } from 'lucide-react';
 
 import {
@@ -226,14 +226,11 @@ export default function ReviewPage() {
   return (
     <div className="workspace">
       <header className="topbar">
-        <div className="brand-mark"><span>南京大学</span></div>
+        <div className="brand-mark">
+          <img src="/assets/rwzp-logo.jpg" alt="睿文智评标志" />
+        </div>
         <div>
           <strong>睿文智评</strong>
-          <small>Academic Review Workspace</small>
-        </div>
-        <div className="topbar-right">
-          <span className="status-dot" /> 系统运行正常
-          <Link className="role-link" to="/workspace">工作人员端</Link>
         </div>
       </header>
 
@@ -241,9 +238,7 @@ export default function ReviewPage() {
         <section className="paper-pane">
           <div className="pane-heading">
             <div>
-              <span className="eyebrow">NEW REVIEW</span>
               <h1>创建论文评审</h1>
-              <p>上传论文后，三位专业评审员将独立分析并进行证据辩论。</p>
             </div>
             <div className="paper-icon"><FileText size={26} /></div>
           </div>
@@ -285,16 +280,6 @@ export default function ReviewPage() {
                 <em>选择论文文件</em>
               </>
             )}
-          </div>
-
-          <div className="review-brief">
-            <span>评审维度</span>
-            <div>
-              <b>科学严谨性</b>
-              <b>实证证据</b>
-              <b>全局质量</b>
-            </div>
-            <p>系统将保留每一项结论的讨论过程与外部证据来源。</p>
           </div>
 
           {errorText && (
