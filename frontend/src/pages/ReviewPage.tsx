@@ -225,14 +225,6 @@ export default function ReviewPage() {
 
   return (
     <div className="workspace">
-      <header className="topbar">
-        <div className="brand-mark">
-          <img src="/assets/rwzp-logo.jpg" alt="睿文智评标志" />
-        </div>
-        <div>
-          <strong>睿文智评</strong>
-        </div>
-      </header>
 
       <main className="desk-layout">
         <section className="paper-pane">
