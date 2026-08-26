@@ -71,10 +71,7 @@ class DebatePosition(StrEnum):
 
 class ResolutionStatus(StrEnum):
     CONFIRMED = "confirmed"
-    MOSTLY_CONFIRMED = "mostly_confirmed"
-    DISPUTED = "disputed"
-    INSUFFICIENT = "insufficient"
-    HUMAN_REVIEW = "human_review"
+    REJECTED = "rejected"
 
 
 class RubricJudgement(StrEnum):
@@ -85,7 +82,6 @@ class RubricJudgement(StrEnum):
     ACCEPTABLE = "acceptable"
     POOR = "poor"
     CRITICAL = "critical"
-    HUMAN_REVIEW = "human_review"
 
 
 class IssueSeverity(StrEnum):
@@ -280,15 +276,13 @@ class ReviewFinding(StrictModel):
     confidence: float = Field(ge=0.0, le=1.0)
     needs_external_verification: bool = False
     verification_query: str | None = None
-    requires_human_review: bool = False
 
     @model_validator(mode="after")
     def enforce_evidence_boundary(self) -> "ReviewFinding":
         if self.needs_external_verification and not self.verification_query:
             raise ValueError("需要外部查证的问题必须给出 verification_query")
         if self.severity in {FindingSeverity.FATAL, FindingSeverity.MAJOR} and not self.evidence:
-            if self.confidence > 0.5 or not self.requires_human_review:
-                raise ValueError("无证据的高严重度问题必须降低置信度并标记人工复核")
+            raise ValueError("fatal/major 问题必须提供可核验论文证据")
         return self
 
 
@@ -303,7 +297,6 @@ class RubricAssessment(StrictModel):
     finding_ids: list[str] = Field(default_factory=list)
     dimension_weights: dict[str, float] = Field(default_factory=dict)
     confidence: float = Field(ge=0.0, le=1.0)
-    requires_human_review: bool = False
 
 
 class IndependentReview(StrictModel):
@@ -404,15 +397,11 @@ class ResolvedFinding(StrictModel):
     affected_chapter_ids: list[str] = Field(default_factory=list)
     dissenting_views: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
-    requires_human_review: bool = False
 
     @model_validator(mode="after")
     def enforce_final_evidence_boundary(self) -> "ResolvedFinding":
-        if self.severity in {FindingSeverity.FATAL, FindingSeverity.MAJOR} and not self.evidence:
-            allowed = {ResolutionStatus.INSUFFICIENT, ResolutionStatus.HUMAN_REVIEW}
-            degraded = self.status in allowed or self.requires_human_review
-            if not degraded or self.confidence > 0.5:
-                raise ValueError("最终高严重度结论缺少证据时必须降级并降低置信度")
+        if self.status is ResolutionStatus.CONFIRMED and not self.evidence:
+            raise ValueError("Chair 确认的问题必须提供可核验论文证据")
         return self
 
 
@@ -433,7 +422,6 @@ class GlobalReview(StrictModel):
     author_questions: list[str] = Field(default_factory=list)
     dimensions: list[DimensionEvaluation] = Field(default_factory=list)
     resolved_findings: list[ResolvedFinding] = Field(default_factory=list)
-    unresolved_issue_ids: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
 
 
@@ -513,7 +501,6 @@ class SummaryAdviceItem(StrictModel):
     finding_ids: list[str] = Field(min_length=1)
     evidence_ids: list[str] = Field(default_factory=list)
     affected_chapter_ids: list[str] = Field(default_factory=list)
-    requires_human_review: bool = False
     historical_sources: list[FindingAdviceItem] = Field(
         default_factory=list,
         max_length=2,

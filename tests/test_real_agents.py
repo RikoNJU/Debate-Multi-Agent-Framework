@@ -63,6 +63,23 @@ class FakeModelClient:
         )
         self.user_messages.append(user_message)
         content = self.responses[self.calls]
+        if "required_rubric_items" in user_message:
+            payload = json.loads(user_message.split("输入数据：\n", 1)[1])
+            parsed = json.loads(content)
+            if "review_id" in parsed and not parsed.get("rubric_assessments"):
+                parsed["rubric_assessments"] = [
+                    {
+                        "item_id": item["item_id"],
+                        "chapter_id": item["chapter_id"],
+                        "role": parsed["role"],
+                        "judgement": "good",
+                        "rationale": "该固定小项达到本科论文的良好水平。",
+                        "finding_ids": [],
+                        "confidence": 0.82,
+                    }
+                    for item in payload["required_rubric_items"]
+                ]
+                content = json.dumps(parsed, ensure_ascii=False)
         self.calls += 1
         return ModelResponse(content=content)
 
@@ -230,7 +247,6 @@ SUMMARY_JSON = json.dumps(
                 "finding_ids": ["F-SS-1"],
                 "evidence_ids": ["PAPER-C2"],
                 "affected_chapter_ids": ["C2"],
-                "requires_human_review": False,
             }
         ],
         "rule_version": "legacy_step6_v2",
@@ -426,7 +442,7 @@ def test_real_workflow_full_chain_with_fake_client() -> None:
     assert result.final_score.total_score == 75.0
     assert len(result.final_score.legacy_raw_scores) == 18
     assert len(result.final_score.legacy_level_scores) == 18
-    assert result.final_score.scoring_rule == "legacy_step7_v1"
+    assert result.final_score.scoring_rule == "legacy_step7_rubric_stabilized_v2"
     assert result.historical_score_cases == []
     assert result.external_evidence == []
     assert result.issues == []
@@ -675,8 +691,8 @@ def test_plan_debate_repairs_structural_constraints() -> None:
     assert [q.question_id for q in plan.questions] == ["Q-1"]
 
 
-def test_paraphrased_paper_evidence_is_degraded_not_discarded() -> None:
-    """改写引文应降级为人工复核，而不是整体丢弃专家意见。"""
+def test_low_coverage_paraphrased_evidence_is_rejected_for_retry() -> None:
+    """覆盖率过低的改写引文应触发重试，不能进入成功结果。"""
     from debate_agent_framework.schemas import (
         DebateReviewInput,
         ChapterInput,
@@ -722,11 +738,8 @@ def test_paraphrased_paper_evidence_is_degraded_not_discarded() -> None:
         quote=paraphrase_quote,
         location="第一章",
     )
-    degraded = DebateWorkflow._validate_paper_evidence([evidence], context)
-
-    assert degraded == [evidence]
-    assert evidence.confidence <= 0.4
-    assert evidence.chapter_id == "C1"
+    with pytest.raises(ValueError, match="匹配覆盖率过低"):
+        DebateWorkflow._validate_paper_evidence([evidence], context)
 
 
 def test_fabricated_paper_evidence_is_rejected() -> None:

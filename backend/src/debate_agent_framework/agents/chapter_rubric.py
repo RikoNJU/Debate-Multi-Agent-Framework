@@ -283,27 +283,17 @@ def normalize_specialist_assessments(
     role: SpecialistRole,
     finding_ids: set[str],
 ) -> list[RubricAssessment]:
-    """Repair missing/unsafe model checklist output without inventing a pass."""
+    """Validate a complete evidence-grounded checklist or request an Agent retry."""
 
     allowed = {str(item["item_id"]): item for item in expected}
     supplied_by_id = {item.item_id: item for item in supplied if item.item_id in allowed}
+    missing = sorted(set(allowed) - set(supplied_by_id))
+    if missing:
+        raise ValueError(f"固定评审小项漏评：{missing}")
+
     normalized: list[RubricAssessment] = []
     for item_id, prompt_item in allowed.items():
-        assessment = supplied_by_id.get(item_id)
-        if assessment is None:
-            normalized.append(
-                RubricAssessment(
-                    item_id=item_id,
-                    chapter_id=str(prompt_item["chapter_id"]),
-                    role=role,
-                    judgement=RubricJudgement.HUMAN_REVIEW,
-                    rationale="模型未返回该固定评审小项，不能据此加分或扣分。",
-                    confidence=0.0,
-                    requires_human_review=True,
-                    dimension_weights=dict(prompt_item.get("dimension_weights", {})),
-                )
-            )
-            continue
+        assessment = supplied_by_id[item_id]
         linked = [finding_id for finding_id in assessment.finding_ids if finding_id in finding_ids]
         update: dict[str, object] = {
             "chapter_id": str(prompt_item["chapter_id"]),
@@ -312,13 +302,8 @@ def normalize_specialist_assessments(
             "dimension_weights": dict(prompt_item.get("dimension_weights", {})),
         }
         if assessment.judgement in {RubricJudgement.POOR, RubricJudgement.CRITICAL} and not linked:
-            update.update(
-                judgement=RubricJudgement.HUMAN_REVIEW,
-                rationale=(
-                    f"{assessment.rationale}（负面判断未关联可核验 Finding，已转人工复核）"
-                ),
-                requires_human_review=True,
-                confidence=min(assessment.confidence, 0.5),
+            raise ValueError(
+                f"负面评审小项 {item_id} 未关联可核验 Finding"
             )
         normalized.append(assessment.model_copy(update=update))
     return normalized
@@ -327,12 +312,12 @@ def normalize_specialist_assessments(
 def resolve_rubric_assessments(
     reviews: Sequence[IndependentReview], global_review: GlobalReview
 ) -> list[RubricAssessment]:
-    """Allow negative checklist judgements to score only after Chair confirmation."""
+    """Resolve every negative checklist judgement from the Chair's binary decision."""
 
     confirmed = {
         finding.finding_id
         for finding in global_review.resolved_findings
-        if finding.status in {ResolutionStatus.CONFIRMED, ResolutionStatus.MOSTLY_CONFIRMED}
+        if finding.status is ResolutionStatus.CONFIRMED
     }
     result: list[RubricAssessment] = []
     for assessment in sorted(
@@ -348,12 +333,13 @@ def resolve_rubric_assessments(
         result.append(
             assessment.model_copy(
                 update={
-                    "judgement": RubricJudgement.HUMAN_REVIEW,
-                    "requires_human_review": True,
-                    "confidence": min(assessment.confidence, 0.5),
+                    "judgement": RubricJudgement.ACCEPTABLE,
+                    "confidence": min(assessment.confidence, 0.7),
                     "rationale": (
-                        f"{assessment.rationale}（Chair 未确认关联问题，已排除出自动评分）"
+                        f"{assessment.rationale}（关联负面问题经 Chair 驳回，"
+                        "按无已证实缺陷回落为 acceptable）"
                     ),
+                    "finding_ids": [],
                 }
             )
         )

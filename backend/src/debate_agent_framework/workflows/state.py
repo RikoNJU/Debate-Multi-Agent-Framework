@@ -58,7 +58,7 @@ class DebateWorkflowConfig:
     """V0 固定一轮 Debate，只暴露成本与降级相关参数。"""
 
     max_concurrency: int = 3
-    minimum_independent_reviews: int = 2
+    minimum_independent_reviews: int = 3
     evidence_limit: int = 8
     historical_advice_limit_per_chapter: int = 5
     historical_case_limit: int = 5

@@ -65,7 +65,7 @@ def test_step6_preserves_severity_evidence_and_cross_chapter_coverage() -> None:
         ),
         ResolvedFinding(
             finding_id="F2", dimension="结论", claim="结论外推过度", severity=FindingSeverity.MODERATE,
-            status=ResolutionStatus.MOSTLY_CONFIRMED, rationale="证据不足", evidence=[],
+            status=ResolutionStatus.REJECTED, rationale="证据不足，负面结论驳回", evidence=[],
             affected_chapter_ids=["C3"], confidence=0.8,
         ),
     ]
@@ -74,8 +74,8 @@ def test_step6_preserves_severity_evidence_and_cross_chapter_coverage() -> None:
 
     result = build_summary_advice(review_input, synthesis)
 
-    assert result.advice_count == 2
-    assert {item.affected_chapter_ids[0] for item in result.items} == {"C2", "C3"}
+    assert result.advice_count == 1
+    assert {item.affected_chapter_ids[0] for item in result.items} == {"C2"}
     assert result.items[0].severity is FindingSeverity.MAJOR
     assert result.items[0].evidence_ids == ["E1"]
     assert result.items[0].finding_ids == ["F1"]

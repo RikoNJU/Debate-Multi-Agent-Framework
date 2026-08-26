@@ -21,7 +21,7 @@ _SEVERITY = {
     FindingSeverity.MINOR: 3,
     FindingSeverity.INFO: 4,
 }
-_ELIGIBLE_STATUS = {"confirmed", "mostly_confirmed", "human_review"}
+_ELIGIBLE_STATUS = {"confirmed"}
 
 
 def build_summary_advice(
@@ -104,9 +104,6 @@ def _normalize_proposed(
                 finding_ids=valid_ids,
                 evidence_ids=evidence,
                 affected_chapter_ids=chapters,
-                requires_human_review=any(
-                    finding.status.value == "human_review" for finding in bound
-                ),
             )
         )
     return normalized[:5]
@@ -122,7 +119,6 @@ def _from_finding(
         finding_ids=[finding.finding_id],
         evidence_ids=[item.evidence_id for item in finding.evidence],
         affected_chapter_ids=finding.affected_chapter_ids,
-        requires_human_review=finding.status.value == "human_review",
     )
 
 

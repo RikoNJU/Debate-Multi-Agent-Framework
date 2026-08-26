@@ -11,9 +11,10 @@
 ### 固定章节评审小项
 
 - 评审小项按章节阶段、专家角色和 12 个语义评分维度版本化管理。
-- 三位专家必须逐项输出 `excellent/good/acceptable/poor/critical/human_review`。
-- `poor` 和 `critical` 必须关联带论文证据的 Finding；没有证据或未被 Chair 确认时转为 `human_review`，不参与自动加减分。
-- 模型漏答的小项也转为 `human_review`，系统不会将缺失回答当作通过。
+- 三位专家必须逐项输出 `excellent/good/acceptable/poor/critical`，成功任务不允许缺项。
+- `poor` 和 `critical` 必须关联带论文证据的 Finding；漏项或负面判断无证据会拒绝该专家输出并自动重试。
+- Chair 必须对每个初审 Finding 给出 `confirmed/rejected` 二元裁决；证据不足按负面结论的举证责任判为 `rejected`。
+- Chair 驳回关联 Finding 后，负面小项按“无已证实缺陷”回落为 `acceptable`，不再存在伪人工兜底状态。
 
 ### 稳定评分
 
@@ -56,8 +57,9 @@
 
 ## 验证用例
 
-- 漏答固定小项时进入人工复核，不自动给分。
-- 无 Finding 证据的负面判断不进入自动评分。
+- 漏答固定小项时拒绝专家输出并触发重试，无法补全则任务失败。
+- 无 Finding 证据的负面判断拒绝专家输出；Chair 驳回的问题不会继续扣分。
+- 任一 Specialist 最终失败时不生成不完整评分。
 - 极端不同的模型候选分在同一锚点下最终相差不超过 2 分，且不跨旧评分档位。
 - 长文本只插入一句时仍识别为同一论文的新修订，但评审指纹发生变化。
 - 仅空白和排版变化时规范化正文哈希一致，可复用结果。

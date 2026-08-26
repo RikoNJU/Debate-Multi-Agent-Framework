@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import pytest
+
 from debate_agent_framework.agents.chapter_rubric import (
     expected_rubric_items,
     normalize_specialist_assessments,
+    resolve_rubric_assessments,
     rubric_anchor_scores,
     stabilize_semantic_scores,
 )
 from debate_agent_framework.schemas import (
     ChapterInput,
     DebateReviewInput,
+    GlobalReview,
+    IndependentReview,
     PaperProfile,
     PaperType,
     ReviewContext,
@@ -62,7 +67,7 @@ def _review_input(text: str) -> DebateReviewInput:
     )
 
 
-def test_missing_or_unsupported_negative_rubric_items_require_human_review() -> None:
+def test_missing_rubric_items_reject_the_specialist_output_for_retry() -> None:
     expected = expected_rubric_items(
         _context(), SpecialistRole.SCIENTIFIC_SOUNDNESS
     )
@@ -77,16 +82,64 @@ def test_missing_or_unsupported_negative_rubric_items_require_human_review() -> 
         confidence=0.9,
     )
 
-    normalized = normalize_specialist_assessments(
-        expected=expected,
-        supplied=[supplied],
+    with pytest.raises(ValueError, match="固定评审小项漏评"):
+        normalize_specialist_assessments(
+            expected=expected,
+            supplied=[supplied],
+            role=SpecialistRole.SCIENTIFIC_SOUNDNESS,
+            finding_ids=set(),
+        )
+
+
+def test_unsupported_negative_rubric_item_rejects_output_for_retry() -> None:
+    expected = expected_rubric_items(
+        _context(), SpecialistRole.SCIENTIFIC_SOUNDNESS
+    )
+    supplied = [
+        RubricAssessment(
+            item_id=str(item["item_id"]),
+            chapter_id="C3",
+            role=SpecialistRole.SCIENTIFIC_SOUNDNESS,
+            judgement=(RubricJudgement.POOR if index == 0 else RubricJudgement.GOOD),
+            rationale="逐项判断。",
+            confidence=0.9,
+        )
+        for index, item in enumerate(expected)
+    ]
+
+    with pytest.raises(ValueError, match="未关联可核验 Finding"):
+        normalize_specialist_assessments(
+            expected=expected,
+            supplied=supplied,
+            role=SpecialistRole.SCIENTIFIC_SOUNDNESS,
+            finding_ids=set(),
+        )
+
+
+def test_chair_rejection_resolves_negative_rubric_item_as_acceptable() -> None:
+    assessment = RubricAssessment(
+        item_id="C3:methodology.design_rationale",
+        chapter_id="C3",
         role=SpecialistRole.SCIENTIFIC_SOUNDNESS,
-        finding_ids=set(),
+        judgement=RubricJudgement.POOR,
+        rationale="方法依据不足。",
+        finding_ids=["F-REJECTED"],
+        confidence=0.9,
+    )
+    review = IndependentReview(
+        review_id="R1",
+        role=SpecialistRole.SCIENTIFIC_SOUNDNESS,
+        paper_summary="测试",
+        rubric_assessments=[assessment],
+        confidence=0.9,
     )
 
-    assert len(normalized) == len(expected)
-    assert all(item.judgement is RubricJudgement.HUMAN_REVIEW for item in normalized)
-    assert all(item.requires_human_review for item in normalized)
+    resolved = resolve_rubric_assessments(
+        [review], GlobalReview(overall_summary="证据不足，负面问题被驳回。", confidence=0.8)
+    )
+
+    assert resolved[0].judgement is RubricJudgement.ACCEPTABLE
+    assert resolved[0].finding_ids == []
 
 
 def test_model_scores_keep_small_variation_without_crossing_anchor_level() -> None:

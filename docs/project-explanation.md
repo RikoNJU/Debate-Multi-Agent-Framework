@@ -28,7 +28,7 @@ Original Pipeline Adapter → 复用原 Step 6/7
 
 - **独立初审**：第一轮每个 Agent 不读取其他人意见，避免过早趋同（`ports/interfaces.py:39`）
 - **定向 Debate 而非多数投票**：Chair 只把关键争议发给相关 Agent 交叉质疑，最终结论"基于原文证据 + 回应质量"裁决，不用简单多数（`agents/review_chair.py:172`）
-- **证据边界强制约束**：高严重度问题必须有原文或外部证据，无证据必须降低置信度或转人工复核（`schemas/domain.py:170-177, 278-284`），这是纯 Pydantic 校验强制执行的
+- **证据边界强制约束**：高严重度问题必须有可核验论文证据；无证据输出直接被拒绝并触发 Agent 重试，这是纯 Pydantic 校验强制执行的
 
 ### 3. 兼容原流程
 
@@ -92,11 +92,10 @@ model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 ```python
 if self.severity in {FATAL, MAJOR} and not self.evidence:
-    if self.confidence > 0.5 or not self.requires_human_review:
-        raise ValueError("无证据的高严重度问题必须降低置信度并标记人工复核")
+    raise ValueError("fatal/major 问题必须提供可核验论文证据")
 ```
 
-含义：**高严重度问题必须有证据**。如果没有证据，只有两条出路：把置信度降到 ≤0.5，或者标记 `requires_human_review=True`。二者都不满足就报错。`ResolvedFinding.enforce_final_evidence_boundary`（278-284 行）在最终裁决层重复这道闸门。测试 `test_high_severity_finding_without_evidence...` 专门验证了这一点（`tests/test_workflow.py:231`）。
+含义：**高严重度问题必须有证据**。没有证据就不能以降低置信度绕过校验；Specialist 输出会自动重试。Chair 对每个 Finding 只能确认或驳回，确认结论同样必须携带证据。
 
 `ReviewEvidence.external_source_requires_locator`（148-152 行）：外部证据必须有 DOI 或 URL，否则不可追溯，直接拒绝。
 
@@ -156,7 +155,7 @@ build_context → independent_review → plan_debate → retrieve_debate_evidenc
 
 ```python
 max_concurrency=3                # Specialist 并发上限，校验必须在 1..3
-minimum_independent_reviews=2    # 至少 2 份初审才能继续
+minimum_independent_reviews=3    # 三份完整初审才能继续
 evidence_limit=8                 # 外部证据条数上限
 historical_case_limit=5          # 历史评分案例上限
 ```
@@ -175,8 +174,8 @@ historical_case_limit=5          # 历史评分案例上限
 
 - `asyncio.Semaphore(config.max_concurrency)` 限制并发
 - `asyncio.gather` 同时跑 3 个 Specialist 的 `review()`
-- 每个失败都捕获成 `DebateWorkflowIssue`（code=`specialist_review_failed`），**不中断其他视角**
-- 但若成功数 < `minimum_independent_reviews`(2)，整体抛 `WorkflowExecutionError`
+- 每个失败先在对应角色内自动重试，不影响其他并行视角完成当前调用
+- 任一角色最终失败都会使成功数低于 `minimum_independent_reviews`(3)，整体抛 `WorkflowExecutionError`，不生成缺项评分
 - 角色一致性校验：`review.role is not role` 就报错——防止 A 角色的 Agent 返回了 B 角色的评审
 
 **节点3 `_plan_debate`（159-167行）**

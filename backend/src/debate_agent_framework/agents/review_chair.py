@@ -118,16 +118,18 @@ class DebateReviewChairAgent(ReviewChair):
                 "请综合原文、独立初审、Debate 回应和外部证据，输出 GlobalReview JSON。"
                 "overall_summary 必填：用 2-4 句话概括论文整体质量和核心缺陷。"
                 "confidence 必填：给出综合置信度分数 0.0-1.0。"
-                "resolved_findings 必须逐条给出证据和最终判断，不能使用多数投票；"
+                "resolved_findings 必须覆盖独立初审中的每个 finding_id，并逐条给出最终判断；"
+                "status 只能是 confirmed 或 rejected，不能使用多数投票；"
                 "裁决已有问题时应保留独立初审中的 finding_id，以便固定评审小项追踪；"
-                "高严重度且无证据的问题必须标记为 insufficient 或 human_review 并降低 confidence。"
+                "证据足以支持问题时判为 confirmed；证据不足、无法锚定原文或讨论后仍有"
+                "争议时，按照负面结论的举证责任判为 rejected，并在 rationale 中说明原因。"
             ),
             payload=payload,
             schema=GlobalReview.model_json_schema(),
             max_tokens=self.synthesize_max_tokens,
         )
         global_review = self._validate_global_review(
-            self._repair_global_review(data)
+            self._repair_global_review(data), reviews
         )
         return assemble_review_synthesis(context, global_review, reviews=reviews)
 
@@ -231,8 +233,7 @@ class DebateReviewChairAgent(ReviewChair):
     def _repair_global_review(cls, data: dict[str, Any]) -> dict[str, Any]:
         """丢弃模型多输出的未知字段，并为必填字段提供兜底。
 
-        模型会模仿输入载荷的结构（例如把初审 finding 的
-        ``requires_human_review`` 复制进 resolved_findings），这些冗余键
+        模型可能模仿输入载荷并复制不属于最终 Schema 的字段。这些冗余键
         对最终裁决没有意义，直接剥离后交由 pydantic 做严格校验。
         """
 
@@ -262,15 +263,34 @@ class DebateReviewChairAgent(ReviewChair):
         return repaired
 
     @staticmethod
-    def _validate_global_review(data: dict[str, Any]) -> GlobalReview:
+    def _validate_global_review(
+        data: dict[str, Any], reviews: Sequence[IndependentReview]
+    ) -> GlobalReview:
         """校验 Chair 生成的最终裁决判断部分。"""
 
         try:
-            return GlobalReview.model_validate(data)
+            review = GlobalReview.model_validate(data)
         except ValidationError as exc:
             raise ValueError(
                 f"DebateReviewChairAgent 输出不符合 GlobalReview：{exc}"
             ) from exc
+        expected_ids = {
+            finding.finding_id
+            for independent_review in reviews
+            for finding in independent_review.findings
+        }
+        resolved_ids = [finding.finding_id for finding in review.resolved_findings]
+        duplicate_ids = sorted(
+            finding_id
+            for finding_id in set(resolved_ids)
+            if resolved_ids.count(finding_id) > 1
+        )
+        if duplicate_ids:
+            raise ValueError(f"Chair 重复裁决 Finding：{duplicate_ids}")
+        missing_ids = sorted(expected_ids - set(resolved_ids))
+        if missing_ids:
+            raise ValueError(f"Chair 未裁决全部独立初审 Finding：{missing_ids}")
+        return review
 
     @staticmethod
     def _system_prompt(context: ReviewContext | None = None) -> str:

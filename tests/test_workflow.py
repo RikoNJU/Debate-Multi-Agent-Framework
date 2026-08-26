@@ -334,16 +334,13 @@ class FailingSpecialist(DemoSpecialist):
         raise RuntimeError("模拟 Specialist 模型不可用")
 
 
-def test_one_specialist_failure_preserves_two_other_reviews() -> None:
+def test_one_specialist_failure_prevents_incomplete_scoring() -> None:
     specialists = {role: DemoSpecialist(role) for role in SpecialistRole}
     specialists[SpecialistRole.GLOBAL_QUALITY] = FailingSpecialist(
         SpecialistRole.GLOBAL_QUALITY
     )
-    result = DebateWorkflow(make_services(specialists=specialists)).run(make_input())
-
-    assert len(result.independent_reviews) == 2
-    assert any(issue.code == "specialist_review_failed" for issue in result.issues)
-    assert result.final_score is not None
+    with pytest.raises(WorkflowExecutionError, match="低于最低要求 3"):
+        DebateWorkflow(make_services(specialists=specialists)).run(make_input())
 
 
 def test_two_specialist_failures_report_role_details() -> None:
@@ -376,8 +373,8 @@ def test_compatibility_gate_rejects_missing_step4_chapter() -> None:
         workflow.run(make_input())
 
 
-def test_high_severity_finding_without_evidence_requires_low_confidence_and_human_review() -> None:
-    with pytest.raises(ValidationError, match="无证据的高严重度问题"):
+def test_high_severity_finding_without_evidence_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="必须提供可核验论文证据"):
         ReviewFinding(
             finding_id="F-BROKEN",
             dimension="实验",
@@ -386,7 +383,6 @@ def test_high_severity_finding_without_evidence_requires_low_confidence_and_huma
             severity=FindingSeverity.MAJOR,
             evidence=[],
             confidence=0.9,
-            requires_human_review=False,
         )
 
 

@@ -265,7 +265,6 @@ class DemoReviewChair:
         external_evidence: Sequence[ReviewEvidence],
     ) -> ReviewSynthesis:
         findings = [finding for review in reviews for finding in review.findings]
-        response_issue_ids = {response.issue_id for response in responses}
         resolved: list[ResolvedFinding] = []
         for finding in findings:
             evidence = list(finding.evidence)
@@ -280,7 +279,7 @@ class DemoReviewChair:
                     status=(
                         ResolutionStatus.CONFIRMED
                         if not finding.needs_external_verification or external_evidence
-                        else ResolutionStatus.INSUFFICIENT
+                        else ResolutionStatus.REJECTED
                     ),
                     rationale=finding.rationale,
                     evidence=evidence,
@@ -297,7 +296,11 @@ class DemoReviewChair:
         global_review = GlobalReview(
             overall_summary=context.profile.global_summary,
             strengths=[item for review in reviews for item in review.strengths],
-            weaknesses=[finding.claim for finding in findings],
+            weaknesses=[
+                finding.claim
+                for finding in resolved
+                if finding.status is ResolutionStatus.CONFIRMED
+            ],
             author_questions=[item for review in reviews for item in review.author_questions],
             dimensions=[
                 DimensionEvaluation(
@@ -311,11 +314,6 @@ class DemoReviewChair:
                 if review.findings
             ],
             resolved_findings=resolved,
-            unresolved_issue_ids=[
-                issue.issue_id
-                for issue in debate_plan.issues
-                if issue.issue_id not in response_issue_ids
-            ],
             confidence=sum(review.confidence for review in reviews) / len(reviews),
         )
         return assemble_review_synthesis(context, global_review)

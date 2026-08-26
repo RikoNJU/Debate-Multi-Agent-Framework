@@ -598,19 +598,8 @@ class DebateWorkflow:
                         )
                         await _emit_progress(stage, label, "succeeded", 50)
                         if degraded:
-                            return review, DebateWorkflowIssue(
-                                node="independent_review",
-                                code="specialist_evidence_needs_review",
-                                message=(
-                                    f"{role.value} 部分论文证据未能完全锚定到原文，"
-                                    f"已标记 {len(degraded)} 条证据需人工复核："
-                                    + "；".join(
-                                        f"{item.evidence_id}"
-                                        for item in degraded
-                                    )
-                                ),
-                                severity=IssueSeverity.WARNING,
-                                role=role,
+                            raise ValueError(
+                                f"{role.value} 有 {len(degraded)} 条证据未达到自动锚定阈值"
                             )
                         return review, None
                     except ModelClientError as exc:
@@ -815,34 +804,31 @@ class DebateWorkflow:
 
     async def _synthesize_review(self, state: DebateState) -> dict[str, Any]:
         logger.info("Review Chair 正在综合最终裁决 synthesize_review")
-        try:
-            synthesis = await self._call_validated(
-                lambda: self.services.review_chair.synthesize(
+
+        def synthesize_once() -> ReviewSynthesis:
+            synthesis = ReviewSynthesis.model_validate(
+                self.services.review_chair.synthesize(
                     state["context"],
                     reviews=state["independent_reviews"],
                     debate_plan=state["debate_plan"],
                     responses=state.get("debate_responses", []),
                     external_evidence=state.get("external_evidence", []),
-                ),
-                ReviewSynthesis,
+                )
             )
             degraded = self._validate_synthesis_grounding(
                 synthesis, state["context"]
             )
             if degraded:
-                issues = state.get("issues", []) + [
-                    DebateWorkflowIssue(
-                        node="synthesize_review",
-                        code="synthesis_evidence_needs_review",
-                        message=(
-                            "综合裁决中有 " + str(len(degraded)) +
-                            " 条论文证据未能完全锚定到原文，已标记人工复核："
-                            + "；".join(f"{item.evidence_id}" for item in degraded)
-                        ),
-                        severity=IssueSeverity.WARNING,
-                    )
-                ]
-                return {"synthesis": synthesis, "issues": issues}
+                raise ValueError(
+                    f"Chair 有 {len(degraded)} 条证据未达到自动锚定阈值"
+                )
+            return synthesis
+
+        try:
+            synthesis = await self._call_validated(
+                synthesize_once,
+                ReviewSynthesis,
+            )
         except ModelClientError as exc:
             raise WorkflowExecutionError(
                 f"Review Chair 模型调用失败（网络/超时/API 错误）：{exc}"
@@ -1188,8 +1174,6 @@ class DebateWorkflow:
             degraded.extend(
                 cls._validate_paper_evidence(finding.evidence, context)
             )
-            if any(item for item in finding.evidence if item in degraded):
-                finding.requires_human_review = True
         return degraded
 
     @classmethod
@@ -1206,8 +1190,6 @@ class DebateWorkflow:
                 finding.evidence, context
             )
             degraded.extend(finding_degraded)
-            if finding_degraded:
-                finding.requires_human_review = True
         return degraded
 
     @classmethod
@@ -1221,8 +1203,6 @@ class DebateWorkflow:
                 finding.evidence, context
             )
             degraded.extend(finding_degraded)
-            if finding_degraded:
-                finding.requires_human_review = True
         return degraded
 
     @staticmethod
@@ -1333,11 +1313,11 @@ class DebateWorkflow:
         evidence_items: list[ReviewEvidence],
         context: ReviewContext,
     ) -> list[ReviewEvidence]:
-        """校正并锚定论文证据，返回需要人工复核的证据列表。
+        """校正并锚定论文证据，不可靠的证据直接拒绝并触发 Agent 重试。
 
         对每条论文证据：能精确定位或高覆盖度模糊定位的，回填可追溯片段；
-        仅能部分定位（覆盖度不足）的，降低置信度并标记需要人工复核，
-        不会整体丢弃该条证据；完全无法定位的才会抛错，阻止编造引文混入。
+        仅能部分定位且覆盖度不足的，同样抛错；成功完成的评审不会携带
+        无法自动核验的论文引文。
         """
         chapters = {chapter.chapter_id: chapter for chapter in context.chapters}
         blocks = {
@@ -1364,8 +1344,10 @@ class DebateWorkflow:
             chapter_id, quote, coverage = located
 
             if coverage < 0.5:
-                evidence.confidence = min(evidence.confidence, 0.4)
-                degraded.append(evidence)
+                raise ValueError(
+                    f"论文证据 {evidence.evidence_id} 与原文匹配覆盖率过低："
+                    f"{coverage:.2f}"
+                )
 
             block = blocks.get(evidence.block_id) if evidence.block_id else None
             if evidence.block_id and block is None:

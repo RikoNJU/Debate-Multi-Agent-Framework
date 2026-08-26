@@ -35,7 +35,11 @@ def assemble_review_synthesis(
 ) -> ReviewSynthesis:
     """把模型判断结果 GlobalReview 装配为原流程兼容的完整输出。"""
 
-    resolved = global_review.resolved_findings
+    resolved = [
+        finding
+        for finding in global_review.resolved_findings
+        if finding.status.value == "confirmed"
+    ]
     reviewable = [chapter for chapter in context.chapters if chapter.reviewable]
     chapter_evaluation: dict[str, CompatibleChapterEnvelope] = {}
     for index, chapter in enumerate(reviewable, start=1):
@@ -110,7 +114,7 @@ def build_workload_evaluation(
     confirmed = [
         finding
         for finding in global_review.resolved_findings
-        if finding.status.value in {"confirmed", "mostly_confirmed"}
+        if finding.status.value == "confirmed"
         and any(
             marker in finding.dimension
             for marker in ("结构", "规范", "完整", "工作量", "写作", "表达")

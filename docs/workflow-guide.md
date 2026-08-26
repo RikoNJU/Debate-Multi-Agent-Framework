@@ -123,7 +123,7 @@ Agent 已确认问题撰写整体工作量分析。MinerU 解析置信度只触�
 
 ### 4.9 step6_summary_advice（原 Step 6 适配）
 
-`OriginalPipelineAdapter.summarize_advice` 最多选择五条关键建议，并在存在多个问题章节时保持跨章节覆盖。每条建议绑定严重程度、finding、evidence、章节与人工复核标记；未知 ID 会被丢弃，争议未决结论不会被写成确定要求。执行失败会使任务失败。
+`OriginalPipelineAdapter.summarize_advice` 最多选择五条关键建议，并在存在多个问题章节时保持跨章节覆盖。每条建议绑定严重程度、finding、evidence 与章节；未知 ID 会被丢弃，Chair 驳回的结论不会被写成修改要求。执行失败会使任务失败。
 
 ### 4.10 retrieve_score_cases（历史评分 RAG）
 

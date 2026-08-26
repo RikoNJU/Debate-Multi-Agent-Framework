@@ -71,9 +71,9 @@ class DebateSpecialistAgent(SpecialistAgent):
                 "author_questions 不超过 3 条，避免重复论述。"
                 "必须逐一输出 required_rubric_items 中的固定小项到 rubric_assessments，"
                 "item_id 和 chapter_id 必须原样保留。judgement 只能是 excellent、good、"
-                "acceptable、poor、critical、human_review。poor 或 critical 必须同时创建"
-                "有论文证据的 finding，并把 finding_id 写入该小项的 finding_ids；"
-                "不能可靠判断时使用 human_review，禁止把未检查等同于无问题。"
+                "acceptable、poor、critical。poor 或 critical 必须同时创建有论文证据的"
+                "finding，并把 finding_id 写入该小项的 finding_ids。必须完整返回全部"
+                "required_rubric_items；漏项或负面判断缺少证据会导致输出被拒绝并自动重试。"
             ),
             payload=payload,
             schema=IndependentReview.model_json_schema(),
