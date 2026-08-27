@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import time
 from dataclasses import replace
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
@@ -14,6 +15,7 @@ from uuid import uuid4
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
 from pydantic import ValidationError
 
 from debate_agent_framework.core.errors import WorkflowExecutionError
@@ -60,7 +62,14 @@ from ..schemas import (
     SpecialistRole,
     SummaryAdviceResult,
 )
-from .state import DebateState, DebateWorkflowConfig, DebateWorkflowServices
+from .state import (
+    DebateOutcome,
+    DebateQuestionTask,
+    DebateState,
+    DebateWorkflowConfig,
+    DebateWorkflowServices,
+    SpecialistOutcome,
+)
 from ..skills import build_default_skill_resolver
 
 T = TypeVar("T")
@@ -237,10 +246,8 @@ class DebateWorkflow:
             "resolve_review_skill": self._resolve_review_skill,
             "step2_classify_chapters": self._step2_classify_chapters,
             "build_context": self._build_context,
-            "independent_review": self._independent_review,
             "plan_debate": self._plan_debate,
             "retrieve_debate_evidence": self._retrieve_debate_evidence,
-            "targeted_debate": self._targeted_debate,
             "synthesize_review": self._synthesize_review,
             "step5_workload_evaluation": self._step5_workload_evaluation,
             "compatibility_gate": self._compatibility_gate,
@@ -252,16 +259,70 @@ class DebateWorkflow:
         for name, handler in nodes.items():
             builder.add_node(name, self._with_progress(name, handler))
 
+        # Keep the V1 stage names as compatibility entry points for persisted
+        # checkpoints, while exposing each Agent call as a real graph task.
+        builder.add_node(
+            "independent_review",
+            self._start_independent_review,
+            destinations=(
+                "review_scientific_soundness",
+                "review_empirical_evidence",
+                "review_global_quality",
+                "join_specialist_reviews",
+            ),
+        )
+        builder.add_node(
+            "review_scientific_soundness",
+            self._review_scientific_soundness,
+        )
+        builder.add_node(
+            "review_empirical_evidence",
+            self._review_empirical_evidence,
+        )
+        builder.add_node("review_global_quality", self._review_global_quality)
+        builder.add_node("join_specialist_reviews", self._join_specialist_reviews)
+        builder.add_node(
+            "targeted_debate",
+            self._start_targeted_debate,
+            destinations=("answer_debate_question",),
+        )
+        builder.add_node(
+            "answer_debate_question",
+            self._answer_debate_question,
+            input_schema=DebateQuestionTask,
+        )
+        builder.add_node("join_debate_responses", self._join_debate_responses)
+
         builder.add_edge(START, "resolve_discipline_skill")
         builder.add_edge("resolve_discipline_skill", "step1_classify_paper")
         builder.add_edge("step1_classify_paper", "resolve_review_skill")
         builder.add_edge("resolve_review_skill", "step2_classify_chapters")
         builder.add_edge("step2_classify_chapters", "build_context")
         builder.add_edge("build_context", "independent_review")
-        builder.add_edge("independent_review", "plan_debate")
-        builder.add_edge("plan_debate", "retrieve_debate_evidence")
+        builder.add_conditional_edges(
+            "independent_review", self._dispatch_specialist_reviews
+        )
+        builder.add_edge("review_scientific_soundness", "join_specialist_reviews")
+        builder.add_edge("review_empirical_evidence", "join_specialist_reviews")
+        builder.add_edge("review_global_quality", "join_specialist_reviews")
+        builder.add_edge("join_specialist_reviews", "plan_debate")
+        builder.add_conditional_edges(
+            "plan_debate",
+            self._route_after_debate_plan,
+            {
+                "synthesize_review": "synthesize_review",
+                "retrieve_debate_evidence": "retrieve_debate_evidence",
+                "targeted_debate": "targeted_debate",
+            },
+        )
         builder.add_edge("retrieve_debate_evidence", "targeted_debate")
-        builder.add_edge("targeted_debate", "synthesize_review")
+        builder.add_conditional_edges(
+            "targeted_debate",
+            self._dispatch_debate_questions,
+            {"synthesize_review": "synthesize_review"},
+        )
+        builder.add_edge("answer_debate_question", "join_debate_responses")
+        builder.add_edge("join_debate_responses", "synthesize_review")
         builder.add_edge("synthesize_review", "step5_workload_evaluation")
         builder.add_edge("step5_workload_evaluation", "compatibility_gate")
         builder.add_edge("compatibility_gate", "retrieve_cleaned_advice")
@@ -569,74 +630,170 @@ class DebateWorkflow:
         logger.info("上下文构造完成，章节数=%d", len(context.chapters))
         return {"context": context}
 
-    async def _independent_review(self, state: DebateState) -> dict[str, Any]:
-        semaphore = asyncio.Semaphore(self.config.max_concurrency)
+    async def _start_independent_review(
+        self, state: DebateState
+    ) -> dict[str, Any]:
+        del state
+        label, started_progress, _ = WORKFLOW_STAGES["independent_review"]
+        await _emit_progress(
+            "independent_review", label, "running", started_progress
+        )
+        return {}
 
-        async def run_one(
-            role: SpecialistRole,
-        ) -> tuple[IndependentReview | None, DebateWorkflowIssue | None]:
-            stage = f"specialist_{role.value}"
-            label = SPECIALIST_LABELS[role]
-            async with semaphore:
-                await _emit_progress(stage, label, "running", 30)
-                last_error: Exception | None = None
-                for attempt in range(
-                    1, self.config.review_attempts + 1
-                ):
-                    try:
-                        review = IndependentReview.model_validate(
-                            await _invoke(
-                                lambda: self.services.specialists[role].review(state["context"])
-                            )
-                        )
-                        if review.role is not role:
-                            raise ValueError(
-                                f"注册为 {role.value} 的 Agent 返回了 {review.role.value}"
-                            )
-                        degraded = self._validate_review_grounding(
-                            review, state["context"]
-                        )
-                        await _emit_progress(stage, label, "succeeded", 50)
-                        if degraded:
-                            raise ValueError(
-                                f"{role.value} 有 {len(degraded)} 条证据未达到自动锚定阈值"
-                            )
-                        return review, None
-                    except ModelClientError as exc:
-                        last_error = exc
-                        break
-                    except Exception as exc:  # 一个视角失败时保留其他独立意见
-                        last_error = exc
-                        if attempt < self.config.review_attempts:
-                            logger.warning(
-                                "%s 初审校验失败，重试 %d/%d：%s",
-                                role.value, attempt + 1,
-                                self.config.review_attempts, exc,
-                            )
-                assert last_error is not None
-                await _emit_progress(
-                    stage, label, "failed", 50, str(last_error)[:1000]
-                )
-                return None, DebateWorkflowIssue(
-                    node="independent_review",
-                    code="specialist_review_failed",
-                    message=f"{role.value} 独立初审失败：{last_error}",
-                    severity=IssueSeverity.WARNING,
-                    role=role,
-                )
+    @staticmethod
+    def _dispatch_specialist_reviews(
+        state: DebateState,
+    ) -> str | list[Send]:
+        outcomes = state.get("specialist_outcomes", {})
+        node_by_role = {
+            SpecialistRole.SCIENTIFIC_SOUNDNESS: "review_scientific_soundness",
+            SpecialistRole.EMPIRICAL_EVIDENCE: "review_empirical_evidence",
+            SpecialistRole.GLOBAL_QUALITY: "review_global_quality",
+        }
+        pending_roles = [
+            role
+            for role in SpecialistRole
+            if role.value not in outcomes
+            or outcomes[role.value].get("review") is None
+        ]
+        if not pending_roles:
+            return "join_specialist_reviews"
+        return [Send(node_by_role[role], state) for role in pending_roles]
 
-        results = await asyncio.gather(*(run_one(role) for role in SpecialistRole))
-        reviews = [review for review, _ in results if review is not None]
-        issues = [issue for _, issue in results if issue is not None]
+    async def _review_scientific_soundness(
+        self, state: DebateState
+    ) -> dict[str, Any]:
+        return await self._review_specialist(
+            state, SpecialistRole.SCIENTIFIC_SOUNDNESS
+        )
+
+    async def _review_empirical_evidence(
+        self, state: DebateState
+    ) -> dict[str, Any]:
+        return await self._review_specialist(
+            state, SpecialistRole.EMPIRICAL_EVIDENCE
+        )
+
+    async def _review_global_quality(
+        self, state: DebateState
+    ) -> dict[str, Any]:
+        return await self._review_specialist(state, SpecialistRole.GLOBAL_QUALITY)
+
+    async def _review_specialist(
+        self,
+        state: DebateState,
+        role: SpecialistRole,
+    ) -> dict[str, Any]:
+        stage = f"specialist_{role.value}"
+        label = SPECIALIST_LABELS[role]
+        await _emit_progress(stage, label, "running", 30)
+        started = time.monotonic()
+        last_error: Exception | None = None
+        attempts_used = 0
+        for attempt in range(1, self.config.review_attempts + 1):
+            attempts_used = attempt
+            try:
+                review = IndependentReview.model_validate(
+                    await _invoke(
+                        lambda: self.services.specialists[role].review(
+                            state["context"]
+                        )
+                    )
+                )
+                if review.role is not role:
+                    raise ValueError(
+                        f"注册为 {role.value} 的 Agent 返回了 {review.role.value}"
+                    )
+                degraded = self._validate_review_grounding(review, state["context"])
+                if degraded:
+                    raise ValueError(
+                        f"{role.value} 有 {len(degraded)} 条证据未达到自动锚定阈值"
+                    )
+                await _emit_progress(stage, label, "succeeded", 50)
+                outcome: SpecialistOutcome = {
+                    "role": role,
+                    "review": review,
+                    "issue": None,
+                    "attempts": attempts_used,
+                    "latency_ms": round((time.monotonic() - started) * 1000),
+                }
+                return {"specialist_outcomes": {role.value: outcome}}
+            except ModelClientError as exc:
+                last_error = exc
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt < self.config.review_attempts:
+                    logger.warning(
+                        "%s 初审校验失败，重试 %d/%d：%s",
+                        role.value,
+                        attempt + 1,
+                        self.config.review_attempts,
+                        exc,
+                    )
+
+        assert last_error is not None
+        await _emit_progress(stage, label, "failed", 50, str(last_error)[:1000])
+        issue = DebateWorkflowIssue(
+            node="independent_review",
+            code="specialist_review_failed",
+            message=f"{role.value} 独立初审失败：{last_error}",
+            severity=IssueSeverity.WARNING,
+            role=role,
+        )
+        outcome = {
+            "role": role,
+            "review": None,
+            "issue": issue,
+            "attempts": attempts_used,
+            "latency_ms": round((time.monotonic() - started) * 1000),
+        }
+        return {"specialist_outcomes": {role.value: outcome}}
+
+    async def _join_specialist_reviews(
+        self, state: DebateState
+    ) -> dict[str, Any]:
+        outcomes = state.get("specialist_outcomes", {})
+        reviews: list[IndependentReview] = []
+        issues: list[DebateWorkflowIssue] = []
+        for role in SpecialistRole:
+            outcome = outcomes.get(role.value)
+            if outcome is None:
+                issues.append(
+                    DebateWorkflowIssue(
+                        node="independent_review",
+                        code="specialist_result_missing",
+                        message=f"{role.value} 独立初审分支没有返回结果",
+                        severity=IssueSeverity.WARNING,
+                        role=role,
+                    )
+                )
+                continue
+            review = outcome.get("review")
+            issue = outcome.get("issue")
+            if review is not None:
+                reviews.append(IndependentReview.model_validate(review))
+            if issue is not None:
+                issues.append(DebateWorkflowIssue.model_validate(issue))
+
+        label, started_progress, completed_progress = WORKFLOW_STAGES[
+            "independent_review"
+        ]
         if len(reviews) < self.config.minimum_independent_reviews:
             failure_details = "；".join(issue.message for issue in issues)
-            raise WorkflowExecutionError(
+            message = (
                 f"仅获得 {len(reviews)} 份独立初审，低于最低要求 "
                 f"{self.config.minimum_independent_reviews}。失败详情：{failure_details}"
             )
-        logger.info(
-            "独立初审完成，成功=%d，失败=%d", len(reviews), len(issues)
+            await _emit_progress(
+                "independent_review", label, "failed", started_progress, message
+            )
+            raise WorkflowExecutionError(message)
+
+        await _emit_progress(
+            "independent_review", label, "succeeded", completed_progress
         )
+        logger.info("独立初审完成，成功=%d，失败=%d", len(reviews), len(issues))
         return {"independent_reviews": reviews, "issues": issues}
 
     async def _plan_debate(self, state: DebateState) -> dict[str, Any]:
@@ -668,6 +825,15 @@ class DebateWorkflow:
         logger.info("DebatePlan 完成，issues=%d questions=%d",
                     len(plan.issues), len(plan.questions))
         return {"debate_plan": plan}
+
+    @staticmethod
+    def _route_after_debate_plan(state: DebateState) -> str:
+        questions = state["debate_plan"].questions
+        if not questions:
+            return "synthesize_review"
+        if any(question.requires_external_evidence for question in questions):
+            return "retrieve_debate_evidence"
+        return "targeted_debate"
 
     async def _retrieve_debate_evidence(self, state: DebateState) -> dict[str, Any]:
         queries = list(
@@ -714,91 +880,168 @@ class DebateWorkflow:
                 ],
             }
 
-    async def _targeted_debate(self, state: DebateState) -> dict[str, Any]:
+    async def _start_targeted_debate(
+        self, state: DebateState
+    ) -> dict[str, Any]:
+        label, started_progress, completed_progress = WORKFLOW_STAGES[
+            "targeted_debate"
+        ]
+        if not state["debate_plan"].questions:
+            await _emit_progress(
+                "targeted_debate", label, "succeeded", completed_progress
+            )
+            return {"debate_responses": []}
+        await _emit_progress("targeted_debate", label, "running", started_progress)
+        return {}
+
+    @staticmethod
+    def _dispatch_debate_questions(
+        state: DebateState,
+    ) -> str | list[Send]:
         questions = state["debate_plan"].questions
         if not questions:
-            return {"debate_responses": []}
-
-        issue_by_id = {issue.issue_id: issue for issue in state["debate_plan"].issues}
-        review_by_role = {
-            review.role: review for review in state["independent_reviews"]
+            return "synthesize_review"
+        issue_by_id = {
+            issue.issue_id: issue for issue in state["debate_plan"].issues
         }
-        semaphore = asyncio.Semaphore(self.config.max_concurrency)
+        return [
+            Send(
+                "answer_debate_question",
+                {
+                    "question": question,
+                    "issue": issue_by_id[question.issue_id],
+                    "context": state["context"],
+                    "independent_reviews": state["independent_reviews"],
+                    "external_evidence": state.get("external_evidence", []),
+                },
+            )
+            for question in questions
+        ]
 
-        async def respond_one(
-            question: Any,
-        ) -> tuple[DebateResponse | None, DebateWorkflowIssue | None]:
-            role = question.target_role
-            own_review = review_by_role.get(role)
-            if own_review is None:
-                return None, DebateWorkflowIssue(
+    async def _answer_debate_question(
+        self, task: DebateQuestionTask
+    ) -> dict[str, Any]:
+        question = task["question"]
+        issue = task["issue"]
+        role = question.target_role
+        started = time.monotonic()
+        review_by_role = {
+            review.role: review for review in task["independent_reviews"]
+        }
+        own_review = review_by_role.get(role)
+        if own_review is None:
+            issue_record = DebateWorkflowIssue(
+                node="targeted_debate",
+                code="target_specialist_unavailable",
+                message=f"问题 {question.question_id} 的目标 Specialist 无可用初审",
+                role=role,
+                question_id=question.question_id,
+            )
+            outcome: DebateOutcome = {
+                "question_id": question.question_id,
+                "response": None,
+                "issue": issue_record,
+                "latency_ms": 0,
+            }
+            return {"debate_outcomes": {question.question_id: outcome}}
+
+        peer_reviews = [
+            review
+            for review in task["independent_reviews"]
+            if review.role in issue.participating_roles and review.role is not role
+        ]
+        try:
+            response = DebateResponse.model_validate(
+                await _invoke(
+                    lambda: self.services.specialists[role].respond(
+                        task["context"],
+                        own_review=own_review,
+                        issue=issue,
+                        question=question,
+                        peer_reviews=peer_reviews,
+                        external_evidence=task["external_evidence"],
+                    )
+                )
+            )
+            if (
+                response.role is not role
+                or response.question_id != question.question_id
+                or response.issue_id != question.issue_id
+            ):
+                raise ValueError("DebateResponse 与定向问题的角色或标识不一致")
+            degraded = self._validate_response_grounding(response, task["context"])
+            issue_record = None
+            if degraded:
+                issue_record = DebateWorkflowIssue(
                     node="targeted_debate",
-                    code="target_specialist_unavailable",
-                    message=f"问题 {question.question_id} 的目标 Specialist 无可用初审",
+                    code="debate_evidence_degraded",
+                    message=(
+                        f"问题 {question.question_id} 回应中 {len(degraded)} 条证据"
+                        "未能完全锚定到原文，已降低该回应的证据置信度："
+                        + "；".join(item.evidence_id for item in degraded)
+                    ),
+                    severity=IssueSeverity.WARNING,
                     role=role,
                     question_id=question.question_id,
                 )
+            outcome = {
+                "question_id": question.question_id,
+                "response": response,
+                "issue": issue_record,
+                "latency_ms": round((time.monotonic() - started) * 1000),
+            }
+        except Exception as exc:
+            issue_record = DebateWorkflowIssue(
+                node="targeted_debate",
+                code="debate_response_failed",
+                message=f"问题 {question.question_id} 回应失败：{exc}",
+                role=role,
+                question_id=question.question_id,
+            )
+            outcome = {
+                "question_id": question.question_id,
+                "response": None,
+                "issue": issue_record,
+                "latency_ms": round((time.monotonic() - started) * 1000),
+            }
+        return {"debate_outcomes": {question.question_id: outcome}}
 
-            issue = issue_by_id[question.issue_id]
-            peer_reviews = [
-                review
-                for review in state["independent_reviews"]
-                if review.role in issue.participating_roles and review.role is not role
-            ]
-            async with semaphore:
-                try:
-                    response = DebateResponse.model_validate(
-                        await _invoke(
-                            lambda: self.services.specialists[role].respond(
-                                state["context"],
-                                own_review=own_review,
-                                issue=issue,
-                                question=question,
-                                peer_reviews=peer_reviews,
-                                external_evidence=state.get("external_evidence", []),
-                            )
-                        )
-                    )
-                    if (
-                        response.role is not role
-                        or response.question_id != question.question_id
-                        or response.issue_id != question.issue_id
-                    ):
-                        raise ValueError("DebateResponse 与定向问题的角色或标识不一致")
-                    degraded = self._validate_response_grounding(
-                        response, state["context"]
-                    )
-                    if degraded:
-                        return response, DebateWorkflowIssue(
-                            node="targeted_debate",
-                            code="debate_evidence_needs_review",
-                            message=(
-                                f"问题 {question.question_id} 回应中 {len(degraded)} "
-                                "条证据未能完全锚定到原文，已标记人工复核："
-                                + "；".join(
-                                    f"{item.evidence_id}" for item in degraded
-                                )
-                            ),
-                            severity=IssueSeverity.WARNING,
-                            role=role,
-                            question_id=question.question_id,
-                        )
-                    return response, None
-                except Exception as exc:
-                    return None, DebateWorkflowIssue(
+    async def _join_debate_responses(
+        self, state: DebateState
+    ) -> dict[str, Any]:
+        outcomes = state.get("debate_outcomes", {})
+        responses: list[DebateResponse] = []
+        issues: list[DebateWorkflowIssue] = []
+        for question in state["debate_plan"].questions:
+            outcome = outcomes.get(question.question_id)
+            if outcome is None:
+                issues.append(
+                    DebateWorkflowIssue(
                         node="targeted_debate",
-                        code="debate_response_failed",
-                        message=f"问题 {question.question_id} 回应失败：{exc}",
-                        role=role,
+                        code="debate_result_missing",
+                        message=f"问题 {question.question_id} 没有返回讨论结果",
+                        role=question.target_role,
                         question_id=question.question_id,
                     )
+                )
+                continue
+            response = outcome.get("response")
+            issue = outcome.get("issue")
+            if response is not None:
+                responses.append(DebateResponse.model_validate(response))
+            if issue is not None:
+                issues.append(DebateWorkflowIssue.model_validate(issue))
 
-        results = await asyncio.gather(*(respond_one(question) for question in questions))
-        responses = [response for response, _ in results if response is not None]
-        issues = [issue for _, issue in results if issue is not None]
+        label, _, completed_progress = WORKFLOW_STAGES["targeted_debate"]
+        await _emit_progress(
+            "targeted_debate", label, "succeeded", completed_progress,
+            (f"{len(issues)} 个问题未完整回应" if issues else None),
+        )
         logger.info(
-            "定向 Debate 完成，问题=%d 回应=%d 失败=%d",
-            len(questions), len(responses), len(issues),
+            "定向 Debate 完成，问题=%d 回应=%d 异常=%d",
+            len(state["debate_plan"].questions),
+            len(responses),
+            len(issues),
         )
         return {"debate_responses": responses, "issues": issues}
 
@@ -1089,7 +1332,10 @@ class DebateWorkflow:
         validated_input = DebateReviewInput.model_validate(review_input)
         token = _progress_callback.set(progress_callback)
         try:
-            config = {"configurable": {"thread_id": thread_id or uuid4().hex}}
+            config = {
+                "configurable": {"thread_id": thread_id or uuid4().hex},
+                "max_concurrency": self.config.max_concurrency,
+            }
             final = await self.graph.ainvoke(
                 self._initial_state(validated_input), config
             )
@@ -1112,11 +1358,28 @@ class DebateWorkflow:
         """
 
         validated_input = DebateReviewInput.model_validate(review_input)
-        config = {"configurable": {"thread_id": thread_id}}
+        config = {
+            "configurable": {"thread_id": thread_id},
+            "max_concurrency": self.config.max_concurrency,
+        }
         token = _progress_callback.set(progress_callback)
         try:
             state = await self.graph.aget_state(config)
             if state.next:
+                if "join_specialist_reviews" in state.next:
+                    outcomes = state.values.get("specialist_outcomes", {})
+                    failed_roles = {
+                        role.value: None
+                        for role in SpecialistRole
+                        if role.value in outcomes
+                        and outcomes[role.value].get("review") is None
+                    }
+                    if failed_roles:
+                        config = await self.graph.aupdate_state(
+                            config,
+                            {"specialist_outcomes": failed_roles},
+                            as_node="independent_review",
+                        )
                 final = await self.graph.ainvoke(None, config)
             else:
                 final = await self.graph.ainvoke(
@@ -1130,8 +1393,10 @@ class DebateWorkflow:
     def _initial_state(review_input: DebateReviewInput) -> DebateState:
         return {
             "review_input": review_input,
+            "specialist_outcomes": {},
             "independent_reviews": [],
             "external_evidence": [],
+            "debate_outcomes": {},
             "debate_responses": [],
             "historical_score_cases": [],
             "issues": [],

@@ -10,7 +10,7 @@
 
 - **结构化 PDF 解析**：MinerU VLM/OCR 生成 Markdown、`content_list.json` 和图表资源，保留章节、页码、坐标、公式及稳定 block/chunk ID。
 - **多智能体评审**：三位 Specialist 独立分析（并发度可配置），Chair 识别冲突、发起定向 Debate 并完成证据化裁决。
-- **LangGraph 编排**：显式管理工作流状态、节点进度、失败重试、检查点和降级路径。
+- **LangGraph 编排**：三专家使用图级 Fan-out/Fan-in，定向讨论使用条件边和动态 `Send`，并保留节点进度、检查点与降级路径。
 - **混合历史建议 RAG**：对已确认 Finding 执行 Dense + BM25 召回、RRF 融合与 Reranker 精排，历史建议只辅助修改方案，不参与评分。
 - **可解释评分**：复用旧项目三类论文标准，将结构指标和 12 个语义指标汇总为 18 维等级，再通过确定性规则计算总分。
 - **学科 Review Skill**：通过 JSON、Markdown 和 TXT 组合基础规则、学科规则、论文类型 Overlay、专家角色及检索配置，并冻结解析后的配置快照用于审计。

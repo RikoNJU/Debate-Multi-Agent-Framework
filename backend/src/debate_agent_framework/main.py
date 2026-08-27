@@ -35,7 +35,7 @@ def create_app(settings: DebateWebSettings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):  # type: ignore[no-untyped-def]
-        data_dir = Path(settings.data_dir).resolve()
+        data_dir = settings.resolved_data_dir()
         data_dir.mkdir(parents=True, exist_ok=True)
         database = Database(settings.resolved_database_url())
         database.migrate()
@@ -54,6 +54,7 @@ def create_app(settings: DebateWebSettings | None = None) -> FastAPI:
         checkpoint_conn = await aiosqlite.connect(data_dir / "checkpoints.db")
         checkpointer = AsyncSqliteSaver(checkpoint_conn)
         application.state.database = database
+        application.state.data_dir = data_dir
         application.state.run_store = run_store
         application.state.paper_repository = paper_repository
         application.state.portal_repository = portal_repository

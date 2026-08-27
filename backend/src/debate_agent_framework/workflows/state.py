@@ -9,7 +9,9 @@ from typing import Annotated, TypedDict
 
 from ..schemas import (
     ComprehensiveScoreResult,
+    DebateIssue,
     DebatePlan,
+    DebateQuestion,
     DebateResponse,
     DebateReviewInput,
     DebateWorkflowIssue,
@@ -19,6 +21,7 @@ from ..schemas import (
     ReviewContext,
     ReviewEvidence,
     ReviewSynthesis,
+    SpecialistRole,
     SummaryAdviceResult,
 )
 from ..ports import (
@@ -36,14 +39,54 @@ from ..ports import (
 from ..skills.models import ResolvedDisciplineProfile, ResolvedReviewProfile
 
 
+def merge_keyed_outcomes(
+    current: dict[str, object] | None,
+    update: dict[str, object] | None,
+) -> dict[str, object]:
+    """Merge branch results by stable ID so retries cannot append duplicates."""
+
+    merged = dict(current or {})
+    for key, value in (update or {}).items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    return merged
+
+
+class SpecialistOutcome(TypedDict):
+    role: SpecialistRole
+    review: IndependentReview | None
+    issue: DebateWorkflowIssue | None
+    attempts: int
+    latency_ms: int
+
+
+class DebateOutcome(TypedDict):
+    question_id: str
+    response: DebateResponse | None
+    issue: DebateWorkflowIssue | None
+    latency_ms: int
+
+
+class DebateQuestionTask(TypedDict):
+    question: DebateQuestion
+    issue: DebateIssue
+    context: ReviewContext
+    independent_reviews: list[IndependentReview]
+    external_evidence: list[ReviewEvidence]
+
+
 class DebateState(TypedDict, total=False):
     review_input: DebateReviewInput
     discipline_profile: ResolvedDisciplineProfile
     review_profile: ResolvedReviewProfile
     context: ReviewContext
+    specialist_outcomes: Annotated[dict[str, SpecialistOutcome], merge_keyed_outcomes]
     independent_reviews: list[IndependentReview]
     debate_plan: DebatePlan
     external_evidence: list[ReviewEvidence]
+    debate_outcomes: Annotated[dict[str, DebateOutcome], merge_keyed_outcomes]
     debate_responses: list[DebateResponse]
     synthesis: ReviewSynthesis
     summary_advice: SummaryAdviceResult

@@ -588,6 +588,7 @@ class DebateWorkflowIssue(StrictModel):
 
 
 class DebateRunResult(StrictModel):
+    workflow_graph_version: str = "v2"
     review_profile: ResolvedReviewProfile
     context: ReviewContext
     independent_reviews: list[IndependentReview]

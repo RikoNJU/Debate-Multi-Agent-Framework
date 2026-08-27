@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
+
+
 @dataclass(frozen=True)
 class DebateWebSettings:
     app_name: str = "Debate 论文评审 Multi-Agent"
@@ -59,5 +62,12 @@ class DebateWebSettings:
     def resolved_database_url(self) -> str:
         if self.database_url:
             return self.database_url
-        database_path = (Path(self.data_dir) / "debate.db").resolve()
+        database_path = self.resolved_data_dir() / "debate.db"
         return f"sqlite:///{database_path.as_posix()}"
+
+    def resolved_data_dir(self) -> Path:
+        """Resolve relative storage paths against the repository, not the shell CWD."""
+        configured = Path(self.data_dir).expanduser()
+        if configured.is_absolute():
+            return configured.resolve()
+        return (_REPOSITORY_ROOT / configured).resolve()

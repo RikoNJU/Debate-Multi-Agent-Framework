@@ -6,6 +6,8 @@ import asyncio
 from collections.abc import Sequence
 
 import pytest
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, START, StateGraph
 from pydantic import ValidationError
 
 from debate_agent_framework.core.errors import WorkflowExecutionError
@@ -36,6 +38,7 @@ from debate_agent_framework.workflows import (
     DebateWorkflowConfig,
     DebateWorkflowServices,
 )
+from debate_agent_framework.workflows.state import DebateState
 
 
 def make_input() -> DebateReviewInput:
@@ -123,6 +126,20 @@ def test_workflow_reports_node_and_specialist_progress() -> None:
     assert ("step7_scoring", "succeeded", 99) in events
     for role in SpecialistRole:
         assert (f"specialist_{role.value}", "succeeded", 50) in events
+
+
+def test_v2_graph_exposes_agent_and_debate_tasks() -> None:
+    workflow = DebateWorkflow(make_services())
+    node_names = set(workflow.graph.get_graph().nodes)
+
+    assert {
+        "review_scientific_soundness",
+        "review_empirical_evidence",
+        "review_global_quality",
+        "join_specialist_reviews",
+        "answer_debate_question",
+        "join_debate_responses",
+    } <= node_names
 
 
 def test_real_workflow_config_uses_controlled_specialist_concurrency(monkeypatch) -> None:
@@ -228,6 +245,7 @@ def test_historical_advice_retriever_is_not_called_in_new_workflow() -> None:
 def test_demo_runs_full_original_pipeline_compatible_flow() -> None:
     result = DebateWorkflow(make_services()).run(make_input())
 
+    assert result.workflow_graph_version == "v2"
     assert len(result.independent_reviews) == 3
     assert len(result.debate_plan.issues) == 1
     assert len(result.debate_responses) == 2
@@ -252,6 +270,9 @@ class CallTracker:
     def __init__(self) -> None:
         self.active_reviews = 0
         self.max_active_reviews = 0
+        self.reviews: dict[SpecialistRole, int] = {
+            role: 0 for role in SpecialistRole
+        }
         self.responses: dict[SpecialistRole, int] = {
             role: 0 for role in SpecialistRole
         }
@@ -263,6 +284,7 @@ class RecordingSpecialist(DemoSpecialist):
         self.tracker = tracker
 
     async def review(self, context):  # type: ignore[no-untyped-def]
+        self.tracker.reviews[self.role] += 1
         self.tracker.active_reviews += 1
         self.tracker.max_active_reviews = max(
             self.tracker.max_active_reviews, self.tracker.active_reviews
@@ -286,12 +308,47 @@ def test_reviews_are_parallel_and_debate_is_targeted() -> None:
         make_services(specialists=specialists),
         DebateWorkflowConfig(max_concurrency=3),
     )
-    workflow.run(make_input())
+    result = workflow.run(make_input())
 
     assert tracker.max_active_reviews == 3
+    assert set(tracker.reviews.values()) == {1}
+    assert [review.role for review in result.independent_reviews] == list(
+        SpecialistRole
+    )
     assert tracker.responses[SpecialistRole.SCIENTIFIC_SOUNDNESS] == 1
     assert tracker.responses[SpecialistRole.EMPIRICAL_EVIDENCE] == 1
     assert tracker.responses[SpecialistRole.GLOBAL_QUALITY] == 0
+    assert len(result.debate_responses) == 2
+
+
+class FlakyOnceSpecialist(RecordingSpecialist):
+    async def review(self, context):  # type: ignore[no-untyped-def]
+        self.tracker.reviews[self.role] += 1
+        if self.tracker.reviews[self.role] == 1:
+            raise ValueError("模拟首次结构校验失败")
+        return await DemoSpecialist.review(self, context)
+
+
+def test_specialist_validation_retry_is_isolated_to_failed_branch() -> None:
+    tracker = CallTracker()
+    specialists = {
+        role: RecordingSpecialist(role, tracker) for role in SpecialistRole
+    }
+    specialists[SpecialistRole.GLOBAL_QUALITY] = FlakyOnceSpecialist(
+        SpecialistRole.GLOBAL_QUALITY, tracker
+    )
+
+    result = DebateWorkflow(
+        make_services(specialists=specialists),
+        DebateWorkflowConfig(max_concurrency=3, review_attempts=2),
+    ).run(make_input())
+
+    assert len(result.independent_reviews) == 3
+    assert tracker.reviews == {
+        SpecialistRole.SCIENTIFIC_SOUNDNESS: 1,
+        SpecialistRole.EMPIRICAL_EVIDENCE: 1,
+        SpecialistRole.GLOBAL_QUALITY: 2,
+    }
 
 
 class CountingEvidenceRetriever(DemoEvidenceRetriever):
@@ -310,13 +367,28 @@ class NoDebateChair(DemoReviewChair):
 
 def test_evidence_rag_is_not_called_without_external_question() -> None:
     retriever = CountingEvidenceRetriever()
-    result = DebateWorkflow(
-        make_services(chair=NoDebateChair(), evidence_retriever=retriever)
-    ).run(make_input())
+    events: list[str] = []
+
+    async def record(
+        stage: str,
+        _label: str,
+        _status: str,
+        _progress: int,
+        _detail: str | None,
+    ) -> None:
+        events.append(stage)
+
+    result = asyncio.run(
+        DebateWorkflow(
+            make_services(chair=NoDebateChair(), evidence_retriever=retriever)
+        ).arun(make_input(), progress_callback=record)
+    )
 
     assert retriever.calls == 0
     assert result.external_evidence == []
     assert result.debate_responses == []
+    assert "retrieve_debate_evidence" not in events
+    assert "targeted_debate" not in events
 
 
 def test_evidence_rag_is_called_once_for_deduplicated_queries() -> None:
@@ -462,6 +534,51 @@ def test_resume_continues_from_failed_step_without_rerunning_completed_steps() -
     assert result.final_score is not None
 
 
+class RecoverableSpecialist(RecordingSpecialist):
+    available = False
+
+    async def review(self, context):  # type: ignore[no-untyped-def]
+        self.tracker.reviews[self.role] += 1
+        if not self.available:
+            raise RuntimeError("模拟专家服务暂时不可用")
+        return await DemoSpecialist.review(self, context)
+
+
+def test_resume_reruns_only_failed_specialist_branch() -> None:
+    tracker = CallTracker()
+    specialists = {
+        role: RecordingSpecialist(role, tracker) for role in SpecialistRole
+    }
+    recoverable = RecoverableSpecialist(
+        SpecialistRole.GLOBAL_QUALITY, tracker
+    )
+    specialists[SpecialistRole.GLOBAL_QUALITY] = recoverable
+    workflow = DebateWorkflow(
+        make_services(specialists=specialists),
+        DebateWorkflowConfig(max_concurrency=3, review_attempts=1),
+    )
+    thread_id = "resume-specialist-branch"
+
+    with pytest.raises(WorkflowExecutionError, match="低于最低要求 3"):
+        asyncio.run(workflow.arun(make_input(), thread_id=thread_id))
+
+    assert tracker.reviews == {
+        SpecialistRole.SCIENTIFIC_SOUNDNESS: 1,
+        SpecialistRole.EMPIRICAL_EVIDENCE: 1,
+        SpecialistRole.GLOBAL_QUALITY: 1,
+    }
+
+    recoverable.available = True
+    result = asyncio.run(workflow.aresume(make_input(), thread_id=thread_id))
+
+    assert len(result.independent_reviews) == 3
+    assert tracker.reviews == {
+        SpecialistRole.SCIENTIFIC_SOUNDNESS: 1,
+        SpecialistRole.EMPIRICAL_EVIDENCE: 1,
+        SpecialistRole.GLOBAL_QUALITY: 2,
+    }
+
+
 def test_resume_falls_back_to_full_run_without_checkpoint() -> None:
     chair = FlakyChair(failures=1)
     workflow = DebateWorkflow(make_services(chair=chair))
@@ -473,4 +590,44 @@ def test_resume_falls_back_to_full_run_without_checkpoint() -> None:
 
     assert chair.plan_calls == 1
     assert chair.synthesize_calls == 2
+    assert result.final_score is not None
+
+
+def test_v2_resumes_checkpoint_with_v1_next_node_name() -> None:
+    review_input = make_input()
+    baseline = DebateWorkflow(make_services()).run(review_input)
+    checkpointer = MemorySaver()
+    legacy_builder = StateGraph(DebateState)
+    legacy_builder.add_node("independent_review", lambda _state: {})
+    legacy_builder.add_node("plan_debate", lambda _state: {})
+    legacy_builder.add_edge(START, "independent_review")
+    legacy_builder.add_edge("independent_review", "plan_debate")
+    legacy_builder.add_edge("plan_debate", END)
+    legacy_graph = legacy_builder.compile(
+        checkpointer=checkpointer,
+        interrupt_after=["independent_review"],
+    )
+    thread_id = "legacy-v1-checkpoint"
+    config = {"configurable": {"thread_id": thread_id}}
+    legacy_state: DebateState = {
+        "review_input": review_input,
+        "review_profile": baseline.review_profile,
+        "context": baseline.context,
+        "independent_reviews": baseline.independent_reviews,
+        "external_evidence": [],
+        "debate_responses": [],
+        "historical_score_cases": [],
+        "issues": [],
+    }
+
+    async def resume_legacy_checkpoint():
+        await legacy_graph.ainvoke(legacy_state, config)
+        snapshot = await legacy_graph.aget_state(config)
+        assert snapshot.next == ("plan_debate",)
+        workflow = DebateWorkflow(make_services(), checkpointer=checkpointer)
+        return await workflow.aresume(review_input, thread_id=thread_id)
+
+    result = asyncio.run(resume_legacy_checkpoint())
+
+    assert result.workflow_graph_version == "v2"
     assert result.final_score is not None

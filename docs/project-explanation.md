@@ -139,17 +139,24 @@ return cls(DebateWorkflowServices(
 
 `__init__` 里有个**注册表完整性校验**（82-86 行）：`specialists` 字典的键必须与 `SpecialistRole` 枚举完全一致，缺一个或多一个都直接 `ValueError`。这是防止"少注册一个视角"的防御。
 
-### 2. LangGraph 图的构建（89-113 行）
+### 2. LangGraph V2 图的构建
 
-`StateGraph(DebateState)` 注册 10 个节点，全用 `add_edge` 线性连接（V0 没有条件分支）：
+`StateGraph(DebateState)` 的主链保持确定性，但三专家初审已经展开为固定角色 Fan-out/Fan-in，定向讨论使用条件边和动态 `Send`：
 
 ```text
-build_context → independent_review → plan_debate → retrieve_debate_evidence
-→ targeted_debate → synthesize_review → compatibility_gate
+build_context → independent_review
+  ├→ review_scientific_soundness ─┐
+  ├→ review_empirical_evidence ───┼→ join_specialist_reviews
+  └→ review_global_quality ───────┘
+→ plan_debate
+  ├→ 无争议：synthesize_review
+  └→ 有争议：retrieve_debate_evidence（按需）→ targeted_debate
+       → Send(question_1...question_n) → join_debate_responses
+→ synthesize_review → compatibility_gate
 → step6_summary_advice → retrieve_score_cases → step7_scoring → END
 ```
 
-`DebateState` 是 `TypedDict`（`state.py:32-43`），唯一特殊的是 `issues: Annotated[list, add]`——`add` 是 reducer，表示**每次节点返回 issues 都追加而不是覆盖**，这样错误信息一路累积到最终结果。
+`DebateState` 使用三个 Reducer：`issues` 追加过程问题；`specialist_outcomes` 按 Role ID 合并；`debate_outcomes` 按 `question_id` 合并。后两者使用稳定键覆盖，避免并发顺序和恢复重放产生重复结果。
 
 ### 3. 配置 `DebateWorkflowConfig`（`state.py:46-63`）
 
@@ -170,12 +177,13 @@ historical_case_limit=5          # 历史评分案例上限
 - `ReviewContext.model_validate(await _resolve(value))` —— 先解析 awaitable，再过 Pydantic 校验
 - **额外校验**：`context.paper_id != input.paper_id` 直接报错，防止 ContextPlanner 张冠李戴
 
-**节点2 `_independent_review`（125-157行）**
+**三专家初审分支**
 
-- `asyncio.Semaphore(config.max_concurrency)` 限制并发
-- `asyncio.gather` 同时跑 3 个 Specialist 的 `review()`
-- 每个失败先在对应角色内自动重试，不影响其他并行视角完成当前调用
-- 任一角色最终失败都会使成功数低于 `minimum_independent_reviews`(3)，整体抛 `WorkflowExecutionError`，不生成缺项评分
+- `independent_review` 保留为旧检查点兼容入口，并用 `Send` 激活缺失或失败的 Specialist 节点
+- LangGraph 在同一个 Super-step 调度三个节点，并通过 `RunnableConfig.max_concurrency` 控制并发
+- 每个分支独立执行校验与有限重试，结果按 Role ID 写入 `specialist_outcomes`
+- `join_specialist_reviews` 按固定角色顺序整理结果；成功数低于 `minimum_independent_reviews` 时整体抛 `WorkflowExecutionError`，不生成缺项评分
+- 任务恢复时清除失败 Role 的 Outcome，只重新调度失败分支，已成功专家不会重复调用
 - 角色一致性校验：`review.role is not role` 就报错——防止 A 角色的 Agent 返回了 B 角色的评审
 
 **节点3 `_plan_debate`（159-167行）**
@@ -189,11 +197,12 @@ historical_case_limit=5          # 历史评分案例上限
 - 检索后过滤 `kind.value == "external"`，截断到 `evidence_limit`
 - 未配置 retriever 或检索失败 → 空列表 + warning issue，不阻断流程
 
-**节点5 `_targeted_debate`（213-274行）**
+**定向 Debate 动态分支**
 
-- 只对有 question 的争议进行，**没有 question 就直接返回空回应**（216行）
-- 为每个 question 找目标 Specialist 的 own_review、从 issue 的 `participating_roles` 找对方意见（peer_reviews）
-- 同样并发 + 单点容错；`DebateResponse` 校验三重一致性：role、question_id、issue_id 必须与 question 完全匹配
+- `plan_debate` 后通过条件边路由；没有问题时直接进入 `synthesize_review`
+- 有问题时，`targeted_debate` 使用动态 `Send` 为每个 `question_id` 创建独立图任务
+- 每个任务查找目标 Specialist 的 own review 和参与争议的 peer reviews
+- `join_debate_responses` 按问题顺序整理结果；`DebateResponse` 的 role、`question_id`、`issue_id` 必须与问题完全匹配
 
 **节点6 `_synthesize_review`（276-288行）**
 

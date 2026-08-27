@@ -30,28 +30,36 @@
 
 ## 3. LangGraph 状态机编排
 
-核心编排位于 `workflows/debate.py` 的 `DebateWorkflow._build_graph()`，是一个串行图：
+核心编排位于 `workflows/debate.py` 的 `DebateWorkflow._build_graph()`。V2 保留确定性主链，并把 Specialist 初审和定向 Debate 展开为图级分支：
 
 ```text
 START
+  → resolve_discipline_skill 加载学科公共 Skill
   → step1_classify_paper    自动识别论文类型（显式输入时跳过）
+  → resolve_review_skill    合成并冻结论文类型 Review Profile
   → step2_classify_chapters 按论文类型识别章节阶段
-  → retrieve_historical_advice 检索旧 Step 3 历史建议
   → build_context           Context Planner 构造评审上下文
-  → independent_review      三个 Specialist 并行独立初审
+  → independent_review
+      ├→ review_scientific_soundness ─┐
+      ├→ review_empirical_evidence ───┼→ join_specialist_reviews
+      └→ review_global_quality ───────┘
   → plan_debate             Chair 识别争议并制定 Debate 计划
-  → retrieve_debate_evidence 按需检索外部证据
-  → targeted_debate         相关 Specialist 定向回应
+      ├→ 无问题：直接 synthesize_review
+      └→ 有问题：按需 retrieve_debate_evidence
+          → targeted_debate
+          → Send(question_1...question_n)
+          → join_debate_responses
   → synthesize_review       Chair 形成全文裁决与 Step 4 兼容输出
   → step5_workload_evaluation 按三类旧标准评价结构与工作量
   → compatibility_gate      校验章节键与章节名一致性
+  → retrieve_cleaned_advice 对确认 Finding 执行历史建议混合 RAG
   → step6_summary_advice    复用原 Step 6 汇总修改建议
   → retrieve_score_cases    检索历史评分案例
   → step7_scoring           复用原 Step 7 综合评分
   → END
 ```
 
-共享状态定义在 `workflows/state.py` 的 `DebateState`（TypedDict），跨节点传递上下文、独立意见、Debate 计划、证据、回应、综合裁决、评分和过程 `issues`。
+共享状态定义在 `workflows/state.py` 的 `DebateState`（TypedDict）。`specialist_outcomes` 按 Role ID、`debate_outcomes` 按 `question_id` 使用幂等字典 Reducer 合并；并行完成顺序不会影响最终输出，也不会因重放重复追加。
 
 运行时配置 `DebateWorkflowConfig` 暴露：最大并发数、最低独立初审数、证据条数上限、历史案例条数上限。
 
@@ -69,7 +77,7 @@ START
 
 ### 4.2 independent_review（三视角独立初审）
 
-三个 `DemoSpecialist` 并行（受 `max_concurrency` 限制）独立评审：
+三个 Specialist 是三个独立 LangGraph 节点，在同一个 Super-step 中执行，并受 `max_concurrency` 限制：
 
 | 角色 | 关注点 | 演示聚焦章节 |
 |---|---|---|
@@ -77,7 +85,7 @@ START
 | `empirical_evidence` | 实验、Baseline、消融、可复现性 | 实验 / 评估 / 结果 |
 | `global_quality` | 结构、章节关系、工作量、表达 | 引言 / 绪论 / 结论 |
 
-特点：第一轮不读取其他 Agent 意见；任一视角失败只产生 WARNING，不中断整条链路；独立意见数量低于 `minimum_independent_reviews` 才整体报错。
+特点：第一轮读取相同的只读 Context，不读取其他 Agent 意见；分支结果先按 Role ID 汇合，再由 `join_specialist_reviews` 按固定顺序整理。独立意见数量低于 `minimum_independent_reviews` 时整体报错；恢复任务只重新调度失败 Role，已成功分支沿用检查点结果。
 
 每个 Specialist 输出 `IndependentReview`（摘要、优点、`ReviewFinding`、作者问题、置信度）。
 
@@ -89,7 +97,7 @@ START
 - 为每个参与角色生成定向质疑（`DebateQuestion`）；
 - 需外部事实支持的问题标记 `requires_external_evidence` 并附 `evidence_query`。
 
-V0 固定一轮 Debate；没有争议时 `DebatePlan` 为空，后续直接进入综合。
+V2 仍限制为一轮 Debate；没有争议时通过条件边直接进入综合，不执行证据检索和空 Debate 节点。
 
 ### 4.4 retrieve_debate_evidence（按需证据检索）
 
@@ -97,7 +105,7 @@ V0 固定一轮 Debate；没有争议时 `DebatePlan` 为空，后续直接进�
 
 ### 4.5 targeted_debate（定向回应）
 
-Chair 把每个问题派发给对应的目标 Specialist。被质询的 Specialist 阅读：自身初审、争议定义、对方（peer）意见和外部证据，然后给出立场（maintain / revise / concede / insufficient）与回应。回应与问题的角色、question_id、issue_id 必须一一对应；失败仅记 issue。
+LangGraph 使用动态 `Send` 按 `question_id` 把每个问题派发给目标 Specialist。被质询者读取自身初审、争议定义、对方意见和外部证据，再给出立场与回应。分支结果按 `question_id` 幂等汇合；回应的角色、`question_id`、`issue_id` 必须与问题一致，单个回应失败只记录 issue。
 
 ### 4.6 synthesize_review（Chair 综合裁决）
 
