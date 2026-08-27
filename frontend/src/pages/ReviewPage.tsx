@@ -271,14 +271,18 @@ export default function ReviewPage() {
           </div>
 
           <div className="process-line">
-            <span className="active">1</span>
-            <i />
-            <span>2</span>
-            <i />
-            <span>3</span>
-            <div>
+            <div className="process-step active">
+              <span>1</span>
               <b>上传论文</b>
+            </div>
+            <i />
+            <div className="process-step">
+              <span>2</span>
               <b>多智能体评审</b>
+            </div>
+            <i />
+            <div className="process-step">
+              <span>3</span>
               <b>查看报告</b>
             </div>
           </div>

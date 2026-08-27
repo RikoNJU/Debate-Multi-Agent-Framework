@@ -31,16 +31,10 @@ export default function HomePage() {
             transition={{ duration: 0.8 }}
           >
             <h1>睿文智评</h1>
+            <div className="hero-flourish" aria-hidden="true">
+              <i /><span /><i />
+            </div>
             <p>基于多智能体辩论的本科毕业论文智能评审系统</p>
-          </motion.div>
-
-          <motion.div
-            className="hero-image"
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.8, delay: 0.2 }}
-          >
-            <img src="/assets/system-hero.png" alt="系统架构" />
           </motion.div>
         </section>
 
