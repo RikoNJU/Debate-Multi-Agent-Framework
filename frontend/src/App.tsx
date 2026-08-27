@@ -1,5 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
+import PageFooter from './components/PageFooter';
 import ReviewPage from './pages/ReviewPage';
+import HomePage from './pages/HomePage';
 import TaskDetailPage from './pages/TaskDetailPage';
 import AdminPortalPage from './pages/AdminPortalPage';
 import LoginPage from './pages/LoginPage';
@@ -12,7 +14,7 @@ export default function App() {
     <>
       <TopNav />
       <Routes>
-        <Route path="/" element={<div className="empty-home" />} />
+        <Route path="/" element={<HomePage />} />
         <Route path="/student" element={<ReviewPage />} />
         <Route path="/student/tasks/:taskId" element={<TaskDetailPage />} />
         <Route path="/login" element={<LoginPage />} />
@@ -25,6 +27,7 @@ export default function App() {
         <Route path="/admin" element={<Navigate to="/workspace/admin" replace />} />
         <Route path="*" element={<Navigate to="/student" replace />} />
       </Routes>
+      <PageFooter />
     </>
   );
 }

@@ -55,6 +55,29 @@ def find_tectonic() -> str | None:
     return None
 
 
+def find_xelatex() -> str | None:
+    """回退定位 xelatex（TeX Live 环境通常已安装 tectonic 缺失时可用）。"""
+    candidates: list[str] = []
+    env = os.getenv("DEBATE_LATEX_PATH")
+    if env:
+        candidates.append(env)
+    which = shutil.which("xelatex")
+    if which:
+        candidates.append(which)
+    candidates.extend(
+        [
+            r"D:\texlive\2026\bin\windows\xelatex.exe",
+            "/usr/bin/xelatex",
+            "/usr/local/bin/xelatex",
+        ]
+    )
+    for candidate in candidates:
+        path = Path(candidate)
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    return None
+
+
 _STUDENT_META_PATTERN = re.compile(
     r"^([0-9A-Za-z_-]+)[-_](.+?)(?:\.[A-Za-z0-9]+)?$"
 )
@@ -447,19 +470,28 @@ def compile_review_table_pdf(
     tex_path = output / f"{stem}.tex"
     tex_path.write_text(tex_source, encoding="utf-8")
 
-    executable = tectonic_path or find_tectonic()
+    executable = tectonic_path or find_tectonic() or find_xelatex()
     if executable is None:
         raise FileNotFoundError(
-            "未找到 tectonic 编译器，请安装 tectonic 或设置 DEBATE_TECTONIC_PATH"
+            "未找到 tectonic/xelatex 编译器，请安装 tectonic 或设置 DEBATE_TECTONIC_PATH"
         )
 
     env = dict(os.environ)
-    if cache_dir:
-        env["TECTONIC_CACHE_DIR"] = str(cache_dir)
-    env["TECTONIC_KEEP_LOGS"] = "1"
 
     pdf_path = output / f"{stem}.pdf"
-    command = [executable, "-X", "compile", "--outdir", str(output), str(tex_path)]
+    if "tectonic" in Path(executable).name.lower():
+        if cache_dir:
+            env["TECTONIC_CACHE_DIR"] = str(cache_dir)
+        env["TECTONIC_KEEP_LOGS"] = "1"
+        command = [executable, "-X", "compile", "--outdir", str(output), str(tex_path)]
+    else:
+        command = [
+            executable,
+            "-interaction=nonstopmode",
+            "-halt-on-error",
+            f"-output-directory={output}",
+            str(tex_path),
+        ]
     completed = subprocess.run(
         command,
         cwd=str(output),
