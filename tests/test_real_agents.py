@@ -80,6 +80,51 @@ class FakeModelClient:
                     for item in payload["required_rubric_items"]
                 ]
                 content = json.dumps(parsed, ensure_ascii=False)
+        elif "输出 DebatePlan JSON" in user_message and content == PLAN_JSON:
+            payload = json.loads(user_message.split("输入数据：\n", 1)[1])
+            parsed = json.loads(content)
+            finding_by_role = {
+                review["role"]: review["findings"][0]["finding_id"]
+                for review in payload["independent_reviews"]
+                if review.get("findings")
+            }
+            science_id = finding_by_role.get("scientific_soundness")
+            empirical_id = finding_by_role.get("empirical_evidence")
+            for issue in parsed.get("issues", []):
+                issue["conflicting_finding_ids"] = [
+                    finding_id
+                    for finding_id in (science_id, empirical_id)
+                    if finding_id
+                ]
+            for question in parsed.get("questions", []):
+                question["challenged_finding_ids"] = (
+                    [science_id] if science_id else []
+                )
+            content = json.dumps(parsed, ensure_ascii=False)
+        elif "输出 GlobalReview JSON" in user_message and content == GLOBAL_REVIEW_JSON:
+            payload = json.loads(user_message.split("输入数据：\n", 1)[1])
+            parsed = json.loads(content)
+            parsed["resolved_findings"] = [
+                {
+                    "source_finding_ids": [finding["finding_id"]],
+                    "dimension": finding["dimension"],
+                    "claim": finding["claim"],
+                    "severity": finding["severity"],
+                    "status": "confirmed",
+                    "rationale": finding["rationale"],
+                    "evidence_ids": [
+                        evidence["evidence_id"]
+                        for evidence in finding.get("evidence", [])
+                    ],
+                    "affected_chapter_ids": finding["affected_chapter_ids"],
+                    "dissenting_views": [],
+                    "confidence": finding["confidence"],
+                    "merge_rationale": "单一 Source Finding，无需归并。",
+                }
+                for review in payload["independent_reviews"]
+                for finding in review.get("findings", [])
+            ]
+            content = json.dumps(parsed, ensure_ascii=False)
         self.calls += 1
         return ModelResponse(content=content)
 

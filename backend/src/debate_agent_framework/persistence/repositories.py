@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from ..schemas import DebateReviewInput
 from ..services.jobs import (
@@ -20,6 +20,8 @@ from .database import Database
 from .models import (
     AuditLogRecord,
     AuthSessionRecord,
+    CanonicalFindingMemberRecord,
+    CanonicalFindingRecord,
     HumanReviewRecord,
     PaperArtifactRecord,
     PaperAssignmentRecord,
@@ -27,6 +29,7 @@ from .models import (
     PaperRevisionRecord,
     ReviewRunRecord,
     ReviewRunStageRecord,
+    SourceFindingRecord,
     UserRecord,
 )
 from ..services.security import hash_password, hash_token, new_session_token, verify_password
@@ -138,8 +141,92 @@ class SqlAlchemyRunStore:
             record.skill_version = audit.get("skill_version")
             record.skill_profile_hash = audit.get("skill_profile_hash")
             record.skill_versions_json = audit.get("skill_versions", {})
+            record.finding_identity_version = result.get("finding_identity_version")
+            self._sync_finding_identities(session, task_id, result)
             session.flush()
             return self._snapshot(record, self._stage_events(session, task_id))
+
+    @staticmethod
+    def _sync_finding_identities(
+        session: Any, task_id: str, result: dict[str, Any]
+    ) -> None:
+        """Materialize V2 lineage for queries without rewriting legacy runs."""
+
+        session.execute(
+            delete(CanonicalFindingRecord).where(
+                CanonicalFindingRecord.task_id == task_id
+            )
+        )
+        session.execute(
+            delete(SourceFindingRecord).where(SourceFindingRecord.task_id == task_id)
+        )
+        session.flush()
+        if result.get("finding_identity_version") != "finding_identity_v2":
+            return
+
+        source_ids: set[str] = set()
+        for review in result.get("independent_reviews") or []:
+            role = str(review.get("role") or "")
+            for finding in review.get("findings") or []:
+                finding_id = str(finding.get("finding_id") or "")
+                local_ref = str(finding.get("local_ref") or "")
+                fingerprint = str(finding.get("fingerprint") or "")
+                if not finding_id or not local_ref or not role or not fingerprint:
+                    raise ValueError("V2 Source Finding 缺少身份审计字段")
+                if finding_id in source_ids:
+                    raise ValueError(f"V2 Source Finding ID 重复：{finding_id}")
+                source_ids.add(finding_id)
+                session.add(
+                    SourceFindingRecord(
+                        finding_id=finding_id,
+                        task_id=task_id,
+                        source_role=role,
+                        local_ref=local_ref,
+                        fingerprint=fingerprint,
+                        payload_json=finding,
+                    )
+                )
+        session.flush()
+
+        global_review = ((result.get("synthesis") or {}).get("global_review") or {})
+        canonical_ids: set[str] = set()
+        member_ids: set[str] = set()
+        for finding in global_review.get("resolved_findings") or []:
+            canonical_id = str(finding.get("finding_id") or "")
+            fingerprint = str(finding.get("fingerprint") or "")
+            members = list(finding.get("source_finding_ids") or [])
+            if not canonical_id or not fingerprint or not members:
+                raise ValueError("V2 Canonical Finding 缺少身份审计字段")
+            if canonical_id in canonical_ids:
+                raise ValueError(f"V2 Canonical Finding ID 重复：{canonical_id}")
+            unknown = sorted(set(members) - source_ids)
+            if unknown:
+                raise ValueError(f"Canonical Finding 引用了未知 Source：{unknown}")
+            duplicate_members = sorted(set(members) & member_ids)
+            if duplicate_members:
+                raise ValueError(f"Source Finding 被重复归并：{duplicate_members}")
+            canonical_ids.add(canonical_id)
+            member_ids.update(members)
+            session.add(
+                CanonicalFindingRecord(
+                    finding_id=canonical_id,
+                    task_id=task_id,
+                    status=str(finding.get("status") or ""),
+                    fingerprint=fingerprint,
+                    payload_json=finding,
+                )
+            )
+            session.flush()
+            for source_id in members:
+                session.add(
+                    CanonicalFindingMemberRecord(
+                        canonical_finding_id=canonical_id,
+                        source_finding_id=source_id,
+                    )
+                )
+        if member_ids != source_ids:
+            missing = sorted(source_ids - member_ids)
+            raise ValueError(f"Canonical Finding 未覆盖全部 Source：{missing}")
 
     def mark_resuming(self, task_id: str) -> RunSnapshot:
         """失败重试：恢复为运行中，但保留已完成步骤的进度记录。"""
@@ -306,6 +393,7 @@ class SqlAlchemyRunStore:
             skill_version=record.skill_version,
             skill_profile_hash=record.skill_profile_hash,
             skill_versions=record.skill_versions_json or {},
+            finding_identity_version=record.finding_identity_version,
             current_stage=record.current_stage,
             current_stage_label=(
                 current_event.label

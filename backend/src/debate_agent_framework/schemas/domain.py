@@ -222,6 +222,7 @@ class ReviewContext(StrictModel):
     """Context Planner 的输出。"""
 
     paper_id: str = Field(min_length=1)
+    run_id: str = "legacy"
     profile: PaperProfile
     full_text: str | None = None
     content_packets: list[ContentPacket] = Field(default_factory=list)
@@ -267,6 +268,10 @@ class ReviewFinding(StrictModel):
     """Specialist 对论文问题的结构化判断。"""
 
     finding_id: str = Field(min_length=1)
+    local_ref: str | None = None
+    source_role: SpecialistRole | None = None
+    identity_version: str = "v1_legacy"
+    fingerprint: str | None = None
     dimension: str = Field(min_length=1)
     claim: str = Field(min_length=1)
     rationale: str = Field(min_length=1)
@@ -310,6 +315,22 @@ class IndependentReview(StrictModel):
     rubric_assessments: list[RubricAssessment] = Field(default_factory=list)
     author_questions: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_local_finding_references(self) -> "IndependentReview":
+        ids = [finding.finding_id for finding in self.findings]
+        if len(ids) != len(set(ids)):
+            raise ValueError("同一 Specialist 输出了重复 finding_id")
+        known = set(ids)
+        unknown = {
+            finding_id
+            for assessment in self.rubric_assessments
+            for finding_id in assessment.finding_ids
+            if finding_id not in known
+        }
+        if unknown:
+            raise ValueError(f"Rubric 引用了未知 Finding：{sorted(unknown)}")
+        return self
 
 
 class DebateIssue(StrictModel):
@@ -388,6 +409,10 @@ class ResolvedFinding(StrictModel):
     """Chair 根据证据而非多数投票形成的最终问题判断。"""
 
     finding_id: str = Field(min_length=1)
+    source_finding_ids: list[str] = Field(default_factory=list)
+    identity_version: str = "v1_legacy"
+    fingerprint: str | None = None
+    merge_rationale: str = ""
     dimension: str = Field(min_length=1)
     claim: str = Field(min_length=1)
     severity: FindingSeverity
@@ -402,7 +427,25 @@ class ResolvedFinding(StrictModel):
     def enforce_final_evidence_boundary(self) -> "ResolvedFinding":
         if self.status is ResolutionStatus.CONFIRMED and not self.evidence:
             raise ValueError("Chair 确认的问题必须提供可核验论文证据")
+        if self.identity_version == "finding_identity_v2" and not self.source_finding_ids:
+            raise ValueError("V2 Canonical Finding 必须保留 source_finding_ids")
         return self
+
+
+class FindingResolutionDraft(StrictModel):
+    """Chair 提交归并和裁决，正式 Canonical ID 由服务端生成。"""
+
+    source_finding_ids: list[str] = Field(min_length=1)
+    dimension: str = Field(min_length=1)
+    claim: str = Field(min_length=1)
+    severity: FindingSeverity
+    status: ResolutionStatus
+    rationale: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(default_factory=list)
+    affected_chapter_ids: list[str] = Field(default_factory=list)
+    dissenting_views: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+    merge_rationale: str = ""
 
 
 class DimensionEvaluation(StrictModel):
@@ -422,6 +465,33 @@ class GlobalReview(StrictModel):
     author_questions: list[str] = Field(default_factory=list)
     dimensions: list[DimensionEvaluation] = Field(default_factory=list)
     resolved_findings: list[ResolvedFinding] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_canonical_lineage(self) -> "GlobalReview":
+        canonical_ids = [finding.finding_id for finding in self.resolved_findings]
+        if len(canonical_ids) != len(set(canonical_ids)):
+            raise ValueError("GlobalReview 包含重复 Canonical Finding ID")
+        source_ids = [
+            source_id
+            for finding in self.resolved_findings
+            if finding.identity_version == "finding_identity_v2"
+            for source_id in finding.source_finding_ids
+        ]
+        if len(source_ids) != len(set(source_ids)):
+            raise ValueError("一个 Source Finding 不能归属多个 Canonical Finding")
+        return self
+
+
+class GlobalReviewDraft(StrictModel):
+    """不允许 Chair 自行生成正式 Finding ID 的综合裁决草稿。"""
+
+    overall_summary: str = Field(min_length=1)
+    strengths: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    author_questions: list[str] = Field(default_factory=list)
+    dimensions: list[DimensionEvaluation] = Field(default_factory=list)
+    resolved_findings: list[FindingResolutionDraft] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
 
 
@@ -589,6 +659,8 @@ class DebateWorkflowIssue(StrictModel):
 
 class DebateRunResult(StrictModel):
     workflow_graph_version: str = "v2"
+    finding_identity_version: str = "finding_identity_v2"
+    finding_lineage: dict[str, list[str]] = Field(default_factory=dict)
     review_profile: ResolvedReviewProfile
     context: ReviewContext
     independent_reviews: list[IndependentReview]

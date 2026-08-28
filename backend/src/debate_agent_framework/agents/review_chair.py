@@ -17,15 +17,16 @@ from ..schemas import (
     DebatePlan,
     DebateResponse,
     DimensionEvaluation,
-    GlobalReview,
+    FindingResolutionDraft,
+    GlobalReviewDraft,
     IndependentReview,
-    ResolvedFinding,
     ReviewContext,
     ReviewEvidence,
 )
 from .compat import assemble_review_synthesis
 from .json_client import complete_json, review_context_payload
 from ..ports import ReviewChair
+from ..finding_identity import canonicalize_review
 
 # 综合裁决需要为每个章节输出评估与证据锚定，是全流程最长的输出；
 # 思考模型的思考 token 也计入输出上限，默认值需留足余量。
@@ -118,18 +119,31 @@ class DebateReviewChairAgent(ReviewChair):
                 "请综合原文、独立初审、Debate 回应和外部证据，输出 GlobalReview JSON。"
                 "overall_summary 必填：用 2-4 句话概括论文整体质量和核心缺陷。"
                 "confidence 必填：给出综合置信度分数 0.0-1.0。"
-                "resolved_findings 必须覆盖独立初审中的每个 finding_id，并逐条给出最终判断；"
+                "resolved_findings 必须对独立初审中的全部 Source Finding 做完整分组，"
+                "每个 source_finding_id 必须出现且只能出现一次；语义相同的问题可以"
+                "放入同一个 source_finding_ids，语义不同则分别裁决；"
                 "status 只能是 confirmed 或 rejected，不能使用多数投票；"
-                "裁决已有问题时应保留独立初审中的 finding_id，以便固定评审小项追踪；"
+                "不得生成 finding_id，正式 Canonical Finding ID 由系统分配；"
+                "evidence_ids 只能引用输入 Source Finding、Debate 回应或外部检索中"
+                "已有的证据；"
                 "证据足以支持问题时判为 confirmed；证据不足、无法锚定原文或讨论后仍有"
                 "争议时，按照负面结论的举证责任判为 rejected，并在 rationale 中说明原因。"
             ),
             payload=payload,
-            schema=GlobalReview.model_json_schema(),
+            schema=GlobalReviewDraft.model_json_schema(),
             max_tokens=self.synthesize_max_tokens,
         )
-        global_review = self._validate_global_review(
-            self._repair_global_review(data), reviews
+        draft = self._validate_global_review_draft(
+            self._repair_global_review(data, reviews), reviews
+        )
+        global_review = canonicalize_review(
+            draft,
+            reviews,
+            run_id=context.run_id,
+            additional_evidence=[
+                *external_evidence,
+                *(evidence for response in responses for evidence in response.evidence),
+            ],
         )
         return assemble_review_synthesis(context, global_review, reviews=reviews)
 
@@ -189,12 +203,22 @@ class DebateReviewChairAgent(ReviewChair):
             for review in reviews
             for finding in review.findings
         }
+        aliases = _unique_local_aliases(reviews)
 
         issues = data.get("issues") or []
         questions = data.get("questions") or []
 
         issues_by_id: dict[str, dict[str, Any]] = {}
         for issue in issues:
+            issue["conflicting_finding_ids"] = [
+                aliases.get(finding_id, finding_id)
+                for finding_id in issue.get("conflicting_finding_ids") or []
+            ]
+            issue["conflicting_finding_ids"] = [
+                finding_id
+                for finding_id in issue["conflicting_finding_ids"]
+                if finding_id in finding_role
+            ]
             roles = list(
                 dict.fromkeys(issue.get("participating_roles") or [])
             )
@@ -210,6 +234,15 @@ class DebateReviewChairAgent(ReviewChair):
             issue = issues_by_id.get(question.get("issue_id"))
             if issue is None:
                 continue
+            question["challenged_finding_ids"] = [
+                aliases.get(finding_id, finding_id)
+                for finding_id in question.get("challenged_finding_ids") or []
+            ]
+            question["challenged_finding_ids"] = [
+                finding_id
+                for finding_id in question["challenged_finding_ids"]
+                if finding_id in finding_role
+            ]
             target_role = question.get("target_role")
             if target_role and target_role not in issue["participating_roles"]:
                 issue["participating_roles"].append(target_role)
@@ -218,7 +251,7 @@ class DebateReviewChairAgent(ReviewChair):
 
         valid_issues = [
             issue
-            for issue in issues
+            for issue in issues_by_id.values()
             if len(set(issue["participating_roles"])) >= 2
         ]
         valid_issue_ids = {issue["issue_id"] for issue in valid_issues}
@@ -230,7 +263,9 @@ class DebateReviewChairAgent(ReviewChair):
         return {"issues": valid_issues, "questions": questions}
 
     @classmethod
-    def _repair_global_review(cls, data: dict[str, Any]) -> dict[str, Any]:
+    def _repair_global_review(
+        cls, data: dict[str, Any], reviews: Sequence[IndependentReview]
+    ) -> dict[str, Any]:
         """丢弃模型多输出的未知字段，并为必填字段提供兜底。
 
         模型可能模仿输入载荷并复制不属于最终 Schema 的字段。这些冗余键
@@ -243,17 +278,28 @@ class DebateReviewChairAgent(ReviewChair):
             allowed = set(model.model_fields)
             return {key: value for key, value in item.items() if key in allowed}
 
-        repaired = strip(GlobalReview, data)
+        repaired = strip(GlobalReviewDraft, data)
         repaired["dimensions"] = [
             strip(DimensionEvaluation, item)
             for item in repaired.get("dimensions") or []
             if isinstance(item, dict)
         ]
-        repaired["resolved_findings"] = [
-            strip(ResolvedFinding, item)
-            for item in repaired.get("resolved_findings") or []
-            if isinstance(item, dict)
-        ]
+        aliases = _unique_local_aliases(reviews)
+        repaired_findings = []
+        for item in data.get("resolved_findings") or []:
+            if not isinstance(item, dict):
+                continue
+            candidate = dict(item)
+            source_ids = candidate.get("source_finding_ids")
+            if not source_ids and candidate.get("finding_id"):
+                source_ids = [candidate["finding_id"]]
+            candidate["source_finding_ids"] = [
+                aliases.get(source_id, source_id) for source_id in source_ids or []
+            ]
+            if "evidence_ids" not in candidate:
+                candidate["evidence_ids"] = []
+            repaired_findings.append(strip(FindingResolutionDraft, candidate))
+        repaired["resolved_findings"] = repaired_findings
         if "overall_summary" not in repaired:
             repaired["overall_summary"] = (
                 "经综合分析，论文存在若干问题需修改，详见各维度评估与问题详情。"
@@ -263,33 +309,40 @@ class DebateReviewChairAgent(ReviewChair):
         return repaired
 
     @staticmethod
-    def _validate_global_review(
+    def _validate_global_review_draft(
         data: dict[str, Any], reviews: Sequence[IndependentReview]
-    ) -> GlobalReview:
-        """校验 Chair 生成的最终裁决判断部分。"""
+    ) -> GlobalReviewDraft:
+        """Validate Chair grouping before server-owned canonicalization."""
 
         try:
-            review = GlobalReview.model_validate(data)
+            review = GlobalReviewDraft.model_validate(data)
         except ValidationError as exc:
             raise ValueError(
-                f"DebateReviewChairAgent 输出不符合 GlobalReview：{exc}"
+                f"DebateReviewChairAgent 输出不符合 GlobalReviewDraft：{exc}"
             ) from exc
         expected_ids = {
             finding.finding_id
             for independent_review in reviews
             for finding in independent_review.findings
         }
-        resolved_ids = [finding.finding_id for finding in review.resolved_findings]
+        resolved_ids = [
+            source_id
+            for finding in review.resolved_findings
+            for source_id in finding.source_finding_ids
+        ]
         duplicate_ids = sorted(
             finding_id
             for finding_id in set(resolved_ids)
             if resolved_ids.count(finding_id) > 1
         )
         if duplicate_ids:
-            raise ValueError(f"Chair 重复裁决 Finding：{duplicate_ids}")
+            raise ValueError(f"Chair 重复裁决 Source Finding：{duplicate_ids}")
         missing_ids = sorted(expected_ids - set(resolved_ids))
         if missing_ids:
-            raise ValueError(f"Chair 未裁决全部独立初审 Finding：{missing_ids}")
+            raise ValueError(f"Chair 未裁决全部 Source Finding：{missing_ids}")
+        unknown_ids = sorted(set(resolved_ids) - expected_ids)
+        if unknown_ids:
+            raise ValueError(f"Chair 引用了未知 Source Finding：{unknown_ids}")
         return review
 
     @staticmethod
@@ -307,3 +360,20 @@ class DebateReviewChairAgent(ReviewChair):
         guidance = profile.chair_guidance if profile else ""
         sections = [base, base_guidance, str(guidance)]
         return "\n\n".join(section for section in sections if section)
+
+
+def _unique_local_aliases(
+    reviews: Sequence[IndependentReview],
+) -> dict[str, str]:
+    """Map legacy local refs only when the ref is unambiguous across roles."""
+
+    candidates: dict[str, list[str]] = {}
+    for review in reviews:
+        for finding in review.findings:
+            if finding.local_ref:
+                candidates.setdefault(finding.local_ref, []).append(finding.finding_id)
+    return {
+        local_ref: source_ids[0]
+        for local_ref, source_ids in candidates.items()
+        if len(source_ids) == 1
+    }

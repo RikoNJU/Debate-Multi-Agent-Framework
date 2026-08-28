@@ -76,6 +76,10 @@ class Database:
         has_skill_prerequisites = {
             "users", "human_reviews", "review_run_stages"
         }.issubset(tables)
+        if {
+            "source_findings", "canonical_findings", "canonical_finding_members"
+        }.issubset(tables) and "finding_identity_version" in review_run_columns:
+            return "20260828_0009"
         if has_skill_prerequisites and {
             "skill_id", "skill_version", "skill_profile_hash", "skill_versions_json"
         }.issubset(review_run_columns):

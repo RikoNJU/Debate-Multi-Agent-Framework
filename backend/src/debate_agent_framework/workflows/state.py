@@ -78,6 +78,7 @@ class DebateQuestionTask(TypedDict):
 
 
 class DebateState(TypedDict, total=False):
+    run_id: str
     review_input: DebateReviewInput
     discipline_profile: ResolvedDisciplineProfile
     review_profile: ResolvedReviewProfile

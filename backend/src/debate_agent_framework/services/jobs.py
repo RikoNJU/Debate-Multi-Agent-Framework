@@ -55,6 +55,7 @@ class RunSnapshot(BaseModel):
     skill_version: str | None = None
     skill_profile_hash: str | None = None
     skill_versions: dict[str, str] = Field(default_factory=dict)
+    finding_identity_version: str | None = None
     current_stage: str | None = None
     current_stage_label: str | None = None
     progress_percent: int = Field(default=0, ge=0, le=100)
@@ -195,6 +196,7 @@ class InMemoryRunStore:
             current_stage_label="评审已完成",
             progress_percent=100,
             stage_started_at=None,
+            finding_identity_version=result.get("finding_identity_version"),
             **audit,
         )
 

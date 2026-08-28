@@ -95,12 +95,61 @@ class ReviewRunRecord(Base):
     skill_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     skill_profile_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     skill_versions_json: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    finding_identity_version: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(32), index=True)
     current_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
     result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class SourceFindingRecord(Base):
+    __tablename__ = "source_findings"
+    __table_args__ = (
+        UniqueConstraint(
+            "task_id", "source_role", "local_ref", name="uq_source_finding_local_ref"
+        ),
+    )
+
+    finding_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("review_runs.task_id", ondelete="CASCADE"), index=True
+    )
+    source_role: Mapped[str] = mapped_column(String(64), index=True)
+    local_ref: Mapped[str] = mapped_column(String(255))
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class CanonicalFindingRecord(Base):
+    __tablename__ = "canonical_findings"
+
+    finding_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("review_runs.task_id", ondelete="CASCADE"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class CanonicalFindingMemberRecord(Base):
+    __tablename__ = "canonical_finding_members"
+
+    canonical_finding_id: Mapped[str] = mapped_column(
+        ForeignKey("canonical_findings.finding_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    source_finding_id: Mapped[str] = mapped_column(
+        ForeignKey("source_findings.finding_id", ondelete="CASCADE"),
+        primary_key=True,
+        unique=True,
+    )
 
 
 class ReviewRunStageRecord(Base):

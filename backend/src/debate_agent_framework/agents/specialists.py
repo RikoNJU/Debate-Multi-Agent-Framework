@@ -129,6 +129,8 @@ class DebateSpecialistAgent(SpecialistAgent):
                 "请回应 Review Chair 定向发送的争议问题，输出 DebateResponse JSON。"
                 "response_id、response、position、revised_findings 和 confidence 由你"
                 "生成；role、issue_id、question_id 必须与输入中的 question 保持一致。"
+                "revised_findings 只能修订 own_review 中已有的 Source Finding，"
+                "finding_id 必须原样保留，不得新建或重新编号；若无修订则返回空列表。"
                 "只有当问题要求外部证据时，才把 external_evidence 放入 evidence 字段。"
             ),
             payload=payload,

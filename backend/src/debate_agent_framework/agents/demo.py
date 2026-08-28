@@ -16,14 +16,14 @@ from ..schemas import (
     DebateReviewInput,
     DimensionEvaluation,
     EvidenceKind,
+    FindingResolutionDraft,
     FindingSeverity,
     FindingAdviceItem,
-    GlobalReview,
+    GlobalReviewDraft,
     HistoricalScoreCase,
     IndependentReview,
     PaperProfile,
     ResolutionStatus,
-    ResolvedFinding,
     ReviewContext,
     ReviewEvidence,
     ReviewFinding,
@@ -32,6 +32,7 @@ from ..schemas import (
     SpecialistRole,
     SummaryAdviceResult,
 )
+from ..finding_identity import canonicalize_review
 from .compat import assemble_review_synthesis
 from .legacy_scoring import calculate_legacy_score
 
@@ -221,6 +222,14 @@ class DemoReviewChair:
         if not required.issubset(roles):
             return DebatePlan()
 
+        reviews_by_role = {review.role: review for review in reviews}
+        science_findings = reviews_by_role[SpecialistRole.SCIENTIFIC_SOUNDNESS].findings
+        empirical_findings = reviews_by_role[SpecialistRole.EMPIRICAL_EVIDENCE].findings
+        if not science_findings or not empirical_findings:
+            return DebatePlan()
+        science_id = science_findings[0].finding_id
+        empirical_id = empirical_findings[0].finding_id
+
         issue = DebateIssue(
             issue_id="ISSUE-METHOD-EVIDENCE",
             title="理论成立是否足以支持核心贡献",
@@ -229,7 +238,7 @@ class DemoReviewChair:
                 SpecialistRole.SCIENTIFIC_SOUNDNESS,
                 SpecialistRole.EMPIRICAL_EVIDENCE,
             ],
-            conflicting_finding_ids=["F-SCIENCE-1", "F-EMPIRICAL-1"],
+            conflicting_finding_ids=[science_id, empirical_id],
             evidence_gap="需要确认该方向应采用的强 Baseline 和标准实验设置",
             priority=5,
         )
@@ -241,14 +250,14 @@ class DemoReviewChair:
                     issue_id=issue.issue_id,
                     target_role=SpecialistRole.SCIENTIFIC_SOUNDNESS,
                     prompt="理论成立是否足以支撑论文声称的整体贡献？",
-                    challenged_finding_ids=["F-SCIENCE-1"],
+                    challenged_finding_ids=[science_id],
                 ),
                 DebateQuestion(
                     question_id="Q-EMPIRICAL-1",
                     issue_id=issue.issue_id,
                     target_role=SpecialistRole.EMPIRICAL_EVIDENCE,
                     prompt="请说明缺失的关键验证并给出依据。",
-                    challenged_finding_ids=["F-EMPIRICAL-1"],
+                    challenged_finding_ids=[empirical_id],
                     requires_external_evidence=True,
                     evidence_query="该研究方向常用的强 Baseline 与标准实验设置",
                 ),
@@ -265,14 +274,11 @@ class DemoReviewChair:
         external_evidence: Sequence[ReviewEvidence],
     ) -> ReviewSynthesis:
         findings = [finding for review in reviews for finding in review.findings]
-        resolved: list[ResolvedFinding] = []
+        resolved: list[FindingResolutionDraft] = []
         for finding in findings:
-            evidence = list(finding.evidence)
-            if finding.needs_external_verification:
-                evidence.extend(external_evidence)
             resolved.append(
-                ResolvedFinding(
-                    finding_id=finding.finding_id,
+                FindingResolutionDraft(
+                    source_finding_ids=[finding.finding_id],
                     dimension=finding.dimension,
                     claim=finding.claim,
                     severity=finding.severity,
@@ -282,7 +288,7 @@ class DemoReviewChair:
                         else ResolutionStatus.REJECTED
                     ),
                     rationale=finding.rationale,
-                    evidence=evidence,
+                    evidence_ids=[item.evidence_id for item in finding.evidence],
                     affected_chapter_ids=finding.affected_chapter_ids,
                     dissenting_views=[
                         response.response
@@ -293,7 +299,7 @@ class DemoReviewChair:
                 )
             )
 
-        global_review = GlobalReview(
+        draft = GlobalReviewDraft(
             overall_summary=context.profile.global_summary,
             strengths=[item for review in reviews for item in review.strengths],
             weaknesses=[
@@ -316,7 +322,16 @@ class DemoReviewChair:
             resolved_findings=resolved,
             confidence=sum(review.confidence for review in reviews) / len(reviews),
         )
-        return assemble_review_synthesis(context, global_review)
+        global_review = canonicalize_review(
+            draft,
+            reviews,
+            run_id=context.run_id,
+            additional_evidence=[
+                *external_evidence,
+                *(evidence for response in responses for evidence in response.evidence),
+            ],
+        )
+        return assemble_review_synthesis(context, global_review, reviews=reviews)
 
 
 class DemoEvidenceRetriever:

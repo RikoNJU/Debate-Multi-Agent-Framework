@@ -14,11 +14,13 @@ from debate_agent_framework.agents.chapter_rubric import (
 from debate_agent_framework.schemas import (
     ChapterInput,
     DebateReviewInput,
+    FindingSeverity,
     GlobalReview,
     IndependentReview,
     PaperProfile,
     PaperType,
     ReviewContext,
+    ReviewFinding,
     RubricAssessment,
     RubricJudgement,
     SpecialistRole,
@@ -130,6 +132,17 @@ def test_chair_rejection_resolves_negative_rubric_item_as_acceptable() -> None:
         review_id="R1",
         role=SpecialistRole.SCIENTIFIC_SOUNDNESS,
         paper_summary="测试",
+        findings=[
+            ReviewFinding(
+                finding_id="F-REJECTED",
+                dimension="方法",
+                claim="方法依据不足。",
+                rationale="尚无足够证据确认。",
+                severity=FindingSeverity.MINOR,
+                affected_chapter_ids=["C3"],
+                confidence=0.6,
+            )
+        ],
         rubric_assessments=[assessment],
         confidence=0.9,
     )

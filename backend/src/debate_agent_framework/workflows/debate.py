@@ -71,6 +71,11 @@ from .state import (
     SpecialistOutcome,
 )
 from ..skills import build_default_skill_resolver
+from ..finding_identity import (
+    FINDING_IDENTITY_VERSION,
+    assign_source_identities,
+    finding_lineage,
+)
 
 T = TypeVar("T")
 REQUIRED_ROLES = frozenset(SpecialistRole)
@@ -625,7 +630,14 @@ class DebateWorkflow:
         if context.paper_id != state["review_input"].paper_id:
             raise WorkflowExecutionError("ReviewContext.paper_id 与输入论文不一致")
         context = context.model_copy(
-            update={"review_profile": state["review_profile"]}
+            update={
+                "run_id": state["run_id"],
+                "review_profile": state["review_profile"],
+                "metadata": {
+                    **context.metadata,
+                    "finding_identity_version": FINDING_IDENTITY_VERSION,
+                },
+            }
         )
         logger.info("上下文构造完成，章节数=%d", len(context.chapters))
         return {"context": context}
@@ -709,6 +721,11 @@ class DebateWorkflow:
                     raise ValueError(
                         f"{role.value} 有 {len(degraded)} 条证据未达到自动锚定阈值"
                     )
+                review = assign_source_identities(
+                    review,
+                    run_id=state["run_id"],
+                    role=role,
+                )
                 await _emit_progress(stage, label, "succeeded", 50)
                 outcome: SpecialistOutcome = {
                     "role": role,
@@ -789,6 +806,14 @@ class DebateWorkflow:
                 "independent_review", label, "failed", started_progress, message
             )
             raise WorkflowExecutionError(message)
+
+        source_ids = [
+            finding.finding_id
+            for review in reviews
+            for finding in review.findings
+        ]
+        if len(source_ids) != len(set(source_ids)):
+            raise WorkflowExecutionError("服务端 Source Finding ID 发生碰撞")
 
         await _emit_progress(
             "independent_review", label, "succeeded", completed_progress
@@ -969,6 +994,14 @@ class DebateWorkflow:
                 or response.issue_id != question.issue_id
             ):
                 raise ValueError("DebateResponse 与定向问题的角色或标识不一致")
+            known_source_ids = {finding.finding_id for finding in own_review.findings}
+            revised_ids = {finding.finding_id for finding in response.revised_findings}
+            unknown_revisions = sorted(revised_ids - known_source_ids)
+            if unknown_revisions:
+                raise ValueError(
+                    "DebateResponse 只能修订本角色已有 Source Finding："
+                    f"{unknown_revisions}"
+                )
             degraded = self._validate_response_grounding(response, task["context"])
             issue_record = None
             if degraded:
@@ -1332,12 +1365,13 @@ class DebateWorkflow:
         validated_input = DebateReviewInput.model_validate(review_input)
         token = _progress_callback.set(progress_callback)
         try:
+            resolved_thread_id = thread_id or uuid4().hex
             config = {
-                "configurable": {"thread_id": thread_id or uuid4().hex},
+                "configurable": {"thread_id": resolved_thread_id},
                 "max_concurrency": self.config.max_concurrency,
             }
             final = await self.graph.ainvoke(
-                self._initial_state(validated_input), config
+                self._initial_state(validated_input, resolved_thread_id), config
             )
         finally:
             _progress_callback.reset(token)
@@ -1383,15 +1417,16 @@ class DebateWorkflow:
                 final = await self.graph.ainvoke(None, config)
             else:
                 final = await self.graph.ainvoke(
-                    self._initial_state(validated_input), config
+                    self._initial_state(validated_input, thread_id), config
                 )
         finally:
             _progress_callback.reset(token)
         return self._result_from_state(final)
 
     @staticmethod
-    def _initial_state(review_input: DebateReviewInput) -> DebateState:
+    def _initial_state(review_input: DebateReviewInput, run_id: str) -> DebateState:
         return {
+            "run_id": run_id,
             "review_input": review_input,
             "specialist_outcomes": {},
             "independent_reviews": [],
@@ -1416,6 +1451,8 @@ class DebateWorkflow:
             raise WorkflowExecutionError(f"Debate 工作流结束时缺少状态：{sorted(missing)}")
 
         return DebateRunResult(
+            finding_identity_version=FINDING_IDENTITY_VERSION,
+            finding_lineage=finding_lineage(final["synthesis"].global_review),
             review_profile=final["review_profile"],
             context=final["context"],
             independent_reviews=final.get("independent_reviews", []),

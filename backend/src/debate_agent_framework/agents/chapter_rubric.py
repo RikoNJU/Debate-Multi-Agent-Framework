@@ -314,21 +314,29 @@ def resolve_rubric_assessments(
 ) -> list[RubricAssessment]:
     """Resolve every negative checklist judgement from the Chair's binary decision."""
 
-    confirmed = {
-        finding.finding_id
+    confirmed_source_to_canonical = {
+        source_id: finding.finding_id
         for finding in global_review.resolved_findings
         if finding.status is ResolutionStatus.CONFIRMED
+        for source_id in finding.source_finding_ids
     }
     result: list[RubricAssessment] = []
     for assessment in sorted(
         (item for review in reviews for item in review.rubric_assessments),
         key=lambda item: item.item_id,
     ):
+        canonical_ids = list(
+            dict.fromkeys(
+                confirmed_source_to_canonical[finding_id]
+                for finding_id in assessment.finding_ids
+                if finding_id in confirmed_source_to_canonical
+            )
+        )
         if assessment.judgement not in {RubricJudgement.POOR, RubricJudgement.CRITICAL}:
-            result.append(assessment)
+            result.append(assessment.model_copy(update={"finding_ids": canonical_ids}))
             continue
-        if any(finding_id in confirmed for finding_id in assessment.finding_ids):
-            result.append(assessment)
+        if canonical_ids:
+            result.append(assessment.model_copy(update={"finding_ids": canonical_ids}))
             continue
         result.append(
             assessment.model_copy(
