@@ -89,6 +89,7 @@ class StudentTaskResponse(PortalModel):
     paper_title: str | None = None
     revision_id: str | None = None
     finding_identity_version: str | None = None
+    model_usage: dict[str, Any] = Field(default_factory=dict)
     current_stage: str | None = None
     current_stage_label: str | None = None
     progress_percent: int = Field(default=0, ge=0, le=100)

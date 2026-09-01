@@ -19,7 +19,13 @@ from ..schemas import (
     SpecialistRole,
 )
 from ..ports import SpecialistAgent
-from .json_client import complete_json, review_context_payload
+from .json_client import (
+    build_review_prompt_prefix,
+    compact_context_v2_enabled,
+    complete_json,
+    prompt_cache_v2_enabled,
+    review_context_payload,
+)
 from .chapter_rubric import expected_rubric_items, normalize_specialist_assessments
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts" / "specialists"
@@ -50,10 +56,10 @@ class DebateSpecialistAgent(SpecialistAgent):
             )
 
         rubric_items = expected_rubric_items(context, self.role)
-        payload = {
-            "context": review_context_payload(context),
-            "required_rubric_items": rubric_items,
-        }
+        cache_v2 = prompt_cache_v2_enabled()
+        payload = {"required_rubric_items": rubric_items}
+        if not cache_v2:
+            payload["context"] = review_context_payload(context)
         data = complete_json(
             self.model_client,
             system_prompt=self._system_prompt(context),
@@ -79,6 +85,12 @@ class DebateSpecialistAgent(SpecialistAgent):
             schema=IndependentReview.model_json_schema(),
             temperature=self.temperature,
             max_tokens=int(os.getenv("DEBATE_SPECIALIST_MAX_TOKENS", "8192")),
+            prompt_prefix=(
+                build_review_prompt_prefix(context, include_content=True)
+                if cache_v2
+                else None
+            ),
+            operation="specialist_review",
         )
         try:
             review = IndependentReview.model_validate(data)
@@ -110,18 +122,27 @@ class DebateSpecialistAgent(SpecialistAgent):
                 "DebateSpecialistAgent 需要注入 ModelClient"
             )
 
+        cache_v2 = prompt_cache_v2_enabled()
+        compact_v2 = compact_context_v2_enabled()
         payload = {
-            "context": review_context_payload(context),
             "own_review": own_review.model_dump(mode="json"),
             "issue": issue.model_dump(mode="json"),
             "question": question.model_dump(mode="json"),
-            "peer_reviews": [
-                item.model_dump(mode="json") for item in peer_reviews
-            ],
+            "peer_reviews": (
+                self._relevant_peer_reviews(issue, question, peer_reviews)
+                if compact_v2
+                else [item.model_dump(mode="json") for item in peer_reviews]
+            ),
             "external_evidence": [
                 item.model_dump(mode="json") for item in external_evidence
             ],
         }
+        if compact_v2:
+            payload["relevant_paper_context"] = self._debate_context(
+                context, own_review, issue, question, peer_reviews
+            )
+        else:
+            payload["context"] = review_context_payload(context)
         data = complete_json(
             self.model_client,
             system_prompt=self._system_prompt(context),
@@ -136,6 +157,12 @@ class DebateSpecialistAgent(SpecialistAgent):
             payload=payload,
             schema=DebateResponse.model_json_schema(),
             temperature=self.temperature,
+            prompt_prefix=(
+                build_review_prompt_prefix(context, include_content=False)
+                if cache_v2
+                else None
+            ),
+            operation="specialist_debate_response",
         )
         try:
             response = DebateResponse.model_validate(data)
@@ -147,6 +174,67 @@ class DebateSpecialistAgent(SpecialistAgent):
         response.issue_id = question.issue_id
         response.question_id = question.question_id
         return response
+
+    @staticmethod
+    def _relevant_peer_reviews(
+        issue: DebateIssue,
+        question: DebateQuestion,
+        peer_reviews: Sequence[IndependentReview],
+    ) -> list[dict[str, object]]:
+        selected_ids = set(issue.conflicting_finding_ids) | set(
+            question.challenged_finding_ids
+        )
+        return [
+            {
+                "review_id": review.review_id,
+                "role": review.role.value,
+                "paper_summary": review.paper_summary,
+                "findings": [
+                    finding.model_dump(mode="json")
+                    for finding in review.findings
+                    if finding.finding_id in selected_ids
+                ],
+                "confidence": review.confidence,
+            }
+            for review in peer_reviews
+        ]
+
+    @staticmethod
+    def _debate_context(
+        context: ReviewContext,
+        own_review: IndependentReview,
+        issue: DebateIssue,
+        question: DebateQuestion,
+        peer_reviews: Sequence[IndependentReview],
+    ) -> dict[str, object]:
+        selected_ids = set(issue.conflicting_finding_ids) | set(
+            question.challenged_finding_ids
+        )
+        findings = [
+            finding
+            for review in [own_review, *peer_reviews]
+            for finding in review.findings
+            if finding.finding_id in selected_ids
+        ]
+        chapter_ids = {
+            chapter_id
+            for finding in findings
+            for chapter_id in finding.affected_chapter_ids
+        }
+        return {
+            "findings": [finding.model_dump(mode="json") for finding in findings],
+            "chapters": [
+                {
+                    "chapter_id": chapter.chapter_id,
+                    "chapter_name": chapter.chapter_name,
+                    "stage": chapter.stage,
+                    "content_excerpt": chapter.content[:4000],
+                }
+                for chapter in context.chapters
+                if chapter.chapter_id in chapter_ids
+            ],
+            "context_policy": "debate_targeted_v2",
+        }
 
     def _system_prompt(self, context: ReviewContext) -> str:
         profile = context.review_profile

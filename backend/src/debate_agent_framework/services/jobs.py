@@ -37,6 +37,20 @@ class RunStageEvent(BaseModel):
     detail: str | None = None
 
 
+class ModelUsageSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    call_count: int = 0
+    failed_call_count: int = 0
+    prompt_tokens: int = 0
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
+    completion_tokens: int = 0
+    reasoning_tokens: int = 0
+    estimated_cost_yuan: float = 0.0
+    cache_hit_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class RunSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -56,6 +70,7 @@ class RunSnapshot(BaseModel):
     skill_profile_hash: str | None = None
     skill_versions: dict[str, str] = Field(default_factory=dict)
     finding_identity_version: str | None = None
+    model_usage: ModelUsageSummary = Field(default_factory=ModelUsageSummary)
     current_stage: str | None = None
     current_stage_label: str | None = None
     progress_percent: int = Field(default=0, ge=0, le=100)
@@ -68,6 +83,7 @@ class InMemoryRunStore:
 
     def __init__(self) -> None:
         self._runs: dict[str, RunSnapshot] = {}
+        self._model_metrics: dict[str, list[dict[str, Any]]] = {}
         self._lock = RLock()
 
     def create(
@@ -97,6 +113,48 @@ class InMemoryRunStore:
         with self._lock:
             self._runs[snapshot.task_id] = snapshot
         return snapshot.model_copy(deep=True)
+
+    def record_model_call(self, task_id: str, metric: dict[str, Any]) -> None:
+        with self._lock:
+            current = self._runs.get(task_id)
+            if current is None:
+                raise KeyError(task_id)
+            self._model_metrics.setdefault(task_id, []).append(dict(metric))
+            usage = current.model_usage
+            updated_usage = ModelUsageSummary(
+                call_count=usage.call_count + 1,
+                failed_call_count=(
+                    usage.failed_call_count
+                    + (1 if metric.get("status") == "failed" else 0)
+                ),
+                prompt_tokens=usage.prompt_tokens + int(metric.get("prompt_tokens", 0)),
+                cache_hit_tokens=usage.cache_hit_tokens
+                + int(metric.get("cache_hit_tokens", 0)),
+                cache_miss_tokens=usage.cache_miss_tokens
+                + int(metric.get("cache_miss_tokens", 0)),
+                completion_tokens=usage.completion_tokens
+                + int(metric.get("completion_tokens", 0)),
+                reasoning_tokens=usage.reasoning_tokens
+                + int(metric.get("reasoning_tokens", 0)),
+                estimated_cost_yuan=round(
+                    usage.estimated_cost_yuan
+                    + float(metric.get("estimated_cost_yuan", 0.0)),
+                    8,
+                ),
+                cache_hit_rate=(
+                    (usage.cache_hit_tokens + int(metric.get("cache_hit_tokens", 0)))
+                    / max(
+                        1,
+                        usage.cache_hit_tokens
+                        + usage.cache_miss_tokens
+                        + int(metric.get("cache_hit_tokens", 0))
+                        + int(metric.get("cache_miss_tokens", 0)),
+                    )
+                ),
+            )
+            self._runs[task_id] = current.model_copy(
+                update={"model_usage": updated_usage}, deep=True
+            )
 
     def mark_running(self, task_id: str) -> RunSnapshot:
         return self._update(

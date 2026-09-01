@@ -55,16 +55,21 @@ class FakeModelClient:
     ) -> ModelResponse:
         if self.calls >= len(self.responses):
             raise AssertionError("FakeModelClient 预设响应已耗尽")
-        user_message = next(
+        user_message = [
             message.content for message in messages if message.role == "user"
-        )
+        ][-1]
         self.used_schema_guidance.append(
             "严格按以下 JSON Schema 输出" in user_message
         )
         self.user_messages.append(user_message)
+        payload_marker = (
+            "本次增量输入：\n"
+            if "本次增量输入：\n" in user_message
+            else "输入数据：\n"
+        )
         content = self.responses[self.calls]
         if "required_rubric_items" in user_message:
-            payload = json.loads(user_message.split("输入数据：\n", 1)[1])
+            payload = json.loads(user_message.split(payload_marker, 1)[1])
             parsed = json.loads(content)
             if "review_id" in parsed and not parsed.get("rubric_assessments"):
                 parsed["rubric_assessments"] = [
@@ -81,7 +86,7 @@ class FakeModelClient:
                 ]
                 content = json.dumps(parsed, ensure_ascii=False)
         elif "输出 DebatePlan JSON" in user_message and content == PLAN_JSON:
-            payload = json.loads(user_message.split("输入数据：\n", 1)[1])
+            payload = json.loads(user_message.split(payload_marker, 1)[1])
             parsed = json.loads(content)
             finding_by_role = {
                 review["role"]: review["findings"][0]["finding_id"]
@@ -102,7 +107,7 @@ class FakeModelClient:
                 )
             content = json.dumps(parsed, ensure_ascii=False)
         elif "输出 GlobalReview JSON" in user_message and content == GLOBAL_REVIEW_JSON:
-            payload = json.loads(user_message.split("输入数据：\n", 1)[1])
+            payload = json.loads(user_message.split(payload_marker, 1)[1])
             parsed = json.loads(content)
             parsed["resolved_findings"] = [
                 {

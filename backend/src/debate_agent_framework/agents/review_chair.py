@@ -24,7 +24,14 @@ from ..schemas import (
     ReviewEvidence,
 )
 from .compat import assemble_review_synthesis
-from .json_client import complete_json, review_context_payload
+from .json_client import (
+    PromptPrefix,
+    build_review_prompt_prefix,
+    compact_context_v2_enabled,
+    complete_json,
+    prompt_cache_v2_enabled,
+    review_context_payload,
+)
 from ..ports import ReviewChair
 from ..finding_identity import canonicalize_review
 
@@ -68,12 +75,15 @@ class DebateReviewChairAgent(ReviewChair):
         修改 Specialist 的初审结论，也不提前给出最终裁决。
         """
 
+        cache_v2 = prompt_cache_v2_enabled()
+        compact_v2 = compact_context_v2_enabled()
         payload = {
-            "context": review_context_payload(context),
             "independent_reviews": [
                 item.model_dump(mode="json") for item in reviews
             ],
         }
+        if not compact_v2:
+            payload["context"] = review_context_payload(context)
         data = self._complete_json(
             system_prompt=self._system_prompt(context),
             user_prompt=(
@@ -84,6 +94,12 @@ class DebateReviewChairAgent(ReviewChair):
             ),
             payload=payload,
             schema=DebatePlan.model_json_schema(),
+            prompt_prefix=(
+                build_review_prompt_prefix(context, include_content=False)
+                if cache_v2
+                else None
+            ),
+            operation="chair_plan_debate",
         )
         return self._validate_plan(data, reviews)
 
@@ -102,8 +118,9 @@ class DebateReviewChairAgent(ReviewChair):
         评价等原 Step 4/5 兼容结构由确定性装配完成，保证字段结构稳定。
         """
 
+        cache_v2 = prompt_cache_v2_enabled()
+        compact_v2 = compact_context_v2_enabled()
         payload = {
-            "context": review_context_payload(context),
             "independent_reviews": [
                 item.model_dump(mode="json") for item in reviews
             ],
@@ -113,6 +130,8 @@ class DebateReviewChairAgent(ReviewChair):
                 item.model_dump(mode="json") for item in external_evidence
             ],
         }
+        if not compact_v2:
+            payload["context"] = review_context_payload(context)
         data = self._complete_json(
             system_prompt=self._system_prompt(context),
             user_prompt=(
@@ -132,6 +151,12 @@ class DebateReviewChairAgent(ReviewChair):
             payload=payload,
             schema=GlobalReviewDraft.model_json_schema(),
             max_tokens=self.synthesize_max_tokens,
+            prompt_prefix=(
+                build_review_prompt_prefix(context, include_content=False)
+                if cache_v2
+                else None
+            ),
+            operation="chair_synthesis",
         )
         draft = self._validate_global_review_draft(
             self._repair_global_review(data, reviews), reviews
@@ -155,6 +180,8 @@ class DebateReviewChairAgent(ReviewChair):
         payload: dict[str, Any],
         schema: dict[str, Any],
         max_tokens: int = 4096,
+        prompt_prefix: PromptPrefix | None = None,
+        operation: str = "chair_json_completion",
     ) -> dict[str, Any]:
         """调用统一模型客户端并解析 JSON，最终由 complete_json 完成。"""
 
@@ -168,6 +195,8 @@ class DebateReviewChairAgent(ReviewChair):
             schema=schema,
             temperature=self.temperature,
             max_tokens=max_tokens,
+            prompt_prefix=prompt_prefix,
+            operation=operation,
         )
         return data
 

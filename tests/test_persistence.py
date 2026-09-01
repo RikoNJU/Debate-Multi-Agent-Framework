@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import inspect, select
 
 from debate_agent_framework.persistence import (
     Database,
@@ -15,6 +15,7 @@ from debate_agent_framework.persistence import (
 )
 from debate_agent_framework.persistence.models import (
     Base,
+    ModelCallMetricRecord,
     PaperArtifactRecord,
     PaperRecord,
     PaperRevisionRecord,
@@ -146,7 +147,7 @@ def test_migrate_adopts_unversioned_legacy_database(tmp_path: Path) -> None:
     tables = set(inspector.get_table_names())
     database.dispose()
 
-    assert revision == "20260828_0009"
+    assert revision == "20260828_0010"
     assert {"users", "review_run_stages"}.issubset(tables)
     assert "student_task_access" not in tables
 
@@ -180,6 +181,46 @@ def test_resolved_skill_audit_is_persisted(tmp_path: Path) -> None:
     assert saved.skill_version == "2.0.0"
     assert saved.skill_profile_hash == profile_hash
     assert saved.skill_versions["discipline_version"] == "1.1.0"
+
+
+def test_model_call_metrics_are_materialized_and_aggregated(tmp_path: Path) -> None:
+    database = Database(database_url(tmp_path / "model-usage.db"))
+    database.create_schema()
+    store = SqlAlchemyRunStore(database)
+    created = store.create()
+    metric = {
+        "call_id": "call-1",
+        "run_id": created.task_id,
+        "node": "specialist_empirical_evidence",
+        "role": "empirical_evidence",
+        "operation": "specialist_review",
+        "model": "deepseek-ai/DeepSeek-V4-Pro",
+        "prompt_tokens": 1000,
+        "cache_hit_tokens": 750,
+        "cache_miss_tokens": 250,
+        "completion_tokens": 100,
+        "reasoning_tokens": 40,
+        "latency_ms": 1234,
+        "estimated_cost_yuan": 0.00615,
+        "prompt_prefix_hash": "a" * 64,
+        "status": "succeeded",
+        "error": None,
+    }
+
+    store.record_model_call(created.task_id, metric)
+    snapshot = store.get(created.task_id)
+    with database.session() as session:
+        row = session.scalar(select(ModelCallMetricRecord))
+    database.dispose()
+
+    assert snapshot is not None
+    assert snapshot.model_usage.call_count == 1
+    assert snapshot.model_usage.failed_call_count == 0
+    assert snapshot.model_usage.cache_hit_rate == pytest.approx(0.75)
+    assert snapshot.model_usage.estimated_cost_yuan == pytest.approx(0.00615)
+    assert row is not None
+    assert row.node == "specialist_empirical_evidence"
+    assert row.prompt_prefix_hash == "a" * 64
 
 
 def test_paper_files_and_artifacts_are_archived_safely(tmp_path: Path) -> None:

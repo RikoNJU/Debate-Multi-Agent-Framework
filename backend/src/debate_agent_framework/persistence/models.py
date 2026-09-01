@@ -98,6 +98,14 @@ class ReviewRunRecord(Base):
     finding_identity_version: Mapped[str | None] = mapped_column(
         String(32), nullable=True
     )
+    model_call_count: Mapped[int] = mapped_column(default=0)
+    model_failed_call_count: Mapped[int] = mapped_column(default=0)
+    model_prompt_tokens: Mapped[int] = mapped_column(default=0)
+    model_cache_hit_tokens: Mapped[int] = mapped_column(default=0)
+    model_cache_miss_tokens: Mapped[int] = mapped_column(default=0)
+    model_completion_tokens: Mapped[int] = mapped_column(default=0)
+    model_reasoning_tokens: Mapped[int] = mapped_column(default=0)
+    model_estimated_cost_yuan: Mapped[float] = mapped_column(default=0.0)
     status: Mapped[str] = mapped_column(String(32), index=True)
     current_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
     result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
@@ -122,6 +130,32 @@ class SourceFindingRecord(Base):
     local_ref: Mapped[str] = mapped_column(String(255))
     fingerprint: Mapped[str] = mapped_column(String(64), index=True)
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ModelCallMetricRecord(Base):
+    __tablename__ = "model_call_metrics"
+
+    call_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("review_runs.task_id", ondelete="CASCADE"), index=True
+    )
+    node: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    role: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    operation: Mapped[str] = mapped_column(String(64), index=True)
+    model: Mapped[str] = mapped_column(String(128), index=True)
+    prompt_tokens: Mapped[int] = mapped_column(default=0)
+    cache_hit_tokens: Mapped[int] = mapped_column(default=0)
+    cache_miss_tokens: Mapped[int] = mapped_column(default=0)
+    completion_tokens: Mapped[int] = mapped_column(default=0)
+    reasoning_tokens: Mapped[int] = mapped_column(default=0)
+    latency_ms: Mapped[int] = mapped_column(default=0)
+    estimated_cost_yuan: Mapped[float] = mapped_column(default=0.0)
+    prompt_prefix_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 

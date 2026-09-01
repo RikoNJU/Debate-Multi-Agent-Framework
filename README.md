@@ -12,6 +12,7 @@
 - **多智能体评审**：三位 Specialist 独立分析（并发度可配置），Chair 识别冲突、发起定向 Debate 并完成证据化裁决。
 - **稳定 Finding 身份**：服务端生成 Source/Canonical 两级 ID，支持跨专家防碰撞、重试稳定、Chair 语义归并和全链路 lineage 审计。
 - **LangGraph 编排**：三专家使用图级 Fan-out/Fan-in，定向讨论使用条件边和动态 `Send`，并保留节点进度、检查点与降级路径。
+- **Prompt 缓存友好**：三专家共用稳定论文前缀，Debate/Chair 仅携带增量证据，并按调用记录 Token、缓存命中、耗时、费用与失败原因。
 - **混合历史建议 RAG**：对已确认 Finding 执行 Dense + BM25 召回、RRF 融合与 Reranker 精排，历史建议只辅助修改方案，不参与评分。
 - **可解释评分**：复用旧项目三类论文标准，将结构指标和 12 个语义指标汇总为 18 维等级，再通过确定性规则计算总分。
 - **学科 Review Skill**：通过 JSON、Markdown 和 TXT 组合基础规则、学科规则、论文类型 Overlay、专家角色及检索配置，并冻结解析后的配置快照用于审计。
@@ -166,6 +167,7 @@ docs/              架构、运行手册和未实施方案
 - [评分稳定性设计](docs/scoring-reproducibility.md)
 - [历史建议 RAG V2 运行手册](docs/historical-advice-rag-v2-runbook.md)
 - [Finding Identity V2](docs/finding-identity-v2.md)
+- [Prompt Cache 与模型调用观测 V2](docs/prompt-cache-and-model-usage-v2.md)
 - [历史建议 RAG 改造方案](docs/historical-advice-rag-redesign.md)
 - [学科 Review Skill 方案](docs/discipline-review-skills-proposal-v1.md)
 

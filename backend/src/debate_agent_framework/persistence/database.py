@@ -76,6 +76,16 @@ class Database:
         has_skill_prerequisites = {
             "users", "human_reviews", "review_run_stages"
         }.issubset(tables)
+        if "model_call_metrics" in tables and {
+            "model_call_count",
+            "model_prompt_tokens",
+            "model_cache_hit_tokens",
+            "model_cache_miss_tokens",
+            "model_completion_tokens",
+            "model_reasoning_tokens",
+            "model_estimated_cost_yuan",
+        }.issubset(review_run_columns):
+            return "20260828_0010"
         if {
             "source_findings", "canonical_findings", "canonical_finding_members"
         }.issubset(tables) and "finding_identity_version" in review_run_columns:

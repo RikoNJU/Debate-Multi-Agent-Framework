@@ -20,7 +20,13 @@ from pydantic import ValidationError
 
 from debate_agent_framework.core.errors import WorkflowExecutionError
 
-from backend.env import ModelClient, ModelClientError, build_model_client
+from backend.env import (
+    ModelClient,
+    ModelClientError,
+    build_model_client,
+    model_call_scope,
+    observe_model_calls,
+)
 
 from ..agents import (
     DebateContextPlannerAgent,
@@ -344,7 +350,8 @@ class DebateWorkflow:
         async def tracked(state: DebateState) -> dict[str, Any]:
             await _emit_progress(name, label, "running", started_progress)
             try:
-                result = await _resolve(handler(state))
+                with model_call_scope(run_id=state.get("run_id"), node=name):
+                    result = await _resolve(handler(state))
             except Exception as exc:
                 await _emit_progress(
                     name,
@@ -705,13 +712,16 @@ class DebateWorkflow:
         for attempt in range(1, self.config.review_attempts + 1):
             attempts_used = attempt
             try:
-                review = IndependentReview.model_validate(
-                    await _invoke(
-                        lambda: self.services.specialists[role].review(
-                            state["context"]
+                with model_call_scope(
+                    run_id=state["run_id"], node=stage, role=role.value
+                ):
+                    review = IndependentReview.model_validate(
+                        await _invoke(
+                            lambda: self.services.specialists[role].review(
+                                state["context"]
+                            )
                         )
                     )
-                )
                 if review.role is not role:
                     raise ValueError(
                         f"注册为 {role.value} 的 Agent 返回了 {review.role.value}"
@@ -933,6 +943,8 @@ class DebateWorkflow:
             Send(
                 "answer_debate_question",
                 {
+                    # V1 checkpoints did not persist run_id at the top level.
+                    "run_id": state.get("run_id") or state["context"].run_id,
                     "question": question,
                     "issue": issue_by_id[question.issue_id],
                     "context": state["context"],
@@ -976,18 +988,21 @@ class DebateWorkflow:
             if review.role in issue.participating_roles and review.role is not role
         ]
         try:
-            response = DebateResponse.model_validate(
-                await _invoke(
-                    lambda: self.services.specialists[role].respond(
-                        task["context"],
-                        own_review=own_review,
-                        issue=issue,
-                        question=question,
-                        peer_reviews=peer_reviews,
-                        external_evidence=task["external_evidence"],
+            with model_call_scope(
+                run_id=task["run_id"], node="answer_debate_question", role=role.value
+            ):
+                response = DebateResponse.model_validate(
+                    await _invoke(
+                        lambda: self.services.specialists[role].respond(
+                            task["context"],
+                            own_review=own_review,
+                            issue=issue,
+                            question=question,
+                            peer_reviews=peer_reviews,
+                            external_evidence=task["external_evidence"],
+                        )
                     )
                 )
-            )
             if (
                 response.role is not role
                 or response.question_id != question.question_id
@@ -1359,6 +1374,7 @@ class DebateWorkflow:
         *,
         progress_callback: ProgressCallback | None = None,
         thread_id: str | None = None,
+        model_call_observer: Any | None = None,
     ) -> DebateRunResult:
         """异步执行完整 Debate 评审链路。"""
 
@@ -1370,9 +1386,10 @@ class DebateWorkflow:
                 "configurable": {"thread_id": resolved_thread_id},
                 "max_concurrency": self.config.max_concurrency,
             }
-            final = await self.graph.ainvoke(
-                self._initial_state(validated_input, resolved_thread_id), config
-            )
+            with observe_model_calls(model_call_observer):
+                final = await self.graph.ainvoke(
+                    self._initial_state(validated_input, resolved_thread_id), config
+                )
         finally:
             _progress_callback.reset(token)
         return self._result_from_state(final)
@@ -1383,6 +1400,7 @@ class DebateWorkflow:
         *,
         thread_id: str,
         progress_callback: ProgressCallback | None = None,
+        model_call_observer: Any | None = None,
     ) -> DebateRunResult:
         """从上次失败的步骤恢复执行。
 
@@ -1398,27 +1416,28 @@ class DebateWorkflow:
         }
         token = _progress_callback.set(progress_callback)
         try:
-            state = await self.graph.aget_state(config)
-            if state.next:
-                if "join_specialist_reviews" in state.next:
-                    outcomes = state.values.get("specialist_outcomes", {})
-                    failed_roles = {
-                        role.value: None
-                        for role in SpecialistRole
-                        if role.value in outcomes
-                        and outcomes[role.value].get("review") is None
-                    }
-                    if failed_roles:
-                        config = await self.graph.aupdate_state(
-                            config,
-                            {"specialist_outcomes": failed_roles},
-                            as_node="independent_review",
-                        )
-                final = await self.graph.ainvoke(None, config)
-            else:
-                final = await self.graph.ainvoke(
-                    self._initial_state(validated_input, thread_id), config
-                )
+            with observe_model_calls(model_call_observer):
+                state = await self.graph.aget_state(config)
+                if state.next:
+                    if "join_specialist_reviews" in state.next:
+                        outcomes = state.values.get("specialist_outcomes", {})
+                        failed_roles = {
+                            role.value: None
+                            for role in SpecialistRole
+                            if role.value in outcomes
+                            and outcomes[role.value].get("review") is None
+                        }
+                        if failed_roles:
+                            config = await self.graph.aupdate_state(
+                                config,
+                                {"specialist_outcomes": failed_roles},
+                                as_node="independent_review",
+                            )
+                    final = await self.graph.ainvoke(None, config)
+                else:
+                    final = await self.graph.ainvoke(
+                        self._initial_state(validated_input, thread_id), config
+                    )
         finally:
             _progress_callback.reset(token)
         return self._result_from_state(final)

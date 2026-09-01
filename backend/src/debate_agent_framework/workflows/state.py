@@ -70,6 +70,7 @@ class DebateOutcome(TypedDict):
 
 
 class DebateQuestionTask(TypedDict):
+    run_id: str
     question: DebateQuestion
     issue: DebateIssue
     context: ReviewContext

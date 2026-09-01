@@ -42,6 +42,8 @@ class RunStore(Protocol):
 
     def mark_succeeded(self, task_id: str, result: dict) -> RunSnapshot: ...
 
+    def record_model_call(self, task_id: str, metric: dict[str, Any]) -> None: ...
+
     def mark_failed(self, task_id: str, error: str) -> RunSnapshot: ...
 
     def get(self, task_id: str) -> RunSnapshot | None: ...
@@ -137,10 +139,14 @@ class DebateWorkflowService:
             )
 
         try:
+            def record_model_call(metric: Any) -> None:
+                self.store.record_model_call(task_id, metric.as_dict())
+
             result = await self.workflow.arun(
                 review_input,
                 progress_callback=record_progress,
                 thread_id=task_id,
+                model_call_observer=record_model_call,
             )
             self.store.mark_succeeded(task_id, result.model_dump(mode="json"))
         except Exception as exc:
@@ -172,10 +178,14 @@ class DebateWorkflowService:
             )
 
         try:
+            def record_model_call(metric: Any) -> None:
+                self.store.record_model_call(task_id, metric.as_dict())
+
             result = await self.workflow.aresume(
                 review_input,
                 thread_id=task_id,
                 progress_callback=record_progress,
+                model_call_observer=record_model_call,
             )
             self.store.mark_succeeded(task_id, result.model_dump(mode="json"))
         except Exception as exc:

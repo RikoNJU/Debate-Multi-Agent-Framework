@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 
 from ..schemas import DebateReviewInput
 from ..services.jobs import (
@@ -23,6 +23,7 @@ from .models import (
     CanonicalFindingMemberRecord,
     CanonicalFindingRecord,
     HumanReviewRecord,
+    ModelCallMetricRecord,
     PaperArtifactRecord,
     PaperAssignmentRecord,
     PaperRecord,
@@ -157,6 +158,7 @@ class SqlAlchemyRunStore:
                 CanonicalFindingRecord.task_id == task_id
             )
         )
+
         session.execute(
             delete(SourceFindingRecord).where(SourceFindingRecord.task_id == task_id)
         )
@@ -227,6 +229,58 @@ class SqlAlchemyRunStore:
         if member_ids != source_ids:
             missing = sorted(source_ids - member_ids)
             raise ValueError(f"Canonical Finding 未覆盖全部 Source：{missing}")
+
+    def record_model_call(self, task_id: str, metric: dict[str, Any]) -> None:
+        if metric.get("run_id") not in {None, task_id}:
+            raise ValueError("模型调用指标的 run_id 与任务不一致")
+        with self.database.session() as session:
+            if session.get(ReviewRunRecord, task_id) is None:
+                raise KeyError(task_id)
+            session.add(
+                ModelCallMetricRecord(
+                    call_id=str(metric["call_id"]),
+                    task_id=task_id,
+                    node=metric.get("node"),
+                    role=metric.get("role"),
+                    operation=str(metric.get("operation") or "chat_completion"),
+                    model=str(metric.get("model") or "unknown"),
+                    prompt_tokens=int(metric.get("prompt_tokens", 0)),
+                    cache_hit_tokens=int(metric.get("cache_hit_tokens", 0)),
+                    cache_miss_tokens=int(metric.get("cache_miss_tokens", 0)),
+                    completion_tokens=int(metric.get("completion_tokens", 0)),
+                    reasoning_tokens=int(metric.get("reasoning_tokens", 0)),
+                    latency_ms=int(metric.get("latency_ms", 0)),
+                    estimated_cost_yuan=float(metric.get("estimated_cost_yuan", 0.0)),
+                    prompt_prefix_hash=metric.get("prompt_prefix_hash"),
+                    status=str(metric.get("status") or "succeeded"),
+                    error=metric.get("error"),
+                )
+            )
+            session.execute(
+                update(ReviewRunRecord)
+                .where(ReviewRunRecord.task_id == task_id)
+                .values(
+                    model_call_count=ReviewRunRecord.model_call_count + 1,
+                    model_failed_call_count=(
+                        ReviewRunRecord.model_failed_call_count
+                        + (1 if metric.get("status") == "failed" else 0)
+                    ),
+                    model_prompt_tokens=ReviewRunRecord.model_prompt_tokens
+                    + int(metric.get("prompt_tokens", 0)),
+                    model_cache_hit_tokens=ReviewRunRecord.model_cache_hit_tokens
+                    + int(metric.get("cache_hit_tokens", 0)),
+                    model_cache_miss_tokens=ReviewRunRecord.model_cache_miss_tokens
+                    + int(metric.get("cache_miss_tokens", 0)),
+                    model_completion_tokens=ReviewRunRecord.model_completion_tokens
+                    + int(metric.get("completion_tokens", 0)),
+                    model_reasoning_tokens=ReviewRunRecord.model_reasoning_tokens
+                    + int(metric.get("reasoning_tokens", 0)),
+                    model_estimated_cost_yuan=(
+                        ReviewRunRecord.model_estimated_cost_yuan
+                        + float(metric.get("estimated_cost_yuan", 0.0))
+                    ),
+                )
+            )
 
     def mark_resuming(self, task_id: str) -> RunSnapshot:
         """失败重试：恢复为运行中，但保留已完成步骤的进度记录。"""
@@ -394,6 +448,24 @@ class SqlAlchemyRunStore:
             skill_profile_hash=record.skill_profile_hash,
             skill_versions=record.skill_versions_json or {},
             finding_identity_version=record.finding_identity_version,
+            model_usage={
+                "call_count": record.model_call_count,
+                "failed_call_count": record.model_failed_call_count,
+                "prompt_tokens": record.model_prompt_tokens,
+                "cache_hit_tokens": record.model_cache_hit_tokens,
+                "cache_miss_tokens": record.model_cache_miss_tokens,
+                "completion_tokens": record.model_completion_tokens,
+                "reasoning_tokens": record.model_reasoning_tokens,
+                "estimated_cost_yuan": round(record.model_estimated_cost_yuan, 8),
+                "cache_hit_rate": (
+                    record.model_cache_hit_tokens
+                    / max(
+                        1,
+                        record.model_cache_hit_tokens
+                        + record.model_cache_miss_tokens,
+                    )
+                ),
+            },
             current_stage=record.current_stage,
             current_stage_label=(
                 current_event.label

@@ -10,6 +10,8 @@ from backend.env import (
     ModelClientError,
     ModelRuntimeConfig,
     OpenAICompatibleChatClient,
+    model_call_scope,
+    observe_model_calls,
 )
 
 
@@ -149,3 +151,76 @@ def test_model_client_reassembles_streamed_content(monkeypatch) -> None:
     assert response.content == '{"ok":true}'
     assert response.raw == {"streamed": True, "chunk_count": 4, "finish_reason": None}
     assert response.usage == {"total_tokens": 12}
+
+
+def test_model_client_reports_cache_usage_and_estimated_cost(monkeypatch) -> None:
+    def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+        return FakeResponse(
+            {
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "prompt_cache_hit_tokens": 800,
+                    "prompt_cache_miss_tokens": 200,
+                    "completion_tokens": 100,
+                    "completion_tokens_details": {"reasoning_tokens": 40},
+                },
+            }
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleChatClient(
+        ModelRuntimeConfig(
+            api_key="test-key",
+            max_retries=0,
+            input_price_per_million=12,
+            cache_hit_price_per_million=1,
+            output_price_per_million=24,
+        )
+    )
+    metrics = []
+    with observe_model_calls(metrics.append), model_call_scope(
+        run_id="run-1", node="specialist", role="empirical_evidence"
+    ):
+        client.complete(
+            [ChatMessage(role="user", content="test")],
+            options=ModelCallOptions(
+                operation="specialist_review",
+                prompt_prefix_hash="a" * 64,
+            ),
+        )
+
+    assert len(metrics) == 1
+    metric = metrics[0]
+    assert metric.cache_hit_tokens == 800
+    assert metric.cache_miss_tokens == 200
+    assert metric.reasoning_tokens == 40
+    assert metric.estimated_cost_yuan == pytest.approx(0.0056)
+    assert metric.run_id == "run-1"
+    assert metric.prompt_prefix_hash == "a" * 64
+    assert metric.status == "succeeded"
+
+
+def test_model_client_reports_terminal_network_failure(monkeypatch) -> None:
+    def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+        raise OSError("remote disconnected")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleChatClient(
+        ModelRuntimeConfig(api_key="test-key", max_retries=0)
+    )
+    metrics = []
+
+    with observe_model_calls(metrics.append), model_call_scope(
+        run_id="run-failed", node="chair", role="review_chair"
+    ):
+        with pytest.raises(ModelClientError, match="remote disconnected"):
+            client.complete(
+                [ChatMessage(role="user", content="test")],
+                options=ModelCallOptions(operation="chair_synthesis"),
+            )
+
+    assert len(metrics) == 1
+    assert metrics[0].status == "failed"
+    assert metrics[0].operation == "chair_synthesis"
+    assert "remote disconnected" in (metrics[0].error or "")

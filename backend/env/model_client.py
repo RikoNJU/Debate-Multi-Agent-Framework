@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import logging
 import os
@@ -15,7 +17,8 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Callable, Iterator, Protocol
+from uuid import uuid4
 
 
 class ModelClientError(RuntimeError):
@@ -40,6 +43,8 @@ class ModelCallOptions:
     response_format: Mapping[str, Any] | None = None
     stream: bool = False
     thinking_budget: int | None = None
+    operation: str = "chat_completion"
+    prompt_prefix_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +52,75 @@ class ModelResponse:
     content: str
     raw: Mapping[str, Any] = field(default_factory=dict)
     usage: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ModelCallMetric:
+    call_id: str
+    run_id: str | None
+    node: str | None
+    role: str | None
+    operation: str
+    model: str
+    prompt_tokens: int
+    cache_hit_tokens: int
+    cache_miss_tokens: int
+    completion_tokens: int
+    reasoning_tokens: int
+    latency_ms: int
+    estimated_cost_yuan: float
+    prompt_prefix_hash: str | None
+    status: str
+    error: str | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in self.__dict__.items()
+        }
+
+
+ModelCallObserver = Callable[[ModelCallMetric], None]
+_model_call_observer: ContextVar[ModelCallObserver | None] = ContextVar(
+    "model_call_observer", default=None
+)
+_model_call_context: ContextVar[dict[str, str | None]] = ContextVar(
+    "model_call_context", default={}
+)
+
+
+def _usage_int(mapping: Mapping[str, Any], key: str) -> int:
+    try:
+        return int(mapping.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+@contextmanager
+def observe_model_calls(observer: ModelCallObserver | None) -> Iterator[None]:
+    token = _model_call_observer.set(observer)
+    try:
+        yield
+    finally:
+        _model_call_observer.reset(token)
+
+
+@contextmanager
+def model_call_scope(
+    *, run_id: str | None = None, node: str | None = None, role: str | None = None
+) -> Iterator[None]:
+    current = _model_call_context.get()
+    token = _model_call_context.set(
+        {
+            "run_id": run_id if run_id is not None else current.get("run_id"),
+            "node": node if node is not None else current.get("node"),
+            "role": role if role is not None else current.get("role"),
+        }
+    )
+    try:
+        yield
+    finally:
+        _model_call_context.reset(token)
 
 
 @dataclass(frozen=True)
@@ -61,6 +135,9 @@ class ModelRuntimeConfig:
     retry_base_seconds: float = 1.0
     retry_max_seconds: float = 8.0
     default_thinking_budget: int | None = None
+    input_price_per_million: float = 0.0
+    cache_hit_price_per_million: float = 0.0
+    output_price_per_million: float = 0.0
 
     def __post_init__(self) -> None:
         if self.max_retries < 0:
@@ -88,6 +165,9 @@ class ModelRuntimeConfig:
         retry_base = read("RETRY_BASE_SECONDS")
         retry_max = read("RETRY_MAX_SECONDS")
         thinking_budget = read("THINKING_BUDGET")
+        input_price = read("INPUT_PRICE_PER_MILLION")
+        cache_hit_price = read("CACHE_HIT_PRICE_PER_MILLION")
+        output_price = read("OUTPUT_PRICE_PER_MILLION")
         return cls(
             provider=read("PROVIDER", cls.provider) or cls.provider,
             model=read("MODEL", cls.model) or cls.model,
@@ -111,6 +191,11 @@ class ModelRuntimeConfig:
                 if thinking_budget
                 else cls.default_thinking_budget
             ),
+            input_price_per_million=float(input_price) if input_price else 0.0,
+            cache_hit_price_per_million=(
+                float(cache_hit_price) if cache_hit_price else 0.0
+            ),
+            output_price_per_million=float(output_price) if output_price else 0.0,
         )
 
 
@@ -148,6 +233,7 @@ class OpenAICompatibleChatClient:
             raise ModelClientError("缺少模型 API Key，请配置 DEBATE_API_KEY 或 LLM_API_KEY")
 
         call_options = options or ModelCallOptions()
+        started = time.monotonic()
         payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": [
@@ -195,7 +281,13 @@ class OpenAICompatibleChatClient:
             try:
                 with urllib.request.urlopen(request, timeout=timeout) as response:
                     if call_options.stream:
-                        return self._read_stream(response)
+                        try:
+                            result = self._read_stream(response)
+                        except ModelClientError as exc:
+                            self._observe_failure(call_options, started, str(exc))
+                            raise
+                        self._observe(result, call_options, started)
+                        return result
                     raw = json.loads(response.read().decode("utf-8"))
                 break
             except urllib.error.HTTPError as exc:
@@ -212,28 +304,119 @@ class OpenAICompatibleChatClient:
                         ),
                     )
                     continue
-                raise ModelClientError(
-                    f"模型 HTTP 调用失败: {exc.code} {detail}"
-                ) from exc
+                message = f"模型 HTTP 调用失败: {exc.code} {detail}"
+                self._observe_failure(call_options, started, message)
+                raise ModelClientError(message) from exc
             except OSError as exc:
                 if attempt < self.config.max_retries:
                     self._wait_before_retry(attempt, reason=str(exc))
                     continue
-                raise ModelClientError(f"模型网络调用失败: {exc}") from exc
+                message = f"模型网络调用失败: {exc}"
+                self._observe_failure(call_options, started, message)
+                raise ModelClientError(message) from exc
 
         if raw is None:
+            self._observe_failure(call_options, started, "模型调用未返回结果")
             raise ModelClientError("模型调用未返回结果")
 
         try:
             content = raw["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
+            self._observe_failure(
+                call_options, started, "模型返回格式不符合 chat completions"
+            )
             raise ModelClientError(f"模型返回格式不符合 chat completions: {raw}") from exc
 
-        return ModelResponse(
+        result = ModelResponse(
             content=content,
             raw=raw,
             usage=raw.get("usage", {}),
         )
+        self._observe(result, call_options, started)
+        return result
+
+    def _observe(
+        self,
+        response: ModelResponse,
+        options: ModelCallOptions,
+        started: float,
+    ) -> None:
+        observer = _model_call_observer.get()
+        if observer is None:
+            return
+        usage = response.usage
+        prompt_tokens = _usage_int(usage, "prompt_tokens")
+        details = usage.get("prompt_tokens_details") or {}
+        cache_hit = _usage_int(usage, "prompt_cache_hit_tokens") or _usage_int(
+            details, "cached_tokens"
+        )
+        cache_miss = _usage_int(usage, "prompt_cache_miss_tokens")
+        if not cache_miss:
+            cache_miss = max(0, prompt_tokens - cache_hit)
+        completion_tokens = _usage_int(usage, "completion_tokens")
+        completion_details = usage.get("completion_tokens_details") or {}
+        reasoning_tokens = _usage_int(completion_details, "reasoning_tokens")
+        estimated_cost = (
+            cache_miss * self.config.input_price_per_million
+            + cache_hit * self.config.cache_hit_price_per_million
+            + completion_tokens * self.config.output_price_per_million
+        ) / 1_000_000
+        context = _model_call_context.get()
+        metric = ModelCallMetric(
+            call_id=uuid4().hex,
+            run_id=context.get("run_id"),
+            node=context.get("node"),
+            role=context.get("role"),
+            operation=options.operation,
+            model=self.config.model,
+            prompt_tokens=prompt_tokens,
+            cache_hit_tokens=cache_hit,
+            cache_miss_tokens=cache_miss,
+            completion_tokens=completion_tokens,
+            reasoning_tokens=reasoning_tokens,
+            latency_ms=round((time.monotonic() - started) * 1000),
+            estimated_cost_yuan=round(estimated_cost, 8),
+            prompt_prefix_hash=options.prompt_prefix_hash,
+            status="succeeded",
+            error=None,
+        )
+        try:
+            observer(metric)
+        except Exception:
+            logger.exception("记录模型调用指标失败")
+
+    def _observe_failure(
+        self,
+        options: ModelCallOptions,
+        started: float,
+        error: str,
+    ) -> None:
+        observer = _model_call_observer.get()
+        if observer is None:
+            return
+        context = _model_call_context.get()
+        metric = ModelCallMetric(
+            call_id=uuid4().hex,
+            run_id=context.get("run_id"),
+            node=context.get("node"),
+            role=context.get("role"),
+            operation=options.operation,
+            model=self.config.model,
+            prompt_tokens=0,
+            cache_hit_tokens=0,
+            cache_miss_tokens=0,
+            completion_tokens=0,
+            reasoning_tokens=0,
+            latency_ms=round((time.monotonic() - started) * 1000),
+            estimated_cost_yuan=0.0,
+            prompt_prefix_hash=options.prompt_prefix_hash,
+            status="failed",
+            error=error[:1000],
+        )
+        try:
+            observer(metric)
+        except Exception:
+            logger.exception("记录失败模型调用指标失败")
 
     @staticmethod
     def _read_stream(response: Any) -> ModelResponse:
