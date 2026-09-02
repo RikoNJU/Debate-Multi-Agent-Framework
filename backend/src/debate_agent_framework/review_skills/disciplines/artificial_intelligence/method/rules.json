@@ -1,0 +1,6 @@
+[
+  {"rule_id":"AI-METHOD-001","kind":"recommended","check":"baseline_fairness"},
+  {"rule_id":"AI-METHOD-002","kind":"recommended","check":"metric_definition"},
+  {"rule_id":"AI-METHOD-003","kind":"heuristic","check":"ablation_when_claim_requires_it"},
+  {"rule_id":"AI-METHOD-004","kind":"heuristic","check":"statistical_significance_when_applicable"}
+]

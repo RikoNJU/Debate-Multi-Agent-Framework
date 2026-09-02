@@ -1,0 +1,11 @@
+[
+  {"key":"engineering.requirements","label":"需求与目标可追踪性","criteria":"系统需求明确，并能追踪到设计、实现和验证。","role":"scientific_soundness","stages":["introduction","methodology"],"dimensions":[{"dimension":"1","weight":0.4},{"dimension":"6","weight":0.6}]},
+  {"key":"engineering.architecture","label":"系统架构合理性","criteria":"架构、模块边界、接口和数据流清楚，技术选型有依据。","role":"scientific_soundness","stages":["methodology"],"dimensions":[{"dimension":"5","weight":0.4},{"dimension":"8","weight":0.6}]},
+  {"key":"engineering.implementation","label":"关键模块实现深度","criteria":"关键模块具有足够实现细节，不仅停留在概念或界面展示。","role":"global_quality","stages":["experiment","methodology"],"dimensions":[{"dimension":"2","weight":0.5},{"dimension":"8","weight":0.5}]},
+  {"key":"engineering.integration","label":"系统集成完整性","criteria":"模块之间形成可运行闭环，接口和异常处理得到说明。","role":"global_quality","stages":["experiment"],"dimensions":[{"dimension":"6","weight":0.5},{"dimension":"12","weight":0.5}]},
+  {"key":"engineering.functional_test","label":"功能验证覆盖","criteria":"核心需求具有对应测试场景、输入、输出和结果证据。","role":"empirical_evidence","stages":["experiment","result_analysis"],"dimensions":[{"dimension":"7","weight":0.4},{"dimension":"10","weight":0.6}]},
+  {"key":"engineering.performance","label":"性能与稳定性测试","criteria":"对关键性能、容量、延迟、稳定性或异常场景进行适当验证。","role":"empirical_evidence","stages":["experiment","result_analysis"],"dimensions":[{"dimension":"7","weight":0.5},{"dimension":"10","weight":0.5}]},
+  {"key":"engineering.reproducibility","label":"部署与复现条件","criteria":"运行环境、依赖、关键配置和部署过程足以支持复现。","role":"empirical_evidence","stages":["experiment"],"dimensions":[{"dimension":"6","weight":0.4},{"dimension":"7","weight":0.6}]},
+  {"key":"engineering.value","label":"工程价值与贡献","criteria":"系统解决实际问题，完成度和价值与论文声明匹配。","role":"scientific_soundness","stages":["methodology","conclusion"],"dimensions":[{"dimension":"3","weight":0.5},{"dimension":"9","weight":0.5}]},
+  {"key":"engineering.workload","label":"工程工作量与完整性","criteria":"设计、实现、集成、测试和文档体现足够工作量。","role":"global_quality","stages":["methodology","experiment"],"dimensions":[{"dimension":"2","weight":0.7},{"dimension":"12","weight":0.3}]}
+]

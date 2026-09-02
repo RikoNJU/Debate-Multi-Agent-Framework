@@ -1,4 +1,4 @@
-from .debate import DebateWorkflow
+from .debate import DebateWorkflow, build_workflow
 from .state import DebateState, DebateWorkflowConfig, DebateWorkflowServices
 
 __all__ = [
@@ -6,4 +6,5 @@ __all__ = [
     "DebateWorkflow",
     "DebateWorkflowConfig",
     "DebateWorkflowServices",
+    "build_workflow",
 ]

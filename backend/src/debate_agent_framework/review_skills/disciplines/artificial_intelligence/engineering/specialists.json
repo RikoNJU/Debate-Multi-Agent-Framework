@@ -1,0 +1,5 @@
+[
+  {"role":"scientific_soundness","persona_id":"ai_engineering_architecture_v2","display_name":"需求与系统架构专家","prompt_file":"disciplines/artificial_intelligence/engineering/prompts/scientific_soundness.md","checks":["requirement_traceability","architecture_rationale","module_boundaries","design_consistency"]},
+  {"role":"empirical_evidence","persona_id":"ai_engineering_testing_v2","display_name":"系统测试与性能专家","prompt_file":"disciplines/artificial_intelligence/engineering/prompts/empirical_evidence.md","checks":["functional_coverage","performance_testing","reliability_testing","deployment_evidence"]},
+  {"role":"global_quality","persona_id":"ai_engineering_delivery_v2","display_name":"工程完整性与文档专家","prompt_file":"disciplines/artificial_intelligence/engineering/prompts/global_quality.md","checks":["implementation_depth","integration_completeness","documentation_quality","workload_authenticity"]}
+]

@@ -1,0 +1,1 @@
+{"route_id":"historical_advice_law_draft","content_collection":"historical_advice_law_content_draft","format_collection":"historical_advice_law_format_draft","bm25_index_id":"historical_advice_law_bm25_draft","terminology_version":"law_terms_draft_v1","top_k":{"dense":5,"bm25":5,"rrf":3,"max_per_finding":2}}

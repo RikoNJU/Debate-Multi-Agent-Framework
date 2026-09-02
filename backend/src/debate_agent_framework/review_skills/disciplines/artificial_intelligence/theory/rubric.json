@@ -1,0 +1,9 @@
+[
+  {"key":"theory.definition_precision","label":"定义与符号精确性","criteria":"核心概念、符号和研究对象定义明确且全文一致。","role":"scientific_soundness","stages":["background","methodology"],"dimensions":[{"dimension":"5","weight":0.5},{"dimension":"10","weight":0.5}]},
+  {"key":"theory.assumption_scope","label":"假设与适用范围","criteria":"关键假设明确，必要性和结论适用边界得到说明。","role":"scientific_soundness","stages":["methodology"],"dimensions":[{"dimension":"6","weight":0.4},{"dimension":"10","weight":0.6}]},
+  {"key":"theory.proof_validity","label":"推导与证明有效性","criteria":"推导步骤完整，证明逻辑成立，不存在未说明的关键跳跃。","role":"scientific_soundness","stages":["methodology"],"dimensions":[{"dimension":"10","weight":0.7},{"dimension":"12","weight":0.3}]},
+  {"key":"theory.novelty","label":"理论贡献与新颖性","criteria":"理论结果与已有工作有明确区别并具有可解释的贡献。","role":"global_quality","stages":["methodology"],"dimensions":[{"dimension":"9","weight":0.7},{"dimension":"12","weight":0.3}]},
+  {"key":"theory.validation","label":"理论验证充分性","criteria":"仿真、数值验证、边界分析或反例与理论主张相匹配。","role":"empirical_evidence","stages":["experiment","result_analysis"],"dimensions":[{"dimension":"7","weight":0.4},{"dimension":"10","weight":0.6}]},
+  {"key":"theory.depth","label":"理论研究深度与工作量","criteria":"核心理论构建、性质分析和证明体现足够研究深度。","role":"global_quality","stages":["methodology"],"dimensions":[{"dimension":"2","weight":0.5},{"dimension":"5","weight":0.5}]},
+  {"key":"theory.tool_application","label":"理论工具运用","criteria":"数学、统计或形式化工具选择正确并得到规范运用。","role":"global_quality","stages":["methodology"],"dimensions":[{"dimension":"8","weight":0.6},{"dimension":"12","weight":0.4}]}
+]

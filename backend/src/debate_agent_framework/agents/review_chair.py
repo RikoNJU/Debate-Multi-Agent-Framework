@@ -6,22 +6,38 @@ Review Chair 是 Debate 工作流中的主 Agent，负责把多个 Specialist �
 
 from __future__ import annotations
 
-import json
+import os
 from collections.abc import Sequence
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from backend.env import ChatMessage, ModelCallOptions, ModelClient
+from backend.env import ModelClient
 from ..schemas import (
     DebatePlan,
     DebateResponse,
+    DimensionEvaluation,
+    FindingResolutionDraft,
+    GlobalReviewDraft,
     IndependentReview,
     ReviewContext,
     ReviewEvidence,
-    ReviewSynthesis,
+)
+from .compat import assemble_review_synthesis
+from .json_client import (
+    PromptPrefix,
+    build_review_prompt_prefix,
+    compact_context_v2_enabled,
+    complete_json,
+    prompt_cache_v2_enabled,
+    review_context_payload,
 )
 from ..ports import ReviewChair
+from ..finding_identity import canonicalize_review
+
+# 综合裁决需要为每个章节输出评估与证据锚定，是全流程最长的输出；
+# 思考模型的思考 token 也计入输出上限，默认值需留足余量。
+DEFAULT_CHAIR_MAX_TOKENS = 16384
 
 
 class DebateReviewChairAgent(ReviewChair):
@@ -40,10 +56,13 @@ class DebateReviewChairAgent(ReviewChair):
         self,
         model_client: ModelClient | None = None,
         *,
-        temperature: float = 0.2,
+        temperature: float = 0.05,
     ) -> None:
         self.model_client = model_client
         self.temperature = temperature
+        self.synthesize_max_tokens = int(
+            os.getenv("DEBATE_CHAIR_MAX_TOKENS", str(DEFAULT_CHAIR_MAX_TOKENS))
+        )
 
     def plan_debate(
         self,
@@ -56,21 +75,33 @@ class DebateReviewChairAgent(ReviewChair):
         修改 Specialist 的初审结论，也不提前给出最终裁决。
         """
 
+        cache_v2 = prompt_cache_v2_enabled()
+        compact_v2 = compact_context_v2_enabled()
         payload = {
-            "context": context.model_dump(mode="json"),
             "independent_reviews": [
                 item.model_dump(mode="json") for item in reviews
             ],
         }
+        if not compact_v2:
+            payload["context"] = review_context_payload(context)
         data = self._complete_json(
-            system_prompt=self._system_prompt(),
+            system_prompt=self._system_prompt(context),
             user_prompt=(
                 "请识别独立评审中的关键争议、遗漏和证据缺口，输出 DebatePlan JSON。"
-                "没有必要争议时，issues 和 questions 可以为空。"
+                "每个 issue 的 participating_roles 必须是至少两个不同角色的列表；"
+                "每个 question 的 target_role 必须属于其所属 issue 的"
+                "participating_roles。没有必要争议时，issues 和 questions 可以为空。"
             ),
             payload=payload,
+            schema=DebatePlan.model_json_schema(),
+            prompt_prefix=(
+                build_review_prompt_prefix(context, include_content=False)
+                if cache_v2
+                else None
+            ),
+            operation="chair_plan_debate",
         )
-        return self._validate_plan(data)
+        return self._validate_plan(data, reviews)
 
     def synthesize(
         self,
@@ -83,12 +114,13 @@ class DebateReviewChairAgent(ReviewChair):
     ) -> ReviewSynthesis:
         """综合 Debate 结果并生成原流程兼容输出。
 
-        最终输出要同时服务两个目标：一是形成全文级评审裁决，二是保持原
-        Step 4/5 的字段结构，让后续 Step 6/7 可以继续复用。
+        Review Chair 只让模型产出判断部分 ``GlobalReview``，章节评价和工作量
+        评价等原 Step 4/5 兼容结构由确定性装配完成，保证字段结构稳定。
         """
 
+        cache_v2 = prompt_cache_v2_enabled()
+        compact_v2 = compact_context_v2_enabled()
         payload = {
-            "context": context.model_dump(mode="json"),
             "independent_reviews": [
                 item.model_dump(mode="json") for item in reviews
             ],
@@ -98,16 +130,47 @@ class DebateReviewChairAgent(ReviewChair):
                 item.model_dump(mode="json") for item in external_evidence
             ],
         }
+        if not compact_v2:
+            payload["context"] = review_context_payload(context)
         data = self._complete_json(
-            system_prompt=self._system_prompt(),
+            system_prompt=self._system_prompt(context),
             user_prompt=(
-                "请综合原文、独立初审、Debate 回应和外部证据，输出 ReviewSynthesis JSON。"
-                "输出必须包含 global_review、chapter_evaluation 和 workload_evaluation，"
-                "并保持原 Step 4/5 兼容字段。"
+                "请综合原文、独立初审、Debate 回应和外部证据，输出 GlobalReview JSON。"
+                "overall_summary 必填：用 2-4 句话概括论文整体质量和核心缺陷。"
+                "confidence 必填：给出综合置信度分数 0.0-1.0。"
+                "resolved_findings 必须对独立初审中的全部 Source Finding 做完整分组，"
+                "每个 source_finding_id 必须出现且只能出现一次；语义相同的问题可以"
+                "放入同一个 source_finding_ids，语义不同则分别裁决；"
+                "status 只能是 confirmed 或 rejected，不能使用多数投票；"
+                "不得生成 finding_id，正式 Canonical Finding ID 由系统分配；"
+                "evidence_ids 只能引用输入 Source Finding、Debate 回应或外部检索中"
+                "已有的证据；"
+                "证据足以支持问题时判为 confirmed；证据不足、无法锚定原文或讨论后仍有"
+                "争议时，按照负面结论的举证责任判为 rejected，并在 rationale 中说明原因。"
             ),
             payload=payload,
+            schema=GlobalReviewDraft.model_json_schema(),
+            max_tokens=self.synthesize_max_tokens,
+            prompt_prefix=(
+                build_review_prompt_prefix(context, include_content=False)
+                if cache_v2
+                else None
+            ),
+            operation="chair_synthesis",
         )
-        return self._validate_synthesis(data)
+        draft = self._validate_global_review_draft(
+            self._repair_global_review(data, reviews), reviews
+        )
+        global_review = canonicalize_review(
+            draft,
+            reviews,
+            run_id=context.run_id,
+            additional_evidence=[
+                *external_evidence,
+                *(evidence for response in responses for evidence in response.evidence),
+            ],
+        )
+        return assemble_review_synthesis(context, global_review, reviews=reviews)
 
     def _complete_json(
         self,
@@ -115,60 +178,231 @@ class DebateReviewChairAgent(ReviewChair):
         system_prompt: str,
         user_prompt: str,
         payload: dict[str, Any],
+        schema: dict[str, Any],
+        max_tokens: int = 4096,
+        prompt_prefix: PromptPrefix | None = None,
+        operation: str = "chair_json_completion",
     ) -> dict[str, Any]:
-        """调用统一模型客户端，并把回复解析为 JSON dict。"""
+        """调用统一模型客户端并解析 JSON，最终由 complete_json 完成。"""
 
         if self.model_client is None:
             raise NotImplementedError("DebateReviewChairAgent 需要注入 ModelClient")
-
-        response = self.model_client.complete(
-            [
-                ChatMessage(role="system", content=system_prompt),
-                ChatMessage(
-                    role="user",
-                    content=f"{user_prompt}\n\n输入数据：\n{json.dumps(payload, ensure_ascii=False)}",
-                ),
-            ],
-            options=ModelCallOptions(
-                temperature=self.temperature,
-                response_format={"type": "json_object"},
-            ),
+        data = complete_json(
+            self.model_client,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            payload=payload,
+            schema=schema,
+            temperature=self.temperature,
+            max_tokens=max_tokens,
+            prompt_prefix=prompt_prefix,
+            operation=operation,
         )
-        try:
-            data = json.loads(response.content)
-        except json.JSONDecodeError as exc:
-            raise ValueError("DebateReviewChairAgent 返回内容不是合法 JSON") from exc
-        if not isinstance(data, dict):
-            raise ValueError("DebateReviewChairAgent 返回 JSON 顶层必须是对象")
         return data
 
-    @staticmethod
-    def _validate_plan(data: dict[str, Any]) -> DebatePlan:
-        """校验 Chair 生成的争议路由计划。"""
+    @classmethod
+    def _validate_plan(
+        cls,
+        data: dict[str, Any],
+        reviews: Sequence[IndependentReview],
+    ) -> DebatePlan:
+        """校验 Chair 生成的争议路由计划。
 
+        模型的跨字段约束（参与角色数量、question 引用、target_role 归属）容易
+        出错，这里先做一次结构修复：用独立初审把 ``finding_id -> role`` 补全，
+        再丢弃仍不合规的 issue 与 question，最后才校验。这样模型只要大致给出
+        争议方向，就不会因为个别字段不合规而整轮失败。
+        """
+
+        repaired = cls._repair_plan(data, reviews)
         try:
-            return DebatePlan.model_validate(data)
-        except ValidationError as exc:
-            raise ValueError("DebateReviewChairAgent 输出不符合 DebatePlan") from exc
-
-    @staticmethod
-    def _validate_synthesis(data: dict[str, Any]) -> ReviewSynthesis:
-        """校验最终综合评审，防止破坏 Step 4/5 兼容结构。"""
-
-        try:
-            return ReviewSynthesis.model_validate(data)
+            return DebatePlan.model_validate(repaired)
         except ValidationError as exc:
             raise ValueError(
-                "DebateReviewChairAgent 输出不符合 ReviewSynthesis"
+                f"DebateReviewChairAgent 输出不符合 DebatePlan：{exc}"
             ) from exc
 
     @staticmethod
-    def _system_prompt() -> str:
+    def _repair_plan(
+        data: dict[str, Any],
+        reviews: Sequence[IndependentReview],
+    ) -> dict[str, Any]:
+        finding_role: dict[str, str] = {
+            finding.finding_id: review.role.value
+            for review in reviews
+            for finding in review.findings
+        }
+        aliases = _unique_local_aliases(reviews)
+
+        issues = data.get("issues") or []
+        questions = data.get("questions") or []
+
+        issues_by_id: dict[str, dict[str, Any]] = {}
+        for issue in issues:
+            issue["conflicting_finding_ids"] = [
+                aliases.get(finding_id, finding_id)
+                for finding_id in issue.get("conflicting_finding_ids") or []
+            ]
+            issue["conflicting_finding_ids"] = [
+                finding_id
+                for finding_id in issue["conflicting_finding_ids"]
+                if finding_id in finding_role
+            ]
+            roles = list(
+                dict.fromkeys(issue.get("participating_roles") or [])
+            )
+            for finding_id in issue.get("conflicting_finding_ids") or []:
+                role = finding_role.get(finding_id)
+                if role and role not in roles:
+                    roles.append(role)
+            issue["participating_roles"] = roles
+            issues_by_id[issue["issue_id"]] = issue
+
+        kept_questions: list[dict[str, Any]] = []
+        for question in questions:
+            issue = issues_by_id.get(question.get("issue_id"))
+            if issue is None:
+                continue
+            question["challenged_finding_ids"] = [
+                aliases.get(finding_id, finding_id)
+                for finding_id in question.get("challenged_finding_ids") or []
+            ]
+            question["challenged_finding_ids"] = [
+                finding_id
+                for finding_id in question["challenged_finding_ids"]
+                if finding_id in finding_role
+            ]
+            target_role = question.get("target_role")
+            if target_role and target_role not in issue["participating_roles"]:
+                issue["participating_roles"].append(target_role)
+            kept_questions.append(question)
+        questions = kept_questions
+
+        valid_issues = [
+            issue
+            for issue in issues_by_id.values()
+            if len(set(issue["participating_roles"])) >= 2
+        ]
+        valid_issue_ids = {issue["issue_id"] for issue in valid_issues}
+        questions = [
+            question
+            for question in questions
+            if question["issue_id"] in valid_issue_ids
+        ]
+        return {"issues": valid_issues, "questions": questions}
+
+    @classmethod
+    def _repair_global_review(
+        cls, data: dict[str, Any], reviews: Sequence[IndependentReview]
+    ) -> dict[str, Any]:
+        """丢弃模型多输出的未知字段，并为必填字段提供兜底。
+
+        模型可能模仿输入载荷并复制不属于最终 Schema 的字段。这些冗余键
+        对最终裁决没有意义，直接剥离后交由 pydantic 做严格校验。
+        """
+
+        def strip(model: type[BaseModel], item: Any) -> Any:
+            if not isinstance(item, dict):
+                return item
+            allowed = set(model.model_fields)
+            return {key: value for key, value in item.items() if key in allowed}
+
+        repaired = strip(GlobalReviewDraft, data)
+        repaired["dimensions"] = [
+            strip(DimensionEvaluation, item)
+            for item in repaired.get("dimensions") or []
+            if isinstance(item, dict)
+        ]
+        aliases = _unique_local_aliases(reviews)
+        repaired_findings = []
+        for item in data.get("resolved_findings") or []:
+            if not isinstance(item, dict):
+                continue
+            candidate = dict(item)
+            source_ids = candidate.get("source_finding_ids")
+            if not source_ids and candidate.get("finding_id"):
+                source_ids = [candidate["finding_id"]]
+            candidate["source_finding_ids"] = [
+                aliases.get(source_id, source_id) for source_id in source_ids or []
+            ]
+            if "evidence_ids" not in candidate:
+                candidate["evidence_ids"] = []
+            repaired_findings.append(strip(FindingResolutionDraft, candidate))
+        repaired["resolved_findings"] = repaired_findings
+        if "overall_summary" not in repaired:
+            repaired["overall_summary"] = (
+                "经综合分析，论文存在若干问题需修改，详见各维度评估与问题详情。"
+            )
+        if "confidence" not in repaired:
+            repaired["confidence"] = 0.5
+        return repaired
+
+    @staticmethod
+    def _validate_global_review_draft(
+        data: dict[str, Any], reviews: Sequence[IndependentReview]
+    ) -> GlobalReviewDraft:
+        """Validate Chair grouping before server-owned canonicalization."""
+
+        try:
+            review = GlobalReviewDraft.model_validate(data)
+        except ValidationError as exc:
+            raise ValueError(
+                f"DebateReviewChairAgent 输出不符合 GlobalReviewDraft：{exc}"
+            ) from exc
+        expected_ids = {
+            finding.finding_id
+            for independent_review in reviews
+            for finding in independent_review.findings
+        }
+        resolved_ids = [
+            source_id
+            for finding in review.resolved_findings
+            for source_id in finding.source_finding_ids
+        ]
+        duplicate_ids = sorted(
+            finding_id
+            for finding_id in set(resolved_ids)
+            if resolved_ids.count(finding_id) > 1
+        )
+        if duplicate_ids:
+            raise ValueError(f"Chair 重复裁决 Source Finding：{duplicate_ids}")
+        missing_ids = sorted(expected_ids - set(resolved_ids))
+        if missing_ids:
+            raise ValueError(f"Chair 未裁决全部 Source Finding：{missing_ids}")
+        unknown_ids = sorted(set(resolved_ids) - expected_ids)
+        if unknown_ids:
+            raise ValueError(f"Chair 引用了未知 Source Finding：{unknown_ids}")
+        return review
+
+    @staticmethod
+    def _system_prompt(context: ReviewContext | None = None) -> str:
         """Review Chair 的稳定系统职责说明。"""
 
-        return (
+        base = (
             "你是论文评审 Debate Multi-Agent 系统的 Review Chair。"
             "你负责汇总独立评审、识别关键争议、生成定向质疑、综合证据并形成最终裁决。"
             "你不能用简单多数投票替代判断，也不能凭空增加原文或外部证据。"
             "最终输出必须严格符合调用方要求的 JSON schema，并保持原评审流程兼容。"
         )
+        profile = context.review_profile if context else None
+        base_guidance = profile.base_guidance if profile else ""
+        guidance = profile.chair_guidance if profile else ""
+        sections = [base, base_guidance, str(guidance)]
+        return "\n\n".join(section for section in sections if section)
+
+
+def _unique_local_aliases(
+    reviews: Sequence[IndependentReview],
+) -> dict[str, str]:
+    """Map legacy local refs only when the ref is unambiguous across roles."""
+
+    candidates: dict[str, list[str]] = {}
+    for review in reviews:
+        for finding in review.findings:
+            if finding.local_ref:
+                candidates.setdefault(finding.local_ref, []).append(finding.finding_id)
+    return {
+        local_ref: source_ids[0]
+        for local_ref, source_ids in candidates.items()
+        if len(source_ids) == 1
+    }

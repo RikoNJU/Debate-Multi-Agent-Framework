@@ -6,6 +6,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..skills.models import ResolvedReviewProfile
+
 
 class StrictModel(BaseModel):
     """拒绝未声明字段，防止 Agent 静默改变协作协议。"""
@@ -17,6 +19,28 @@ class PaperType(StrEnum):
     THEORY = "理论研究"
     METHOD = "方法创新"
     ENGINEERING = "工程实现"
+
+
+class PaperClassificationResult(StrictModel):
+    """旧 Step 1 的严格结构化输出。"""
+
+    paper_type: PaperType
+    rationale: str = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class ChapterStageClassification(StrictModel):
+    """旧 Step 2 对单个章节的分类结果。"""
+
+    chapter_id: str = Field(min_length=1)
+    chapter_name: str = Field(min_length=1)
+    stage: str = Field(min_length=1)
+
+
+class ChapterClassificationResult(StrictModel):
+    """旧 Step 2 的全文章节分类结果。"""
+
+    chapters: list[ChapterStageClassification] = Field(min_length=1)
 
 
 class SpecialistRole(StrEnum):
@@ -47,15 +71,72 @@ class DebatePosition(StrEnum):
 
 class ResolutionStatus(StrEnum):
     CONFIRMED = "confirmed"
-    MOSTLY_CONFIRMED = "mostly_confirmed"
-    DISPUTED = "disputed"
-    INSUFFICIENT = "insufficient"
-    HUMAN_REVIEW = "human_review"
+    REJECTED = "rejected"
+
+
+class RubricJudgement(StrEnum):
+    """固定章节评审小项的有限等级。"""
+
+    EXCELLENT = "excellent"
+    GOOD = "good"
+    ACCEPTABLE = "acceptable"
+    POOR = "poor"
+    CRITICAL = "critical"
 
 
 class IssueSeverity(StrEnum):
     WARNING = "warning"
     ERROR = "error"
+
+
+class ParseQualityStatus(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class BoundingBox(StrictModel):
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+    @model_validator(mode="after")
+    def validate_order(self) -> "BoundingBox":
+        if self.x1 < self.x0 or self.y1 < self.y0:
+            raise ValueError("bbox coordinates must be ordered")
+        return self
+
+
+class StructuredBlock(StrictModel):
+    """A normalized MinerU content block with a stable source locator."""
+
+    block_id: str = Field(min_length=1)
+    chunk_id: str = Field(min_length=1)
+    block_type: str = Field(min_length=1)
+    text: str = ""
+    page_number: int | None = Field(default=None, ge=1)
+    bbox: BoundingBox | None = None
+    asset_path: str | None = None
+    latex: str | None = None
+    heading_level: int | None = Field(default=None, ge=1, le=6)
+    chapter_id: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class ParseQuality(StrictModel):
+    status: ParseQualityStatus
+    score: float = Field(ge=0.0, le=1.0)
+    mapped_block_ratio: float = Field(ge=0.0, le=1.0)
+    located_block_ratio: float = Field(ge=0.0, le=1.0)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class StructuredPaperDocument(StrictModel):
+    source: str = "mineru_content_list"
+    blocks: list[StructuredBlock] = Field(default_factory=list)
+    page_count: int = Field(default=0, ge=0)
+    quality: ParseQuality
 
 
 class ChapterInput(StrictModel):
@@ -67,6 +148,7 @@ class ChapterInput(StrictModel):
     content: str = Field(min_length=1)
     section_titles: list[str] = Field(default_factory=list)
     reviewable: bool = True
+    block_ids: list[str] = Field(default_factory=list)
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
@@ -78,18 +160,40 @@ class RetrievedAdvice(StrictModel):
     suggestions: list[str] = Field(default_factory=list)
 
 
+class FindingAdviceItem(StrictModel):
+    """V2 清洗后按已确认 Finding 检索到的单条历史建议。"""
+
+    finding_id: str = Field(min_length=1)
+    advice_id: str = Field(min_length=1)
+    suggestion: str = Field(min_length=1)
+    issue_category: str = ""
+    dense_rank: int | None = None
+    bm25_rank: int | None = None
+    rrf_score: float | None = None
+    rerank_score: float | None = None
+    relevance: int | None = None
+    applicability: int | None = None
+    source_collection: str = ""
+    index_version: str = "historical_advice_v2"
+    rerank_reason: str = ""
+
+
 class DebateReviewInput(StrictModel):
     """Debate 模块承接原 Step 1、Step 2 和 Step 3 的输入。"""
 
     paper_id: str = Field(min_length=1)
+    discipline_id: str = Field(
+        default="artificial_intelligence", pattern=r"^[a-z0-9_.-]+$"
+    )
     title: str = Field(min_length=1)
     abstract: str = ""
     keywords: list[str] = Field(default_factory=list)
     full_text: str = Field(min_length=1)
-    paper_type: PaperType
+    paper_type: PaperType | None = None
     chapters: list[ChapterInput] = Field(min_length=1)
     step3_advice: list[RetrievedAdvice] = Field(default_factory=list)
     references: list[str] = Field(default_factory=list)
+    structured_document: StructuredPaperDocument | None = None
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
@@ -118,11 +222,15 @@ class ReviewContext(StrictModel):
     """Context Planner 的输出。"""
 
     paper_id: str = Field(min_length=1)
+    run_id: str = "legacy"
     profile: PaperProfile
     full_text: str | None = None
     content_packets: list[ContentPacket] = Field(default_factory=list)
     chapters: list[ChapterInput] = Field(min_length=1)
     step3_advice: list[RetrievedAdvice] = Field(default_factory=list)
+    structured_document: StructuredPaperDocument | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
+    review_profile: ResolvedReviewProfile | None = None
 
     @model_validator(mode="after")
     def require_readable_content(self) -> "ReviewContext":
@@ -140,6 +248,10 @@ class ReviewEvidence(StrictModel):
     quote: str = Field(min_length=1)
     location: str = Field(min_length=1)
     chapter_id: str | None = None
+    block_id: str | None = None
+    chunk_id: str | None = None
+    page_number: int | None = Field(default=None, ge=1)
+    bbox: BoundingBox | None = None
     doi: str | None = None
     url: str | None = None
     relevance: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -156,6 +268,10 @@ class ReviewFinding(StrictModel):
     """Specialist 对论文问题的结构化判断。"""
 
     finding_id: str = Field(min_length=1)
+    local_ref: str | None = None
+    source_role: SpecialistRole | None = None
+    identity_version: str = "v1_legacy"
+    fingerprint: str | None = None
     dimension: str = Field(min_length=1)
     claim: str = Field(min_length=1)
     rationale: str = Field(min_length=1)
@@ -165,16 +281,27 @@ class ReviewFinding(StrictModel):
     confidence: float = Field(ge=0.0, le=1.0)
     needs_external_verification: bool = False
     verification_query: str | None = None
-    requires_human_review: bool = False
 
     @model_validator(mode="after")
     def enforce_evidence_boundary(self) -> "ReviewFinding":
         if self.needs_external_verification and not self.verification_query:
             raise ValueError("需要外部查证的问题必须给出 verification_query")
         if self.severity in {FindingSeverity.FATAL, FindingSeverity.MAJOR} and not self.evidence:
-            if self.confidence > 0.5 or not self.requires_human_review:
-                raise ValueError("无证据的高严重度问题必须降低置信度并标记人工复核")
+            raise ValueError("fatal/major 问题必须提供可核验论文证据")
         return self
+
+
+class RubricAssessment(StrictModel):
+    """Specialist 对一个版本化章节小项的结构化判断。"""
+
+    item_id: str = Field(min_length=1)
+    chapter_id: str = Field(min_length=1)
+    role: SpecialistRole
+    judgement: RubricJudgement
+    rationale: str = Field(min_length=1)
+    finding_ids: list[str] = Field(default_factory=list)
+    dimension_weights: dict[str, float] = Field(default_factory=dict)
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class IndependentReview(StrictModel):
@@ -185,8 +312,25 @@ class IndependentReview(StrictModel):
     paper_summary: str = Field(min_length=1)
     strengths: list[str] = Field(default_factory=list)
     findings: list[ReviewFinding] = Field(default_factory=list)
+    rubric_assessments: list[RubricAssessment] = Field(default_factory=list)
     author_questions: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_local_finding_references(self) -> "IndependentReview":
+        ids = [finding.finding_id for finding in self.findings]
+        if len(ids) != len(set(ids)):
+            raise ValueError("同一 Specialist 输出了重复 finding_id")
+        known = set(ids)
+        unknown = {
+            finding_id
+            for assessment in self.rubric_assessments
+            for finding_id in assessment.finding_ids
+            if finding_id not in known
+        }
+        if unknown:
+            raise ValueError(f"Rubric 引用了未知 Finding：{sorted(unknown)}")
+        return self
 
 
 class DebateIssue(StrictModel):
@@ -265,6 +409,10 @@ class ResolvedFinding(StrictModel):
     """Chair 根据证据而非多数投票形成的最终问题判断。"""
 
     finding_id: str = Field(min_length=1)
+    source_finding_ids: list[str] = Field(default_factory=list)
+    identity_version: str = "v1_legacy"
+    fingerprint: str | None = None
+    merge_rationale: str = ""
     dimension: str = Field(min_length=1)
     claim: str = Field(min_length=1)
     severity: FindingSeverity
@@ -277,11 +425,27 @@ class ResolvedFinding(StrictModel):
 
     @model_validator(mode="after")
     def enforce_final_evidence_boundary(self) -> "ResolvedFinding":
-        if self.severity in {FindingSeverity.FATAL, FindingSeverity.MAJOR} and not self.evidence:
-            allowed = {ResolutionStatus.INSUFFICIENT, ResolutionStatus.HUMAN_REVIEW}
-            if self.status not in allowed or self.confidence > 0.5:
-                raise ValueError("最终高严重度结论缺少证据时必须降级并降低置信度")
+        if self.status is ResolutionStatus.CONFIRMED and not self.evidence:
+            raise ValueError("Chair 确认的问题必须提供可核验论文证据")
+        if self.identity_version == "finding_identity_v2" and not self.source_finding_ids:
+            raise ValueError("V2 Canonical Finding 必须保留 source_finding_ids")
         return self
+
+
+class FindingResolutionDraft(StrictModel):
+    """Chair 提交归并和裁决，正式 Canonical ID 由服务端生成。"""
+
+    source_finding_ids: list[str] = Field(min_length=1)
+    dimension: str = Field(min_length=1)
+    claim: str = Field(min_length=1)
+    severity: FindingSeverity
+    status: ResolutionStatus
+    rationale: str = Field(min_length=1)
+    evidence_ids: list[str] = Field(default_factory=list)
+    affected_chapter_ids: list[str] = Field(default_factory=list)
+    dissenting_views: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+    merge_rationale: str = ""
 
 
 class DimensionEvaluation(StrictModel):
@@ -301,7 +465,33 @@ class GlobalReview(StrictModel):
     author_questions: list[str] = Field(default_factory=list)
     dimensions: list[DimensionEvaluation] = Field(default_factory=list)
     resolved_findings: list[ResolvedFinding] = Field(default_factory=list)
-    unresolved_issue_ids: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_canonical_lineage(self) -> "GlobalReview":
+        canonical_ids = [finding.finding_id for finding in self.resolved_findings]
+        if len(canonical_ids) != len(set(canonical_ids)):
+            raise ValueError("GlobalReview 包含重复 Canonical Finding ID")
+        source_ids = [
+            source_id
+            for finding in self.resolved_findings
+            if finding.identity_version == "finding_identity_v2"
+            for source_id in finding.source_finding_ids
+        ]
+        if len(source_ids) != len(set(source_ids)):
+            raise ValueError("一个 Source Finding 不能归属多个 Canonical Finding")
+        return self
+
+
+class GlobalReviewDraft(StrictModel):
+    """不允许 Chair 自行生成正式 Finding ID 的综合裁决草稿。"""
+
+    overall_summary: str = Field(min_length=1)
+    strengths: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    author_questions: list[str] = Field(default_factory=list)
+    dimensions: list[DimensionEvaluation] = Field(default_factory=list)
+    resolved_findings: list[FindingResolutionDraft] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
 
 
@@ -362,6 +552,8 @@ class ReviewSynthesis(StrictModel):
     global_review: GlobalReview
     chapter_evaluation: dict[str, CompatibleChapterEnvelope]
     workload_evaluation: CompatibleWorkloadEvaluation
+    rubric_assessments: list[RubricAssessment] = Field(default_factory=list)
+    rubric_version: str = ""
 
     @model_validator(mode="after")
     def validate_chapter_keys(self) -> "ReviewSynthesis":
@@ -372,9 +564,39 @@ class ReviewSynthesis(StrictModel):
         return self
 
 
+class SummaryAdviceItem(StrictModel):
+    position: str = Field(min_length=1)
+    suggestion: str = Field(min_length=1)
+    severity: FindingSeverity
+    finding_ids: list[str] = Field(min_length=1)
+    evidence_ids: list[str] = Field(default_factory=list)
+    affected_chapter_ids: list[str] = Field(default_factory=list)
+    historical_sources: list[FindingAdviceItem] = Field(
+        default_factory=list,
+        max_length=2,
+    )
+    # V2 RAG 审计字段（optional，仅当启用 CleanAdviceRetriever 时填充）
+    # Singular fields retain API compatibility and mirror historical_sources[0].
+    advice_id: str = ""
+    source_collection: str = ""
+    dense_rank: int | None = None
+    bm25_rank: int | None = None
+    rrf_score: float | None = None
+    rerank_score: float | None = None
+    index_version: str = ""
+
+
 class SummaryAdviceResult(StrictModel):
     summary: str = Field(min_length=1)
     advice_count: int = Field(default=0, ge=0)
+    items: list[SummaryAdviceItem] = Field(default_factory=list, max_length=5)
+    rule_version: str = "legacy_step6_v2"
+
+    @model_validator(mode="after")
+    def keep_count_in_sync(self) -> "SummaryAdviceResult":
+        if self.items:
+            self.advice_count = len(self.items)
+        return self
 
 
 class HistoricalScoreCase(StrictModel):
@@ -402,6 +624,12 @@ class ComprehensiveScoreResult(StrictModel):
     overall_evaluation: str = Field(min_length=1)
     calibration_notes: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
+    legacy_raw_scores: list[float] = Field(default_factory=list)
+    legacy_level_scores: list[int] = Field(default_factory=list)
+    scoring_rule: str = "legacy_step7_v1"
+    model_raw_scores: dict[str, float] = Field(default_factory=dict)
+    rubric_anchor_scores: dict[str, float] = Field(default_factory=dict)
+    rubric_version: str = ""
 
     @model_validator(mode="after")
     def validate_original_dimensions(self) -> "ComprehensiveScoreResult":
@@ -410,6 +638,13 @@ class ComprehensiveScoreResult(StrictModel):
             raise ValueError("scores 必须包含原 Step 7 的 1 到 12 共十二项")
         if any(not 0.0 <= value <= 100.0 for value in self.scores.values()):
             raise ValueError("scores 中的每项分数必须位于 0 到 100 之间")
+        if self.legacy_raw_scores and len(self.legacy_raw_scores) != 18:
+            raise ValueError("legacy_raw_scores 必须包含 18 项")
+        if self.legacy_level_scores:
+            if len(self.legacy_level_scores) != 18:
+                raise ValueError("legacy_level_scores 必须包含 18 项")
+            if any(value not in {0, 1, 2, 3} for value in self.legacy_level_scores):
+                raise ValueError("legacy_level_scores 每项必须位于 0 到 3")
         return self
 
 
@@ -423,6 +658,10 @@ class DebateWorkflowIssue(StrictModel):
 
 
 class DebateRunResult(StrictModel):
+    workflow_graph_version: str = "v2"
+    finding_identity_version: str = "finding_identity_v2"
+    finding_lineage: dict[str, list[str]] = Field(default_factory=dict)
+    review_profile: ResolvedReviewProfile
     context: ReviewContext
     independent_reviews: list[IndependentReview]
     debate_plan: DebatePlan

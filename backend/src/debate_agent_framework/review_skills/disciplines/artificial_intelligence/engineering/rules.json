@@ -1,0 +1,6 @@
+[
+  {"rule_id":"AI-ENGINEERING-001","kind":"recommended","check":"requirement_traceability"},
+  {"rule_id":"AI-ENGINEERING-002","kind":"recommended","check":"functional_test_coverage"},
+  {"rule_id":"AI-ENGINEERING-003","kind":"heuristic","check":"performance_test_for_key_nonfunctional_requirements"},
+  {"rule_id":"AI-ENGINEERING-004","kind":"heuristic","check":"deployment_reproducibility"}
+]

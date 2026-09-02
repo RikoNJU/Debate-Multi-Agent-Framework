@@ -1,0 +1,5 @@
+[
+  {"rule_id":"AI-THEORY-001","kind":"recommended","check":"definition_precision"},
+  {"rule_id":"AI-THEORY-002","kind":"recommended","check":"assumption_visibility"},
+  {"rule_id":"AI-THEORY-003","kind":"heuristic","check":"counterexample_or_boundary_analysis"}
+]

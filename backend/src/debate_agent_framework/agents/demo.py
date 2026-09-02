@@ -6,11 +6,6 @@ import asyncio
 from collections.abc import Sequence
 
 from ..schemas import (
-    ChapterAdvice,
-    CompatibleChapterData,
-    CompatibleChapterEnvelope,
-    CompatibleStructureEvaluation,
-    CompatibleWorkloadEvaluation,
     ComprehensiveScoreResult,
     ContentPacket,
     DebateIssue,
@@ -21,23 +16,25 @@ from ..schemas import (
     DebateReviewInput,
     DimensionEvaluation,
     EvidenceKind,
+    FindingResolutionDraft,
     FindingSeverity,
-    GlobalReview,
+    FindingAdviceItem,
+    GlobalReviewDraft,
     HistoricalScoreCase,
     IndependentReview,
     PaperProfile,
     ResolutionStatus,
-    ResolvedFinding,
     ReviewContext,
     ReviewEvidence,
     ReviewFinding,
     ReviewSynthesis,
     ScoreCalibrationQuery,
-    SectionStructure,
     SpecialistRole,
     SummaryAdviceResult,
-    WorkloadItem,
 )
+from ..finding_identity import canonicalize_review
+from .compat import assemble_review_synthesis
+from .legacy_scoring import calculate_legacy_score
 
 
 class DemoContextPlanner:
@@ -86,6 +83,8 @@ class DemoContextPlanner:
             content_packets=packets,
             chapters=review_input.chapters,
             step3_advice=review_input.step3_advice,
+            structured_document=review_input.structured_document,
+            metadata=review_input.metadata,
         )
 
 
@@ -223,6 +222,14 @@ class DemoReviewChair:
         if not required.issubset(roles):
             return DebatePlan()
 
+        reviews_by_role = {review.role: review for review in reviews}
+        science_findings = reviews_by_role[SpecialistRole.SCIENTIFIC_SOUNDNESS].findings
+        empirical_findings = reviews_by_role[SpecialistRole.EMPIRICAL_EVIDENCE].findings
+        if not science_findings or not empirical_findings:
+            return DebatePlan()
+        science_id = science_findings[0].finding_id
+        empirical_id = empirical_findings[0].finding_id
+
         issue = DebateIssue(
             issue_id="ISSUE-METHOD-EVIDENCE",
             title="理论成立是否足以支持核心贡献",
@@ -231,7 +238,7 @@ class DemoReviewChair:
                 SpecialistRole.SCIENTIFIC_SOUNDNESS,
                 SpecialistRole.EMPIRICAL_EVIDENCE,
             ],
-            conflicting_finding_ids=["F-SCIENCE-1", "F-EMPIRICAL-1"],
+            conflicting_finding_ids=[science_id, empirical_id],
             evidence_gap="需要确认该方向应采用的强 Baseline 和标准实验设置",
             priority=5,
         )
@@ -243,14 +250,14 @@ class DemoReviewChair:
                     issue_id=issue.issue_id,
                     target_role=SpecialistRole.SCIENTIFIC_SOUNDNESS,
                     prompt="理论成立是否足以支撑论文声称的整体贡献？",
-                    challenged_finding_ids=["F-SCIENCE-1"],
+                    challenged_finding_ids=[science_id],
                 ),
                 DebateQuestion(
                     question_id="Q-EMPIRICAL-1",
                     issue_id=issue.issue_id,
                     target_role=SpecialistRole.EMPIRICAL_EVIDENCE,
                     prompt="请说明缺失的关键验证并给出依据。",
-                    challenged_finding_ids=["F-EMPIRICAL-1"],
+                    challenged_finding_ids=[empirical_id],
                     requires_external_evidence=True,
                     evidence_query="该研究方向常用的强 Baseline 与标准实验设置",
                 ),
@@ -267,25 +274,21 @@ class DemoReviewChair:
         external_evidence: Sequence[ReviewEvidence],
     ) -> ReviewSynthesis:
         findings = [finding for review in reviews for finding in review.findings]
-        response_issue_ids = {response.issue_id for response in responses}
-        resolved: list[ResolvedFinding] = []
+        resolved: list[FindingResolutionDraft] = []
         for finding in findings:
-            evidence = list(finding.evidence)
-            if finding.needs_external_verification:
-                evidence.extend(external_evidence)
             resolved.append(
-                ResolvedFinding(
-                    finding_id=finding.finding_id,
+                FindingResolutionDraft(
+                    source_finding_ids=[finding.finding_id],
                     dimension=finding.dimension,
                     claim=finding.claim,
                     severity=finding.severity,
                     status=(
                         ResolutionStatus.CONFIRMED
                         if not finding.needs_external_verification or external_evidence
-                        else ResolutionStatus.INSUFFICIENT
+                        else ResolutionStatus.REJECTED
                     ),
                     rationale=finding.rationale,
-                    evidence=evidence,
+                    evidence_ids=[item.evidence_id for item in finding.evidence],
                     affected_chapter_ids=finding.affected_chapter_ids,
                     dissenting_views=[
                         response.response
@@ -296,10 +299,14 @@ class DemoReviewChair:
                 )
             )
 
-        global_review = GlobalReview(
+        draft = GlobalReviewDraft(
             overall_summary=context.profile.global_summary,
             strengths=[item for review in reviews for item in review.strengths],
-            weaknesses=[finding.claim for finding in findings],
+            weaknesses=[
+                finding.claim
+                for finding in resolved
+                if finding.status is ResolutionStatus.CONFIRMED
+            ],
             author_questions=[item for review in reviews for item in review.author_questions],
             dimensions=[
                 DimensionEvaluation(
@@ -313,109 +320,18 @@ class DemoReviewChair:
                 if review.findings
             ],
             resolved_findings=resolved,
-            unresolved_issue_ids=[
-                issue.issue_id
-                for issue in debate_plan.issues
-                if issue.issue_id not in response_issue_ids
-            ],
             confidence=sum(review.confidence for review in reviews) / len(reviews),
         )
-
-        reviewable = [chapter for chapter in context.chapters if chapter.reviewable]
-        chapter_evaluation: dict[str, CompatibleChapterEnvelope] = {}
-        for index, chapter in enumerate(reviewable, start=1):
-            related = [
-                finding
-                for finding in resolved
-                if chapter.chapter_id in finding.affected_chapter_ids
-            ]
-            weaknesses = [finding.claim for finding in related]
-            chapter_evaluation[f"chapter_{index}"] = CompatibleChapterEnvelope(
-                chapter_data=CompatibleChapterData(
-                    chapter_name=chapter.chapter_name,
-                    chapter_type=self._chapter_type(chapter.stage),
-                    chapter_summary=chapter.content[:240],
-                    chapter_remark=(
-                        "；".join(weaknesses) if weaknesses else "本章内容与全文研究目标基本一致。"
-                    ),
-                    section_structure=[
-                        SectionStructure(
-                            section_title=title,
-                            section_purpose="支撑本章核心论述",
-                            key_points=[],
-                            weaknesses=weaknesses,
-                        )
-                        for title in chapter.section_titles
-                    ],
-                    extracted_info={"global_context": context.profile.global_summary},
-                    evaluation_items={
-                        "evidence_grounded_review": (
-                            "；".join(weaknesses) if weaknesses else "未发现高严重度问题[无问题]"
-                        )
-                    },
-                    scoring_impact=self._scoring_impact(related),
-                    advice=[
-                        ChapterAdvice(
-                            position=chapter.chapter_name,
-                            suggestion=self._suggestion(finding),
-                        )
-                        for finding in related
-                    ],
-                )
-            )
-
-        workload = CompatibleWorkloadEvaluation(
-            structure_evaluation=CompatibleStructureEvaluation(
-                completeness=WorkloadItem(score=82, analysis="核心章节完整。"),
-                abstract_and_keywords=WorkloadItem(score=84, analysis="摘要与关键词基本规范。"),
-                catalog_standardization=WorkloadItem(score=80, analysis="目录层级清晰。"),
-                chapter_standardization=WorkloadItem(score=78, analysis="跨章节回指仍可加强。"),
-                acknowledgement_standardization=WorkloadItem(score=85, analysis="致谢格式无明显问题。"),
-            ),
-            summary="论文结构基本完整，方法与实验之间的对应关系需要进一步明确。",
-            workload_evaluation="论文具备基本研究工作量，但关键实验覆盖仍需补充。",
+        global_review = canonicalize_review(
+            draft,
+            reviews,
+            run_id=context.run_id,
+            additional_evidence=[
+                *external_evidence,
+                *(evidence for response in responses for evidence in response.evidence),
+            ],
         )
-        return ReviewSynthesis(
-            global_review=global_review,
-            chapter_evaluation=chapter_evaluation,
-            workload_evaluation=workload,
-        )
-
-    @staticmethod
-    def _chapter_type(stage: str) -> str:
-        mapping = {
-            "引言/绪论": "introduction",
-            "引言/绪论（包含相关工作）": "introduction_related_work",
-            "相关工作": "related_work",
-            "背景知识": "background",
-            "数据来源与处理": "data_processing",
-            "模型与证明": "methodology",
-            "方法构建": "methodology",
-            "系统设计": "methodology",
-            "实验分析": "experiment",
-            "实验验证": "experiment",
-            "系统实现": "experiment",
-            "性能评估": "result_analysis",
-            "结果分析": "result_analysis",
-            "系统评估": "result_analysis",
-            "结论展望": "conclusion",
-        }
-        return mapping.get(stage, "general")
-
-    @staticmethod
-    def _scoring_impact(findings: Sequence[ResolvedFinding]) -> str:
-        if not findings:
-            return ""
-        worst = min(findings, key=lambda item: list(FindingSeverity).index(item.severity))
-        return f"{worst.claim}，可能影响相关评价维度[{worst.severity.value}]"
-
-    @staticmethod
-    def _suggestion(finding: ResolvedFinding) -> str:
-        if finding.dimension == "实验与证据":
-            return "补充强 Baseline 与消融实验。"
-        if finding.dimension == "理论与方法":
-            return "说明关键假设与方法失效边界。"
-        return "明确贡献与验证结果的跨章节对应。"
+        return assemble_review_synthesis(context, global_review, reviews=reviews)
 
 
 class DemoEvidenceRetriever:
@@ -467,14 +383,12 @@ class DemoOriginalPipelineAdapter:
         self,
         review_input: DebateReviewInput,
         synthesis: ReviewSynthesis,
+        *,
+        finding_advice: Sequence[FindingAdviceItem] = (),
     ) -> SummaryAdviceResult:
-        advice = [
-            item
-            for envelope in synthesis.chapter_evaluation.values()
-            for item in envelope.chapter_data.advice
-        ]
-        summary = "；".join(item.suggestion for item in advice) or "未发现需要修改的问题。"
-        return SummaryAdviceResult(summary=summary, advice_count=len(advice))
+        from .legacy_summary import build_summary_advice
+
+        return build_summary_advice(review_input, synthesis)
 
     def score(
         self,
@@ -487,16 +401,22 @@ class DemoOriginalPipelineAdapter:
         scores = {str(index): float(84 - (index % 5)) for index in range(1, 13)}
         scores["6"] = 76.0
         scores["9"] = 78.0
-        total = round(sum(scores.values()) / len(scores), 1)
+        calculation = calculate_legacy_score(
+            semantic_scores=scores,
+            structure=synthesis.workload_evaluation.structure_evaluation,
+            references=review_input.references,
+        )
         notes = [
             f"参考案例 {case.case_id}（相似度 {case.similarity:.2f}），仅用于尺度校准"
             for case in historical_cases
         ]
         return ComprehensiveScoreResult(
             scores=scores,
-            total_score=total,
-            grade="良好" if total >= 75 else "一般",
+            total_score=calculation.total_score,
+            grade=calculation.grade,
             overall_evaluation=synthesis.global_review.overall_summary,
             calibration_notes=notes,
             confidence=0.79 if historical_cases else 0.7,
+            legacy_raw_scores=calculation.raw_scores,
+            legacy_level_scores=calculation.level_scores,
         )

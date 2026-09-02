@@ -1,0 +1,12 @@
+[
+  {"key":"method.design_rationale","label":"方法设计依据","criteria":"技术路线和关键设计选择有理论或实证依据。","role":"scientific_soundness","stages":["methodology"],"dimensions":[{"dimension":"5","weight":0.5},{"dimension":"10","weight":0.5}]},
+  {"key":"method.feasibility","label":"方法可行性与完整性","criteria":"核心流程、假设、边界和实现细节足以支持方法可行性。","role":"scientific_soundness","stages":["methodology"],"dimensions":[{"dimension":"6","weight":0.5},{"dimension":"7","weight":0.5}]},
+  {"key":"method.innovation","label":"方法创新与贡献","criteria":"创新点明确，与已有工作可区分且被证据支持。","role":"scientific_soundness","stages":["methodology"],"dimensions":[{"dimension":"9","weight":0.7},{"dimension":"12","weight":0.3}]},
+  {"key":"method.experiment_setup","label":"实验设置完整性","criteria":"数据划分、环境、关键参数和训练设置完整并支持复现。","role":"empirical_evidence","stages":["experiment"],"dimensions":[{"dimension":"7","weight":1.0}]},
+  {"key":"method.metrics","label":"评价指标合理性","criteria":"指标定义清楚、选择合理并覆盖研究目标。","role":"empirical_evidence","stages":["experiment"],"dimensions":[{"dimension":"6","weight":0.4},{"dimension":"10","weight":0.6}]},
+  {"key":"method.baselines","label":"基线代表性与公平性","criteria":"基线有代表性，对比设置和调参公平。","role":"empirical_evidence","stages":["experiment"],"dimensions":[{"dimension":"4","weight":0.3},{"dimension":"10","weight":0.7}]},
+  {"key":"method.validation","label":"消融与验证科学性","criteria":"适当的消融、重复实验、统计或稳健性分析支撑核心声明。","role":"empirical_evidence","stages":["experiment","result_analysis"],"dimensions":[{"dimension":"10","weight":1.0}]},
+  {"key":"method.result_analysis","label":"结果分析深度","criteria":"基于证据解释差异原因、异常、局限和适用边界。","role":"empirical_evidence","stages":["result_analysis"],"dimensions":[{"dimension":"5","weight":0.4},{"dimension":"10","weight":0.6}]},
+  {"key":"method.workload_depth","label":"方法研究深度与工作量","criteria":"设计、实现、实验与分析体现足够核心工作量。","role":"global_quality","stages":["methodology","experiment"],"dimensions":[{"dimension":"2","weight":0.5},{"dimension":"5","weight":0.5}]},
+  {"key":"method.technical_application","label":"技术应用能力","criteria":"专业工具、编程、建模和实验能力运用恰当。","role":"global_quality","stages":["methodology"],"dimensions":[{"dimension":"8","weight":0.6},{"dimension":"12","weight":0.4}]}
+]

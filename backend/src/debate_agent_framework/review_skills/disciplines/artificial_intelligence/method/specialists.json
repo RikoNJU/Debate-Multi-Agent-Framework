@@ -1,0 +1,5 @@
+[
+  {"role":"scientific_soundness","persona_id":"ai_method_design_validity_v2","display_name":"方法设计与创新性专家","prompt_file":"disciplines/artificial_intelligence/method/prompts/scientific_soundness.md","checks":["research_problem_clear","design_rationale","method_logic_valid","innovation_supported"]},
+  {"role":"empirical_evidence","persona_id":"ai_method_experiment_v2","display_name":"实验设计与证据专家","prompt_file":"disciplines/artificial_intelligence/method/prompts/empirical_evidence.md","checks":["dataset_description","baseline_fairness","metric_definition","ablation_study","statistical_support"]},
+  {"role":"global_quality","persona_id":"ai_method_contribution_v2","display_name":"方法贡献与写作结构专家","prompt_file":"disciplines/artificial_intelligence/method/prompts/global_quality.md","checks":["contribution_consistency","technical_depth","section_role","terminology_consistency"]}
+]

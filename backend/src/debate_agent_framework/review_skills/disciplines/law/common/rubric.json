@@ -1,0 +1,5 @@
+[
+  {"key":"law.argument_structure","label":"规范论证结构（草案）","criteria":"概念、规范依据、解释路径与结论之间保持可核验的论证关系。","role":"scientific_soundness","stages":["*"],"dimensions":[{"dimension":"5","weight":0.6},{"dimension":"10","weight":0.4}]},
+  {"key":"law.authority_traceability","label":"法律依据可追溯性（草案）","criteria":"重要法条、司法解释、判例和文献依据可定位并与当前主张相关。","role":"empirical_evidence","stages":["*"],"dimensions":[{"dimension":"4","weight":0.4},{"dimension":"10","weight":0.6}]},
+  {"key":"law.writing_quality","label":"法学写作与全局结构（草案）","criteria":"章节职责清楚，术语稳定，结论与前文论证一致。","role":"global_quality","stages":["*"],"dimensions":[{"dimension":"11","weight":0.7},{"dimension":"12","weight":0.3}]}
+]

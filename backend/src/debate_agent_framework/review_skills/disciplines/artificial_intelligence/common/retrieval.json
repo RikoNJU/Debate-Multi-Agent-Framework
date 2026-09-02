@@ -1,0 +1,8 @@
+{
+  "route_id": "historical_advice_ai_v2",
+  "content_collection": "historical_advice_content_clean_v2",
+  "format_collection": "historical_advice_format_clean_v2",
+  "bm25_index_id": "historical_advice_ai_bm25_v2",
+  "terminology_version": "ai_terms_v1",
+  "top_k": {"dense":5,"bm25":5,"rrf":3,"max_per_finding":2}
+}

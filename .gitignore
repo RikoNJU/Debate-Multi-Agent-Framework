@@ -1,4 +1,4 @@
-Thumbs.db
+﻿Thumbs.db
 .DS_Store
 *.tmp
 *.log
@@ -6,7 +6,11 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+build/
+dist/
 output/
+backend/data/
+backend/local.db
 .venv/
 .env
 .env.*
@@ -14,3 +18,13 @@ output/
 !**/.env.example
 backend/src/*/data/*
 !backend/src/*/data/.gitignore
+
+# Frontend / Node runtime clutter
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+dist/
+.vite/
+coverage/
+

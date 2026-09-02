@@ -6,21 +6,27 @@ from collections.abc import Awaitable, Mapping, Sequence
 from typing import Protocol, TypeAlias, TypeVar
 
 from ..schemas import (
+    CompatibleWorkloadEvaluation,
     ComprehensiveScoreResult,
+    ChapterClassificationResult,
     DebateIssue,
     DebatePlan,
     DebateQuestion,
     DebateResponse,
     DebateReviewInput,
+    FindingAdviceItem,
     HistoricalScoreCase,
     IndependentReview,
+    PaperClassificationResult,
     ReviewContext,
     ReviewEvidence,
     ReviewSynthesis,
+    RetrievedAdvice,
     ScoreCalibrationQuery,
     SpecialistRole,
     SummaryAdviceResult,
 )
+from ..skills.models import ResolvedDisciplineProfile, ResolvedReviewProfile
 
 T = TypeVar("T")
 MaybeAwaitable: TypeAlias = T | Awaitable[T]
@@ -30,6 +36,30 @@ class ContextPlanner(Protocol):
     """决定使用全文还是语义完整内容包。"""
 
     def build(self, review_input: DebateReviewInput) -> MaybeAwaitable[ReviewContext]:
+        ...
+
+
+class PaperClassifier(Protocol):
+    """复用原 Step 1 自动识别论文类型。"""
+
+    def classify_paper(
+        self,
+        review_input: DebateReviewInput,
+        *,
+        discipline_profile: ResolvedDisciplineProfile | None = None,
+    ) -> MaybeAwaitable[PaperClassificationResult]:
+        ...
+
+
+class ChapterClassifier(Protocol):
+    """复用原 Step 2 按论文类型识别章节阶段。"""
+
+    def classify_chapters(
+        self,
+        review_input: DebateReviewInput,
+        *,
+        review_profile: ResolvedReviewProfile | None = None,
+    ) -> MaybeAwaitable[ChapterClassificationResult]:
         ...
 
 
@@ -87,6 +117,18 @@ class EvidenceRetriever(Protocol):
         ...
 
 
+class HistoricalAdviceRetriever(Protocol):
+    """检索原 Step 3 的历史专家建议，不提供外部事实证据。"""
+
+    def retrieve(
+        self,
+        review_input: DebateReviewInput,
+        *,
+        limit_per_chapter: int,
+    ) -> MaybeAwaitable[Sequence[RetrievedAdvice]]:
+        ...
+
+
 class HistoricalScoreRetriever(Protocol):
     """在事实评审完成后检索可比历史评分案例。"""
 
@@ -106,6 +148,8 @@ class OriginalPipelineAdapter(Protocol):
         self,
         review_input: DebateReviewInput,
         synthesis: ReviewSynthesis,
+        *,
+        finding_advice: Sequence[FindingAdviceItem] = (),
     ) -> MaybeAwaitable[SummaryAdviceResult]:
         ...
 
@@ -121,3 +165,14 @@ class OriginalPipelineAdapter(Protocol):
 
 
 SpecialistRegistry: TypeAlias = Mapping[SpecialistRole, SpecialistAgent]
+
+
+class WorkloadEvaluator(Protocol):
+    """Reuse the old paper-type-specific Step 5 standards."""
+
+    def evaluate_workload(
+        self,
+        review_input: DebateReviewInput,
+        synthesis: ReviewSynthesis,
+    ) -> MaybeAwaitable[CompatibleWorkloadEvaluation]:
+        ...

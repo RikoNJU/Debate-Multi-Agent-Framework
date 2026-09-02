@@ -1,0 +1,4 @@
+[
+  {"rule_id":"LAW-DRAFT-001","kind":"recommended","check":"authority_traceability"},
+  {"rule_id":"LAW-DRAFT-002","kind":"heuristic","check":"case_relevance"}
+]

@@ -1,0 +1,1 @@
+{"allowed_labels":["绪论/引言","文献综述","概念与理论基础","规范分析","案例分析","结论"],"deterministic_rules":[{"label":"绪论/引言","any_terms":["绪论","引言"]},{"label":"文献综述","any_terms":["文献综述","研究现状"]},{"label":"概念与理论基础","any_terms":["概念界定","理论基础"]},{"label":"案例分析","any_terms":["案例分析","裁判分析"]},{"label":"结论","any_terms":["结论","总结"]}],"fallback_label":"规范分析"}

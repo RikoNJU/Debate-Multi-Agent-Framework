@@ -1,0 +1,6 @@
+[
+  {"rule_id": "AI-RULE-001", "kind": "recommended", "check": "research_problem_clear"},
+  {"rule_id": "AI-RULE-002", "kind": "recommended", "check": "evidence_supports_claims"},
+  {"rule_id": "AI-RULE-003", "kind": "heuristic", "check": "representative_baseline_comparison"},
+  {"rule_id": "AI-RULE-004", "kind": "heuristic", "check": "ablation_when_applicable"}
+]

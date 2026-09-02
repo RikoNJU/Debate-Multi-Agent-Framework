@@ -1,0 +1,5 @@
+[
+  {"role":"scientific_soundness","persona_id":"law_normative_reasoning_draft","display_name":"规范论证专家（草案）","prompt_file":"disciplines/law/common/prompts/scientific_soundness.md","checks":["concept_definition","normative_reasoning"]},
+  {"role":"empirical_evidence","persona_id":"law_legal_evidence_draft","display_name":"法律依据专家（草案）","prompt_file":"disciplines/law/common/prompts/empirical_evidence.md","checks":["authority_traceability","case_relevance"]},
+  {"role":"global_quality","persona_id":"law_writing_structure_draft","display_name":"法学写作结构专家（草案）","prompt_file":"disciplines/law/common/prompts/global_quality.md","checks":["argument_structure","terminology_consistency"]}
+]

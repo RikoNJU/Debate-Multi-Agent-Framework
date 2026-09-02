@@ -1,0 +1,5 @@
+[
+  {"role":"scientific_soundness","persona_id":"ai_theory_formal_validity_v2","display_name":"理论定义与证明有效性专家","prompt_file":"disciplines/artificial_intelligence/theory/prompts/scientific_soundness.md","checks":["definition_precision","assumption_visibility","proof_validity","claim_boundary"]},
+  {"role":"empirical_evidence","persona_id":"ai_theory_validation_v2","display_name":"理论验证与反例专家","prompt_file":"disciplines/artificial_intelligence/theory/prompts/empirical_evidence.md","checks":["simulation_relevance","boundary_cases","counterexamples","comparison_evidence"]},
+  {"role":"global_quality","persona_id":"ai_theory_exposition_v2","display_name":"理论贡献与论述结构专家","prompt_file":"disciplines/artificial_intelligence/theory/prompts/global_quality.md","checks":["notation_consistency","proof_organization","contribution_novelty","research_depth"]}
+]

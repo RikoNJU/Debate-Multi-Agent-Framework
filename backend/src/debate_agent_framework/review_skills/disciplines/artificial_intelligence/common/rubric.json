@@ -1,0 +1,10 @@
+[
+  {"key":"chapter.expression_quality","label":"章节结构与表达","criteria":"章节组织清晰，论述连贯，术语和语言表达符合本科论文要求。","role":"global_quality","stages":["*"],"dimensions":[{"dimension":"11","weight":1.0}]},
+  {"key":"introduction.research_problem","label":"研究问题与目标","criteria":"研究问题、目标和边界明确，并由背景合理引出。","role":"scientific_soundness","stages":["introduction"],"dimensions":[{"dimension":"1","weight":0.4},{"dimension":"5","weight":0.6}]},
+  {"key":"introduction.topic_value","label":"选题价值","criteria":"选题说明学术或应用价值，并与实际工作匹配。","role":"global_quality","stages":["introduction"],"dimensions":[{"dimension":"1","weight":0.4},{"dimension":"3","weight":0.6}]},
+  {"key":"related_work.coverage","label":"文献覆盖与代表性","criteria":"覆盖直接相关的代表性工作并形成清晰脉络。","role":"global_quality","stages":["related_work"],"dimensions":[{"dimension":"4","weight":1.0}]},
+  {"key":"related_work.analysis","label":"文献分析深度","criteria":"比较已有工作的差异和局限并支撑研究动机。","role":"scientific_soundness","stages":["related_work"],"dimensions":[{"dimension":"4","weight":0.6},{"dimension":"5","weight":0.4}]},
+  {"key":"data.source_quality","label":"数据来源与质量","criteria":"涉及数据时，应说明来源、规模、处理和质量边界。","role":"empirical_evidence","stages":["data"],"dimensions":[{"dimension":"6","weight":0.4},{"dimension":"10","weight":0.6}]},
+  {"key":"conclusion.consistency","label":"结论与证据一致性","criteria":"结论回应目标且不超出论证或实验支持范围。","role":"scientific_soundness","stages":["conclusion"],"dimensions":[{"dimension":"10","weight":0.7},{"dimension":"12","weight":0.3}]},
+  {"key":"conclusion.contribution_value","label":"成果价值与贡献完整性","criteria":"准确总结工作、价值、局限和后续方向。","role":"global_quality","stages":["conclusion"],"dimensions":[{"dimension":"3","weight":0.3},{"dimension":"12","weight":0.7}]}
+]
