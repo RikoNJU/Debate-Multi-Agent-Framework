@@ -165,13 +165,21 @@ class DebateWorkflow:
         cls,
         model_client: ModelClient | None = None,
         *,
+        workload_client: ModelClient | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
     ) -> "DebateWorkflow":
         """构造真实模型驱动的 Debate 工作流。
 
         Specialist、Review Chair 与 Step 6/7 使用真实 LLM。未配置的外部证据
         与历史评分服务保持为空，禁止 Demo 数据污染真实评审。
+
+        支持为特定角色指定独立模型客户端：
+        - ``workload_client``：Step 5 工作量与结构评估使用的模型，默认与其他
+          角色共用 ``model_client``。可通过设置环境变量
+          ``DEBATE_STEP5_LOCAL=1`` 自动启用本地 Qwen3-8B + QLoRA。
         """
+
+        import os as _os
 
         from ..services.advice_registry import build_advice_registry_from_env
         from ..services.external_evidence import build_evidence_retriever_from_env
@@ -183,6 +191,12 @@ class DebateWorkflow:
         )
 
         client = model_client or build_model_client()
+        step5_client = workload_client
+        if step5_client is None and _os.getenv("DEBATE_STEP5_LOCAL") == "1":
+            from ..services.qwen_local_client import QwenLocalClient
+
+            step5_client = QwenLocalClient()
+
         classification = LegacyStep12ClassificationAdapter(model_client=client)
         return cls(
             DebateWorkflowServices(
@@ -201,7 +215,9 @@ class DebateWorkflow:
                 historical_score_retriever=build_historical_score_retriever_from_env(),
                 clean_advice_retriever=build_advice_registry_from_env(),
                 original_pipeline=RealOriginalPipelineAdapter(model_client=client),
-                workload_evaluator=RealLegacyWorkloadEvaluator(client),
+                workload_evaluator=RealLegacyWorkloadEvaluator(
+                    step5_client if step5_client is not None else client
+                ),
                 skill_resolver=build_default_skill_resolver(),
             ),
             config=DebateWorkflowConfig.from_env(),

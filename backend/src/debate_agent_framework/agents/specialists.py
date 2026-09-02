@@ -146,13 +146,6 @@ class DebateSpecialistAgent(SpecialistAgent):
         response.question_id = question.question_id
         return response
 
-    def _system_prompt(self, context: ReviewContext) -> str:
-        profile = context.review_profile
-        configured = (
-            profile.specialist_prompts.get(self.role.value) if profile else None
-        )
-        if isinstance(configured, str) and configured.strip():
-            base = profile.base_guidance.strip() if profile else ""
-            return f"{base}\n\n专业角色指引：\n{configured}" if base else configured
+    def _system_prompt(self, _context: ReviewContext | None = None) -> str:
         prompt_file = _PROMPTS_DIR / f"{self.role.value}.md"
         return prompt_file.read_text(encoding="utf-8")

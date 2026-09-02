@@ -108,7 +108,7 @@ def complete_json(
     schema: dict[str, Any],
     temperature: float = 0.2,
     max_tokens: int = 4096,
-) -> dict[str, Any]:
+    ) -> dict[str, Any]:
     """调用统一模型客户端，并把回复解析为 JSON dict。
 
     ``schema`` 会把目标 Pydantic 模型的 JSON Schema 写入 prompt，强制模型按

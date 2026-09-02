@@ -28,3 +28,15 @@ dist/
 .vite/
 coverage/
 
+# Fine-tuning artifacts (per proposal: no real data or model weights in git)
+finetuning/data/raw/*
+!finetuning/data/raw/.gitkeep
+finetuning/data/processed/*
+!finetuning/data/processed/.gitkeep
+finetuning/data/splits/*
+!finetuning/data/splits/.gitkeep
+finetuning/outputs/*
+!finetuning/outputs/.gitkeep
+finetuning/evaluation/results.json
+finetuning/evaluation/blind_review.csv
+
