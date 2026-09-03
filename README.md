@@ -18,6 +18,7 @@
 - **学科 Review Skill**：通过 JSON、Markdown 和 TXT 组合基础规则、学科规则、论文类型 Overlay、专家角色及检索配置，并冻结解析后的配置快照用于审计。
 - **人工复核闭环**：教师在系统初评分上调整并提交终审，教务负责账号、分配、发布、统计、审计和评审表导出。
 - **本地持久化**：SQLite 保存业务数据和 LangGraph 检查点，本地文件系统保存 PDF、MinerU 产物及评审结果。
+- **独立 AIGC 筛查**：复用 MinerU 结构化块进行本地文本分类，按章节展示风险和页码定位；与 Finding、评分和 Chair 裁决完全隔离。
 
 ## 技术栈
 
@@ -85,6 +86,7 @@ Dense Top 5 + BM25 Top 5 -> RRF Top 3 -> Reranker
 
 - 学生端：`/student`，无需注册登录，支持单篇或批量上传，并在当前浏览器查看自己的任务。
 - 工作人员端：`/login`，教师与教务统一登录，进入 `/workspace`。
+- AIGC 检测：`/aigc`，独立上传和查看辅助筛查结果，不影响论文评审分数。
 - 教师端：查看分配的论文、原始 PDF、AI 证据和初评分，保存草稿并提交终审。
 - 教务端：管理账号和分配，发布终审结果，查看统计、审计记录并导出评审表。
 
@@ -168,6 +170,7 @@ docs/              架构、运行手册和未实施方案
 - [历史建议 RAG V2 运行手册](docs/historical-advice-rag-v2-runbook.md)
 - [Finding Identity V2](docs/finding-identity-v2.md)
 - [Prompt Cache 与模型调用观测 V2](docs/prompt-cache-and-model-usage-v2.md)
+- [独立 AIGC 文本检测](docs/aigc-detection.md)
 - [历史建议 RAG 改造方案](docs/historical-advice-rag-redesign.md)
 - [学科 Review Skill 方案](docs/discipline-review-skills-proposal-v1.md)
 

@@ -9,6 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from ..services.paper_storage import PaperPersistenceService
 from ..services.workflow_service import DebateWorkflowService
 from ..persistence import PortalRepository
+from ..aigc import AigcDetectionService
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -24,6 +25,10 @@ def get_paper_persistence_service(request: Request) -> PaperPersistenceService:
 
 def get_portal_repository(request: Request) -> PortalRepository:
     return request.app.state.portal_repository
+
+
+def get_aigc_detection_service(request: Request) -> AigcDetectionService:
+    return request.app.state.aigc_detection_service
 
 
 def get_bearer_token(

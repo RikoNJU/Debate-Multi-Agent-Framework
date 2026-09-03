@@ -159,6 +159,44 @@ class ModelCallMetricRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class AigcDetectionTaskRecord(Base):
+    __tablename__ = "aigc_detection_tasks"
+
+    task_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    access_code_hash: Mapped[str] = mapped_column(String(64))
+    source_filename: Mapped[str] = mapped_column(Text)
+    source_pdf_path: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    current_stage: Mapped[str] = mapped_column(String(64))
+    progress_percent: Mapped[int] = mapped_column(default=0)
+    model_id: Mapped[str] = mapped_column(String(255))
+    model_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    preprocessing_version: Mapped[str] = mapped_column(String(64))
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class AigcSegmentResultRecord(Base):
+    __tablename__ = "aigc_segment_results"
+
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("aigc_detection_tasks.task_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    segment_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    chapter_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    text_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    token_count: Mapped[int] = mapped_column()
+    ai_probability: Mapped[float] = mapped_column()
+    risk_level: Mapped[str] = mapped_column(String(16), index=True)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class CanonicalFindingRecord(Base):
     __tablename__ = "canonical_findings"
 

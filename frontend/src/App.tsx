@@ -8,6 +8,7 @@ import LoginPage from './pages/LoginPage';
 import TeacherPortalPage from './pages/TeacherPortalPage';
 import { PortalRoute, WorkspaceEntry } from './components/PortalRoute';
 import TopNav from './components/TopNav';
+import AigcDetectionPage from './pages/AigcDetectionPage';
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/" element={<HomePage />} />
         <Route path="/student" element={<ReviewPage />} />
         <Route path="/student/tasks/:taskId" element={<TaskDetailPage />} />
+        <Route path="/aigc" element={<AigcDetectionPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/workspace" element={<WorkspaceEntry />} />
         <Route path="/workspace/reviews" element={<PortalRoute><TeacherPortalPage /></PortalRoute>} />

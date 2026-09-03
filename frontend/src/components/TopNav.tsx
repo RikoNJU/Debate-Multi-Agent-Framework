@@ -16,6 +16,7 @@ export default function TopNav() {
       <nav className="topbar-nav" aria-label="主导航">
         <Link className={location.pathname === "/" ? "active" : ""} to="/">首页</Link>
         <Link className={location.pathname.startsWith("/student") ? "active" : ""} to="/student">学生端</Link>
+        <Link className={location.pathname.startsWith("/aigc") ? "active" : ""} to="/aigc">AIGC 检测</Link>
         <Link className={location.pathname.startsWith("/workspace") || location.pathname === "/login" ? "active" : ""} to="/workspace">教师端</Link>
       </nav>
     </header>

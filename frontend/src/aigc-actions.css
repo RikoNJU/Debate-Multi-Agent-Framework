@@ -1,0 +1,16 @@
+.aigc-delete {
+  margin: 0 0 9px auto;
+  border: 0;
+  background: transparent;
+  color: #a0444e;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.aigc-delete:disabled {
+  color: #9da6aa;
+  cursor: not-allowed;
+}
