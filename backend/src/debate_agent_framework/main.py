@@ -12,10 +12,12 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from backend.env.loadenv import load_env_file
 
+from .aigc import AigcDetectionService, AigcTaskRepository
 from .config import DebateWebSettings
 from .persistence import Database, PaperRepository, PortalRepository, SqlAlchemyRunStore
 from .routers import (
     admin_router,
+    aigc_router,
     auth_router,
     health_router,
     papers_router,
@@ -50,6 +52,8 @@ def create_app(settings: DebateWebSettings | None = None) -> FastAPI:
             settings.bootstrap_admin_password,
             settings.bootstrap_admin_display_name,
         )
+        aigc_repository = AigcTaskRepository(database)
+        aigc_repository.mark_interrupted()
         # 持久化 LangGraph 检查点：失败重试可从上次失败的步骤恢复
         checkpoint_conn = await aiosqlite.connect(data_dir / "checkpoints.db")
         checkpointer = AsyncSqliteSaver(checkpoint_conn)
@@ -57,6 +61,10 @@ def create_app(settings: DebateWebSettings | None = None) -> FastAPI:
         application.state.run_store = run_store
         application.state.paper_repository = paper_repository
         application.state.portal_repository = portal_repository
+        application.state.aigc_detection_service = AigcDetectionService(
+            data_dir=data_dir,
+            repository=aigc_repository,
+        )
         application.state.paper_persistence_service = PaperPersistenceService(
             data_dir, paper_repository
         )
@@ -92,6 +100,7 @@ def create_app(settings: DebateWebSettings | None = None) -> FastAPI:
     application.include_router(teacher_router, prefix=settings.api_prefix)
     application.include_router(admin_router, prefix=settings.api_prefix)
     application.include_router(student_router, prefix=settings.api_prefix)
+    application.include_router(aigc_router, prefix=settings.api_prefix)
     return application
 
 

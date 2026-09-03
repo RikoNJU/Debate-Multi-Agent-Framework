@@ -36,6 +36,10 @@ rag = [
     "jieba>=0.42,<1.0",
     "rank-bm25>=0.2.2,<1.0",
 ]
+aigc = [
+    "torch>=2.2,<3.0",
+    "transformers>=4.48,<6.0",
+]
 
 [project.scripts]
 debate-demo = "debate_agent_framework.cli:main"

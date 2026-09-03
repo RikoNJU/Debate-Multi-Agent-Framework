@@ -233,6 +233,7 @@ export default function ReviewPage() {
         </div>
         <div className="topbar-right">
           <span className="status-dot" /> 系统运行正常
+          <Link className="role-link" to="/aigc">AIGC 检测</Link>
           <Link className="role-link" to="/workspace">工作人员端</Link>
         </div>
       </header>

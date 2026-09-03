@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from ..aigc import AigcDetectionService
 from ..services.paper_storage import PaperPersistenceService
 from ..services.workflow_service import DebateWorkflowService
 from ..persistence import PortalRepository
@@ -24,6 +25,10 @@ def get_paper_persistence_service(request: Request) -> PaperPersistenceService:
 
 def get_portal_repository(request: Request) -> PortalRepository:
     return request.app.state.portal_repository
+
+
+def get_aigc_detection_service(request: Request) -> AigcDetectionService:
+    return request.app.state.aigc_detection_service
 
 
 def get_bearer_token(
