@@ -108,31 +108,6 @@ async def parse_and_review_paper(
                     if size > config.max_pdf_bytes:
                         raise InvalidPdfError("PDF exceeds configured size limit")
                     target.write(chunk)
-            pdf_sha256 = persistence.file_sha256(pdf_path)
-            known_revision = request.app.state.paper_repository.find_revision_by_pdf_sha256(
-                pdf_sha256
-            )
-            if known_revision and known_revision.get("content_sha256"):
-                fingerprint = build_review_fingerprint(
-                    str(known_revision["content_sha256"]),
-                    paper_type,
-                    discipline_id=discipline_id,
-                    skill_selection_hash=skill_selection_hash,
-                )
-                reusable = service.find_reusable_run(fingerprint)
-                if reusable is not None and reusable.result is not None:
-                    context = reusable.result.get("context", {})
-                    chapters = context.get("chapters", [])
-                    return PaperReviewSubmission(
-                        task_id=reusable.task_id,
-                        status=reusable.status.value,
-                        paper_id=str(known_revision["paper_id"]),
-                        title=str(known_revision["title"]),
-                        chapter_count=max(1, len(chapters)),
-                        batch_id=str(known_revision["mineru_batch_id"]),
-                        revision_id=str(known_revision["revision_id"]),
-                        reused=True,
-                    )
             parsed = await MinerUClient(config).parse_pdf(
                 pdf_path,
                 output_root=output_root,
@@ -171,27 +146,15 @@ async def parse_and_review_paper(
                 source_filename=pdf.filename,
                 comparison=comparison,
             )
-        reusable = service.find_reusable_run(review_fingerprint)
-        if reusable is not None:
-            snapshot = service.create_reused_run(
-                source=reusable,
-                paper_id=review_input.paper_id,
-                revision_id=persisted.revision_id,
-                review_fingerprint=review_fingerprint,
-                discipline_id=discipline_id,
-                skill_selection_hash=skill_selection_hash,
-            )
-            reused = True
-        else:
-            snapshot = service.create_run(
-                paper_id=review_input.paper_id,
-                revision_id=persisted.revision_id,
-                review_fingerprint=review_fingerprint,
-                discipline_id=discipline_id,
-                skill_selection_hash=skill_selection_hash,
-            )
-            background_tasks.add_task(service.execute, snapshot.task_id, review_input)
-            reused = False
+        snapshot = service.create_run(
+            paper_id=review_input.paper_id,
+            revision_id=persisted.revision_id,
+            review_fingerprint=review_fingerprint,
+            discipline_id=discipline_id,
+            skill_selection_hash=skill_selection_hash,
+        )
+        background_tasks.add_task(service.execute, snapshot.task_id, review_input)
+        reused = False
         return PaperReviewSubmission(
             task_id=snapshot.task_id,
             status=snapshot.status.value,

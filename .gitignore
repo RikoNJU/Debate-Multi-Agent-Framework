@@ -42,3 +42,6 @@ finetuning/evaluation/blind_review.csv
 finetuning/models/*
 !finetuning/models/.gitkeep
 
+
+# 防误从 backend 目录启动导致重复建库
+backend/backend/

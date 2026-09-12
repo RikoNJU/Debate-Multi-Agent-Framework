@@ -197,7 +197,7 @@ def test_pdf_review_endpoint_auto_classifies_without_paper_type(
     )
 
 
-def test_identical_pdf_reuses_successful_review_before_mineru(
+def test_duplicate_pdf_always_triggers_a_fresh_review(
     monkeypatch, tmp_path
 ) -> None:  # type: ignore[no-untyped-def]
     import debate_agent_framework.routers.papers as papers_router
@@ -244,7 +244,6 @@ def test_identical_pdf_reuses_successful_review_before_mineru(
 
     assert first.status_code == 202
     assert second.status_code == 202
-    assert second.json()["reused"] is True
-    assert second.json()["task_id"] == first.json()["task_id"]
-    assert second.json()["revision_id"] == first.json()["revision_id"]
-    assert CountingMinerUClient.calls == 1
+    assert second.json()["reused"] is False
+    assert second.json()["task_id"] != first.json()["task_id"]
+    assert CountingMinerUClient.calls == 2
