@@ -1,6 +1,6 @@
 import { FormEvent, useState } from 'react';
-import { ArrowLeft, ArrowRight, LockKeyhole, UserRound } from 'lucide-react';
-import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { ArrowRight, LockKeyhole, UserRound } from 'lucide-react';
+import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 
 import { usePortalAuth } from '../contexts/PortalAuthContext';
 
@@ -34,7 +34,7 @@ export default function LoginPage() {
   return (
     <div className="portal-login">
       <main>
-        <div className="login-brand"><span>南京大学</span><div><b>睿文智评</b><small>评审工作台</small></div></div>
+        <div className="login-brand"><div><b>睿文智评</b><small>评审工作台</small></div></div>
         <div className="login-copy">
           <p>HUMAN REVIEW PORTAL</p>
           <h1>人工复核，让每个结论都有责任边界。</h1>
@@ -48,7 +48,6 @@ export default function LoginPage() {
           <label><span>密码</span><div><LockKeyhole size={18}/><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></div></label>
           {error && <p className="form-error">{error}</p>}
           <button disabled={loading}>{loading ? '正在登录...' : '登录'}<ArrowRight size={18}/></button>
-          <Link className="login-student-link" to="/student"><ArrowLeft size={15}/>返回学生端</Link>
         </form>
       </section>
     </div>

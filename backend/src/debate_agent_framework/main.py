@@ -58,6 +58,7 @@ def create_app(settings: DebateWebSettings | None = None) -> FastAPI:
         checkpoint_conn = await aiosqlite.connect(data_dir / "checkpoints.db")
         checkpointer = AsyncSqliteSaver(checkpoint_conn)
         application.state.database = database
+        application.state.data_dir = data_dir
         application.state.run_store = run_store
         application.state.paper_repository = paper_repository
         application.state.portal_repository = portal_repository

@@ -206,6 +206,19 @@ class SqlAlchemyRunStore:
                 else None
             )
 
+    def list_recent(self, limit: int = 100) -> list[RunSnapshot]:
+        """按更新时间倒序返回最近的任务快照，供任务列表页展示。"""
+        with self.database.session() as session:
+            records = session.scalars(
+                select(ReviewRunRecord)
+                .order_by(ReviewRunRecord.updated_at.desc())
+                .limit(limit)
+            ).all()
+            return [
+                self._snapshot(record, self._stage_events(session, record.task_id))
+                for record in records
+            ]
+
     def mark_interrupted(self) -> int:
         changed = 0
         with self.database.session() as session:

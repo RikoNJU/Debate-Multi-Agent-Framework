@@ -236,6 +236,18 @@ DEBATE_BOOTSTRAP_ADMIN_DISPLAY_NAME=系统管理员
 管理员创建后应删除密码环境变量。密码使用 PBKDF2-SHA256 加盐存储，登录返回有限期
 不透明会话令牌；教师和管理员接口分别执行服务端角色校验。
 
+已有数据库需要补建账号（或重置密码）时，使用同一套密码算法直接写入：
+
+```bash
+python scripts/create_portal_user.py --username admin --role admin \
+  --display-name 系统管理员 --password 'your-strong-password'
+python scripts/create_portal_user.py --username teacher01 --role teacher \
+  --display-name 评审教师01 --password 'your-strong-password'
+# 账号已存在时加 --reset-password 直接改密
+```
+
+脚本默认写入 `backend/data/debate.db`，可用 `--database` 指向其他 SQLite 文件。
+
 系统前端按使用者拆为两个并列入口：
 
 - 学生端 `/student`：无需注册或登录，上传论文后凭任务编号自由查看分析结果；

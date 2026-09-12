@@ -1,90 +1,23 @@
-.aigc-back {
-  max-width: 1380px;
-  margin: auto;
-  padding: 20px 32px 0;
-}
-.aigc-back-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: #4a5a6c;
-  font-size: 14px;
-  font-weight: 600;
-  text-decoration: none;
-  transition: color 0.15s;
-}
-.aigc-back-link:hover {
-  color: #327064;
-}
 .aigc-page {
-  min-height: calc(100vh - 74px);
-  background: #f4f6f8;
-  color: #1e2b39;
-  padding-bottom: 55px;
+  --aigc-gutter: 32px;
+  --aigc-card-pad: 19px;
+  min-height: calc(100vh - 74px - var(--app-footer-h, 66px));
+  background: #f4f7fc;
+  color: #18263c;
+  padding-bottom: 46px;
 }
+
+/* 页面标题沿用学生端 .pane-heading 排版，左侧与下方面板内容对齐 */
 .aigc-header {
-  max-width: 1380px;
+  max-width: 1200px;
   margin: auto;
-  padding: 38px 32px 26px;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 24px;
-  border-bottom: 1px solid #dce2e7;
-}
-.aigc-header > div:first-child span {
-  color: #327064;
-  font: 700 11px "Segoe UI";
-  letter-spacing: 1.4px;
-}
-.aigc-header h1 {
-  margin: 7px 0 6px;
-  font-size: 30px;
-  letter-spacing: 0;
-}
-.aigc-header p {
-  margin: 0;
-  color: #657484;
-  font-size: 14px;
-}
-.aigc-service {
-  min-width: 230px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 11px 13px;
-  border: 1px solid;
-  border-radius: 7px;
-}
-.aigc-service.ready {
-  color: #23745f;
-  background: #edf8f4;
-  border-color: #c6e5db;
-}
-.aigc-service.offline {
-  color: #98691a;
-  background: #fff8e8;
-  border-color: #ecd9ad;
-}
-.aigc-service div {
-  display: grid;
-  gap: 2px;
-}
-.aigc-service b {
-  font-size: 12px;
-}
-.aigc-service small {
-  max-width: 195px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: #687785;
-  font-size: 10px;
-  white-space: nowrap;
+  padding: 60px var(--aigc-gutter) 0
+    calc(var(--aigc-gutter) + var(--aigc-card-pad));
 }
 .aigc-layout {
-  max-width: 1380px;
+  max-width: 1200px;
   margin: auto;
-  padding: 24px 32px;
+  padding: 46px var(--aigc-gutter) 0;
   display: grid;
   grid-template-columns: 310px minmax(0, 1fr);
   gap: 24px;
@@ -92,80 +25,42 @@
 .aigc-side {
   align-self: start;
   background: #fff;
-  border: 1px solid #dde3e8;
-  border-radius: 8px;
-  padding: 19px;
+  border: 1px solid #e2e9f1;
+  border-radius: 12px;
+  padding: var(--aigc-card-pad);
 }
 .aigc-upload-title {
   display: flex;
   align-items: center;
   gap: 9px;
-  color: #2c4f56;
+  color: #3b4c64;
   font-size: 14px;
   margin-bottom: 14px;
 }
+
+/* 上传区复用学生端 .upload-zone / .upload-round / .file-ready 样式 */
 .aigc-drop {
   width: 100%;
-  min-height: 154px;
-  border: 1px dashed #96b0ad;
-  background: #f7fbfa;
-  border-radius: 7px;
-  color: #40746d;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  cursor: pointer;
-  padding: 18px;
+  min-height: 230px;
+  padding: 26px 20px;
 }
-.aigc-drop:hover,
-.aigc-drop.dragging {
-  border-color: #287c6e;
-  background: #eef8f5;
+.aigc-drop.has-file {
+  padding: 20px;
 }
-.aigc-drop input {
-  display: none;
+.aigc-drop .file-ready,
+.aigc-drop .file-ready > div {
+  min-width: 0;
 }
-.aigc-drop strong {
-  max-width: 230px;
-  color: #294e4a;
-  font-size: 13px;
-  overflow-wrap: anywhere;
+.aigc-drop .file-ready strong {
+  display: block;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.aigc-drop span {
-  font-size: 11px;
-  color: #748680;
-}
-.aigc-clear {
-  margin: 7px 0 0 auto;
-  border: 0;
-  background: transparent;
-  color: #9a4b52;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 11px;
-  cursor: pointer;
-}
-.aigc-primary {
-  width: 100%;
-  height: 43px;
-  margin-top: 12px;
-  border: 0;
-  border-radius: 6px;
-  background: #266f64;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.aigc-primary:disabled {
-  background: #a9b7b5;
-  cursor: not-allowed;
+/* 主操作按钮复用学生端 .primary-button，仅补齐侧栏间距 */
+.aigc-side > .primary-button {
+  margin-top: 16px;
 }
 .aigc-unavailable {
   font-size: 11px;
@@ -176,24 +71,24 @@
   padding: 8px;
   margin: 10px 0;
 }
+
+/* 历史检测标题沿用 .aigc-upload-title 排版，右侧保留数量徽标 */
 .aigc-history-head {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   border-top: 1px solid #e5e9ec;
-  margin-top: 20px;
-  padding: 18px 2px 9px;
-  font-size: 12px;
+  margin-top: 24px;
+  padding-top: 20px;
 }
-.aigc-history-head span {
-  background: #e8efee;
-  color: #3c625e;
-  padding: 2px 7px;
-  border-radius: 10px;
+.aigc-history-head .aigc-upload-title {
+  margin-bottom: 0;
 }
 .aigc-history {
   display: grid;
-  gap: 5px;
+  gap: 10px;
+  margin-top: 14px;
 }
 .aigc-history > p {
   text-align: center;
@@ -201,43 +96,18 @@
   font-size: 12px;
   padding: 25px 0;
 }
-.aigc-history button {
-  width: 100%;
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) 15px;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid transparent;
-  background: #fff;
-  padding: 9px 7px;
-  color: #687781;
-  text-align: left;
-  cursor: pointer;
-  border-radius: 5px;
+/* 任务卡片复用学生端 .task-card，只调整为三列（无状态标签） */
+.aigc-history .task-card {
+  grid-template-columns: 38px minmax(0, 1fr) 15px;
 }
-.aigc-history button:hover,
-.aigc-history button.active {
-  background: #edf5f3;
-  border-color: #d2e3df;
-  color: #28695f;
-}
-.aigc-history button div {
-  min-width: 0;
-}
-.aigc-history strong,
-.aigc-history small {
-  display: block;
+.aigc-history .task-card strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.aigc-history strong {
-  font-size: 11px;
-}
-.aigc-history small {
-  font-size: 9px;
-  color: #8a989e;
-  margin-top: 3px;
+.aigc-history .task-card.active {
+  border-color: #6f1e77;
+  box-shadow: 0 7px 17px rgba(111, 30, 119, .14);
 }
 .aigc-content {
   min-width: 0;
@@ -247,8 +117,8 @@
 .aigc-failed {
   min-height: 390px;
   background: #fff;
-  border: 1px solid #dde3e8;
-  border-radius: 8px;
+  border: 1px solid #e2e9f1;
+  border-radius: 12px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -259,7 +129,7 @@
 }
 .aigc-empty h2,
 .aigc-failed h2 {
-  color: #293b48;
+  color: #1b2c46;
   font-size: 18px;
   margin: 14px 0 4px;
 }
@@ -299,12 +169,12 @@
 }
 .aigc-processing > b {
   font-size: 25px;
-  color: #287568;
+  color: #6f1e77;
 }
 .aigc-progress {
   grid-column: 1/-1;
   height: 8px;
-  background: #e6eceb;
+  background: #e8edef;
   border-radius: 4px;
   overflow: hidden;
   margin: 23px 0 5px;
@@ -312,8 +182,8 @@
 .aigc-progress i {
   display: block;
   height: 100%;
-  background: #2b806f;
-  transition: width 0.3s;
+  background: linear-gradient(90deg, #8a35a0, #6f1e77);
+  transition: width .35s ease;
 }
 .aigc-processing p {
   grid-column: 1/-1;
@@ -324,9 +194,9 @@
 }
 .aigc-failed button {
   border: 0;
-  background: #354c5b;
+  background: #6f1e77;
   color: #fff;
-  border-radius: 5px;
+  border-radius: 7px;
   padding: 9px 13px;
   display: flex;
   gap: 7px;
@@ -336,14 +206,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #263d48;
+  background: linear-gradient(115deg, #4a1655, #8a35a0);
   color: #fff;
   padding: 22px 25px;
-  border-radius: 8px;
+  border-radius: 15px;
 }
 .aigc-result-head span {
   font-size: 11px;
-  color: #b9c9cf;
+  color: #e8dcf0;
 }
 .aigc-result-head h2 {
   font-size: 19px;
@@ -352,7 +222,7 @@
 }
 .aigc-result-head p {
   font-size: 11px;
-  color: #c7d2d6;
+  color: #e8dcf0;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -397,8 +267,8 @@
 }
 .aigc-metrics > div {
   background: #fff;
-  border: 1px solid #dde3e8;
-  border-radius: 7px;
+  border: 1px solid #e2e9f1;
+  border-radius: 12px;
   padding: 17px 19px;
 }
 .aigc-metrics span,
@@ -409,7 +279,7 @@
 }
 .aigc-metrics strong {
   display: block;
-  color: #2b5360;
+  color: #1c3658;
   font-size: 23px;
   margin: 6px 0 2px;
 }
@@ -421,9 +291,9 @@
 }
 .aigc-section {
   background: #fff;
-  border: 1px solid #dde3e8;
-  border-radius: 8px;
-  margin-top: 13px;
+  border: 1px solid #e2e9f1;
+  border-radius: 12px;
+  margin-top: 15px;
   overflow: hidden;
 }
 .aigc-section-title {
@@ -463,7 +333,7 @@
 }
 .aigc-section td:first-child {
   min-width: 220px;
-  color: #2e4650;
+  color: #354a65;
 }
 .aigc-segments {
   display: grid;
@@ -530,21 +400,23 @@
   font-size: 10px;
 }
 .aigc-segments code {
-  color: #53706e;
+  color: #75859a;
   overflow-wrap: anywhere;
 }
 @media (max-width: 900px) {
   body:has(.aigc-page) {
     min-width: 0;
   }
+  .aigc-page {
+    --aigc-gutter: 18px;
+  }
   .aigc-header {
-    align-items: flex-start;
-    flex-direction: column;
-    padding: 25px 18px;
+    padding: 40px var(--aigc-gutter) 0
+      calc(var(--aigc-gutter) + var(--aigc-card-pad));
   }
   .aigc-layout {
     grid-template-columns: 1fr;
-    padding: 18px;
+    padding: 30px var(--aigc-gutter) 0;
   }
   .aigc-side {
     position: static;
@@ -555,8 +427,5 @@
   .aigc-result-head {
     align-items: flex-start;
     gap: 15px;
-  }
-  .aigc-service {
-    width: 100%;
   }
 }

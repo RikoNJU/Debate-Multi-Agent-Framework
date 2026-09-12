@@ -4,7 +4,7 @@ export default function TopNav() {
   const location = useLocation();
 
   return (
-    <header className="topbar topbar-home">
+    <header className="topbar">
       <div className="topbar-brand">
         <div className="brand-mark">
           <img src="/assets/rwzp-logo.jpg" alt="睿文智评标志" />

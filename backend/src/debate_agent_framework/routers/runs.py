@@ -2,7 +2,7 @@
 
 import asyncio
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 
 from debate_agent_framework.schemas import DebateReviewInput, RunSubmissionResponse, StudentTaskResponse
 from debate_agent_framework.services.jobs import RunSnapshot, RunStatus
@@ -17,6 +17,37 @@ from .dependencies import (
 )
 
 router = APIRouter(prefix="/runs", tags=["debate-runs"])
+
+_SNAPSHOT_EXCLUDE = {
+    "review_fingerprint",
+    "discipline_id",
+    "skill_selection_hash",
+    "skill_id",
+    "skill_version",
+    "skill_profile_hash",
+    "skill_versions",
+}
+
+
+@router.get("", response_model=list[StudentTaskResponse])
+async def list_runs(
+    request: Request,
+    portal: PortalRepository = Depends(get_portal_repository),
+) -> list[StudentTaskResponse]:
+    """按更新时间倒序返回最近的任务快照，供任务列表页展示。"""
+    snapshots = request.app.state.run_store.list_recent(limit=100)
+    return [
+        StudentTaskResponse(
+            **snapshot.model_dump(exclude=_SNAPSHOT_EXCLUDE),
+            paper_title=portal.paper_title_for_task(snapshot.task_id),
+            published_review=(
+                portal.get_published_review_for_paper(snapshot.paper_id)
+                if snapshot.paper_id
+                else None
+            ),
+        )
+        for snapshot in snapshots
+    ]
 
 
 @router.post("", response_model=RunSubmissionResponse, status_code=status.HTTP_202_ACCEPTED)

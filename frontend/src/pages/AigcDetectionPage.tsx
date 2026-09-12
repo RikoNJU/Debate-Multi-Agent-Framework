@@ -1,15 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import LatexText from '../components/LatexText';
-import PortalSwitcher from '../components/PortalSwitcher';
 import {
   AlertTriangle,
-  ArrowLeft,
-  CheckCircle2,
   ChevronRight,
   Clock3,
   FileSearch,
   FileText,
+  History,
   LoaderCircle,
   RefreshCw,
   ShieldAlert,
@@ -61,7 +58,8 @@ export default function AigcDetectionPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    getAigcAvailability().then(setAvailability).catch(err => setError(err.message));
+    // 服务状态读取失败时静默处理：不显示红字报错，只让「开始检测」保持禁用
+    getAigcAvailability().then(setAvailability).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -157,51 +155,73 @@ export default function AigcDetectionPage() {
 
   return (
     <main className="aigc-page">
-      <div className="aigc-back aigc-back-row">
-        <Link to="/student" className="aigc-back-link"><ArrowLeft size={16} />返回学生端</Link>
-        <PortalSwitcher className="light" />
-      </div>
       <section className="aigc-header">
-        <div>
-          <span>AUXILIARY SCREENING</span>
-          <h1>AIGC 文本检测</h1>
-          <p>独立分析论文文本的模型生成风险，不参与论文评审、18 维评分或最终结论。</p>
-        </div>
-        <div className={`aigc-service ${usable ? 'ready' : 'offline'}`}>
-          {usable ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
-          <div><b>{usable ? '服务可用' : '服务未启用'}</b><small>{availability?.model_id || '正在读取配置'}</small></div>
+        <div className="pane-heading">
+          <div className="pane-heading-title wipe-in">
+            <h1>AIGC 文本检测</h1>
+            <p>独立分析论文文本的模型生成风险，不参与论文评审、18 维评分或最终结论。</p>
+            <div className="title-accent" />
+          </div>
         </div>
       </section>
 
       <section className="aigc-layout">
         <aside className="aigc-side">
           <div className="aigc-upload-title"><FileSearch size={20} /><b>新建检测</b></div>
-          <button
-            type="button"
-            className={`aigc-drop ${dragging ? 'dragging' : ''}`}
+          <div
+            className={`upload-zone aigc-drop ${dragging ? 'dragging' : ''} ${file ? 'has-file' : ''}`}
             onClick={() => inputRef.current?.click()}
             onDragOver={event => { event.preventDefault(); setDragging(true); }}
             onDragLeave={() => setDragging(false)}
             onDrop={event => { event.preventDefault(); setDragging(false); chooseFile(event.dataTransfer.files[0]); }}
           >
             <input ref={inputRef} type="file" accept="application/pdf,.pdf" onChange={event => chooseFile(event.target.files?.[0])} />
-            <UploadCloud size={28} />
-            <strong>{file ? file.name : '选择或拖入论文 PDF'}</strong>
-            <span>{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : '使用 MinerU 提取正文与页码定位'}</span>
-          </button>
-          {file && <button type="button" className="aigc-clear" onClick={() => setFile(null)} title="移除文件"><X size={15} />移除</button>}
-          <button className="aigc-primary" type="button" disabled={!file || !usable || busy} onClick={submit}>
+            {file ? (
+              <div className="file-ready">
+                <FileText />
+                <div>
+                  <strong>{file.name}</strong>
+                  <span>{Math.max(1, Math.round(file.size / 1024))} KB</span>
+                </div>
+                <button
+                  type="button"
+                  title="移除文件"
+                  onClick={event => { event.stopPropagation(); setFile(null); }}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="upload-round"><UploadCloud size={31} /></div>
+                <strong>拖拽论文至此处，或点击上传</strong>
+                <em>选择论文文件</em>
+              </>
+            )}
+          </div>
+          <button className="primary-button" type="button" disabled={!file || !usable || busy} onClick={submit}>
             {busy ? <LoaderCircle className="spin" size={18} /> : <ShieldAlert size={18} />}
             开始检测
           </button>
           {!usable && availability && <p className="aigc-unavailable">{availability.message}</p>}
 
-          <div className="aigc-history-head"><b>本浏览器任务</b><span>{storedTasks.length}</span></div>
+          <div className="aigc-history-head">
+            <div className="aigc-upload-title">
+              <History size={20} />
+              <b>历史检测</b>
+            </div>
+            <span className="task-count">{storedTasks.length}</span>
+          </div>
           <div className="aigc-history">
             {storedTasks.length === 0 && <p>暂无检测记录</p>}
             {storedTasks.map(task => (
-              <button key={task.taskId} className={selected?.taskId === task.taskId ? 'active' : ''} onClick={() => setSelected(task)}>
-                <FileText size={17} /><div><strong>{task.fileName}</strong><small>{new Date(task.createdAt).toLocaleString()}</small></div><ChevronRight size={15} />
+              <button key={task.taskId} className={`task-card ${selected?.taskId === task.taskId ? 'active' : ''}`} onClick={() => setSelected(task)}>
+                <span className="task-file"><FileText size={18} /></span>
+                <div>
+                  <strong>{task.fileName}</strong>
+                  <small><Clock3 size={11} />{new Date(task.createdAt).toLocaleString()}</small>
+                </div>
+                <ChevronRight className="task-arrow" size={16} />
               </button>
             ))}
           </div>

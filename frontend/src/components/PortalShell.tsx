@@ -4,7 +4,6 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import { usePortalAuth } from '../contexts/PortalAuthContext';
 import { PortalUser } from '../lib/portalApi';
-import PortalSwitcher from './PortalSwitcher';
 
 export default function PortalShell({ user, children }: { user: PortalUser; children: ReactNode }) {
   const location = useLocation();
@@ -31,12 +30,7 @@ export default function PortalShell({ user, children }: { user: PortalUser; chil
           <button title="退出登录" onClick={async () => { await signOut(); navigate('/login'); }}><LogOut size={17}/></button>
         </div>
       </aside>
-      <div className="portal-content">
-        <div className="portal-switcher-bar">
-          <PortalSwitcher className="light" />
-        </div>
-        {children}
-      </div>
+      <div className="portal-content">{children}</div>
     </div>
   );
 }

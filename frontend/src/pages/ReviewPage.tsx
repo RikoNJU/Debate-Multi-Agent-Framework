@@ -1,12 +1,11 @@
-﻿import { ChangeEvent, DragEvent, useEffect, useRef, useState } from 'react';
+import { ChangeEvent, DragEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, Clock3, CircleAlert, FileText, FolderOpen, LoaderCircle, Plus, Search, UploadCloud, X } from 'lucide-react';
-
-import PortalSwitcher from '../components/PortalSwitcher';
 
 import {
   createReviewTask,
   getRunSnapshot,
+  listRecentRuns,
   TASK_STORAGE_KEY,
   toTaskStatus,
   type TaskRecord,
@@ -88,6 +87,7 @@ export default function ReviewPage() {
   const [batchMessage, setBatchMessage] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [backendTasks, setBackendTasks] = useState<TaskRecord[]>([]);
 
   useEffect(() => {
     tasksRef.current = tasks;
@@ -139,6 +139,32 @@ export default function ReviewPage() {
       active = false;
       window.clearInterval(statusTimer);
       window.clearInterval(clockTimer);
+    };
+  }, []);
+
+  // 从后端加载最近评审任务，合并到任务列表（本地草稿优先，后端任务去重补齐）
+  useEffect(() => {
+    let active = true;
+    listRecentRuns()
+      .then(snapshots => {
+        if (!active) return;
+        const records: TaskRecord[] = snapshots.map(snapshot => ({
+          id: snapshot.task_id,
+          title: snapshot.paper_title
+            || snapshot.result?.context?.profile?.title
+            || '论文评审任务',
+          fileName: '论文文件',
+          status: toTaskStatus(snapshot.status),
+          createdAt: snapshot.created_at,
+          paperId: snapshot.paper_id || undefined,
+        }));
+        setBackendTasks(records);
+      })
+      .catch(() => {
+        // 后端不可用时任务列表仍保留本地记录
+      });
+    return () => {
+      active = false;
     };
   }, []);
 
@@ -221,44 +247,42 @@ export default function ReviewPage() {
     if (inputRef.current) inputRef.current.value = '';
   };
 
-  const filtered = tasks.filter((task) =>
+  const allTasks = [
+    ...tasks,
+    ...backendTasks.filter(backend => !tasks.some(task => task.id === backend.id)),
+  ];
+
+  const filtered = allTasks.filter((task) =>
     `${task.title} ${task.fileName}`.toLowerCase().includes(search.toLowerCase()),
   );
 
   return (
     <div className="workspace">
-      <header className="topbar">
-        <div className="brand-mark"><span>南京大学</span></div>
-        <div>
-          <strong>睿文智评</strong>
-          <small>Academic Review Workspace</small>
-        </div>
-        <div className="topbar-right">
-          <span className="status-dot" /> 系统运行正常
-          <PortalSwitcher />
-        </div>
-      </header>
 
       <main className="desk-layout">
         <section className="paper-pane">
           <div className="pane-heading">
-            <div>
-              <span className="eyebrow">NEW REVIEW</span>
+            <div className="pane-heading-title wipe-in">
               <h1>创建论文评审</h1>
-              <p>上传论文后，三位专业评审员将独立分析并进行证据辩论。</p>
+              <p>上传您的论文PDF文件，系统将对其进行多维度分析和评价</p>
+              <div className="title-accent" />
             </div>
             <div className="paper-icon"><FileText size={26} /></div>
           </div>
 
           <div className="process-line">
-            <span className="active">1</span>
-            <i />
-            <span>2</span>
-            <i />
-            <span>3</span>
-            <div>
+            <div className="process-step active">
+              <span>1</span>
               <b>上传论文</b>
+            </div>
+            <i />
+            <div className="process-step">
+              <span>2</span>
               <b>多智能体评审</b>
+            </div>
+            <i />
+            <div className="process-step">
+              <span>3</span>
               <b>查看报告</b>
             </div>
           </div>
@@ -289,16 +313,6 @@ export default function ReviewPage() {
             )}
           </div>
 
-          <div className="review-brief">
-            <span>评审维度</span>
-            <div>
-              <b>科学严谨性</b>
-              <b>实证证据</b>
-              <b>全局质量</b>
-            </div>
-            <p>系统将保留每一项结论的讨论过程与外部证据来源。</p>
-          </div>
-
           {errorText && (
             <div className="upload-error">
               <CircleAlert size={15} />
@@ -320,7 +334,7 @@ export default function ReviewPage() {
               <span className="eyebrow">REVIEW TASKS</span>
               <h2>评审任务</h2>
             </div>
-            <span className="task-count">{tasks.length}</span>
+            <span className="task-count">{allTasks.length}</span>
           </div>
 
           <label className="task-search">
@@ -366,6 +380,7 @@ export default function ReviewPage() {
           )}
         </aside>
       </main>
+
     </div>
   );
 }

@@ -117,6 +117,15 @@ export async function getRunSnapshot(taskId: string): Promise<RunSnapshot> {
   return response.json() as Promise<RunSnapshot>;
 }
 
+export async function listRecentRuns(limit = 100): Promise<RunSnapshot[]> {
+  const response = await fetch(`/api/debate/runs?limit=${limit}`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload?.detail || '任务列表获取失败');
+  }
+  return response.json() as Promise<RunSnapshot[]>;
+}
+
 export async function retryReviewTask(taskId: string): Promise<ReviewSubmission> {
   const response = await fetch(
     `/api/debate/runs/${encodeURIComponent(taskId)}/retry`,

@@ -108,7 +108,7 @@ async def get_review_table(
             output_dir=output_dir,
             stem=stem,
             tectonic_path=request.app.state.settings.tectonic_path,
-            cache_dir=f"{request.app.state.settings.data_dir}/.tectonic-cache",
+            cache_dir=str(request.app.state.data_dir / ".tectonic-cache"),
         )
     except (FileNotFoundError, RuntimeError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
