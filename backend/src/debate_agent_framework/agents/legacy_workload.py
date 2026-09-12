@@ -173,8 +173,6 @@ class RealLegacyWorkloadEvaluator(DeterministicLegacyWorkloadEvaluator):
             # 模型只拥有叙述性评语，失败时回退基线，不拖垮整篇评审。
             logger.warning("Step5 工作量模型调用失败，回退到确定性基线：%s", exc)
             result = baseline
-        result.structure_evaluation = baseline.structure_evaluation
-        result.summary = baseline.summary
         return result
 
 

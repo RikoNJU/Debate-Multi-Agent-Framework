@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import LatexText from '../components/LatexText';
+import PortalSwitcher from '../components/PortalSwitcher';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -156,8 +157,9 @@ export default function AigcDetectionPage() {
 
   return (
     <main className="aigc-page">
-      <div className="aigc-back">
+      <div className="aigc-back aigc-back-row">
         <Link to="/student" className="aigc-back-link"><ArrowLeft size={16} />返回学生端</Link>
+        <PortalSwitcher className="light" />
       </div>
       <section className="aigc-header">
         <div>

@@ -1,6 +1,8 @@
 ﻿import { ChangeEvent, DragEvent, useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { ArrowRight, Clock3, CircleAlert, FileText, FolderOpen, LoaderCircle, Plus, Search, UploadCloud, X } from 'lucide-react';
+
+import PortalSwitcher from '../components/PortalSwitcher';
 
 import {
   createReviewTask,
@@ -233,8 +235,7 @@ export default function ReviewPage() {
         </div>
         <div className="topbar-right">
           <span className="status-dot" /> 系统运行正常
-          <Link className="role-link" to="/aigc">AIGC 检测</Link>
-          <Link className="role-link" to="/workspace">工作人员端</Link>
+          <PortalSwitcher />
         </div>
       </header>
 

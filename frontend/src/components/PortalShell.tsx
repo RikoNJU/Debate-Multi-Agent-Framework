@@ -1,9 +1,10 @@
-import { ClipboardCheck, FileStack, LogOut, ShieldCheck } from 'lucide-react';
+import { ClipboardCheck, LogOut, ShieldCheck } from 'lucide-react';
 import { ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import { usePortalAuth } from '../contexts/PortalAuthContext';
 import { PortalUser } from '../lib/portalApi';
+import PortalSwitcher from './PortalSwitcher';
 
 export default function PortalShell({ user, children }: { user: PortalUser; children: ReactNode }) {
   const location = useLocation();
@@ -23,7 +24,6 @@ export default function PortalShell({ user, children }: { user: PortalUser; chil
         <nav>
           <small>工作空间</small>
           {items.map((item) => <Link className={location.pathname === item.to ? 'active' : ''} to={item.to} key={item.to}><item.icon size={18}/>{item.label}</Link>)}
-          <Link to="/student"><FileStack size={18}/>学生端</Link>
         </nav>
         <div className="portal-account">
           <span>{user.display_name.slice(0, 1)}</span>
@@ -31,7 +31,12 @@ export default function PortalShell({ user, children }: { user: PortalUser; chil
           <button title="退出登录" onClick={async () => { await signOut(); navigate('/login'); }}><LogOut size={17}/></button>
         </div>
       </aside>
-      <div className="portal-content">{children}</div>
+      <div className="portal-content">
+        <div className="portal-switcher-bar">
+          <PortalSwitcher className="light" />
+        </div>
+        {children}
+      </div>
     </div>
   );
 }

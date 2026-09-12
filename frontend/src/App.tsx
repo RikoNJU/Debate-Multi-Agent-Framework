@@ -5,12 +5,25 @@ import AdminPortalPage from './pages/AdminPortalPage';
 import LoginPage from './pages/LoginPage';
 import TeacherPortalPage from './pages/TeacherPortalPage';
 import AigcDetectionPage from './pages/AigcDetectionPage';
+import HomePage from './pages/HomePage';
+import TopNav from './components/TopNav';
+import PageFooter from './components/PageFooter';
 import { PortalRoute, WorkspaceEntry } from './components/PortalRoute';
+
+function HomePageView() {
+  return (
+    <>
+      <TopNav />
+      <HomePage />
+      <PageFooter />
+    </>
+  );
+}
 
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/student" replace />} />
+      <Route path="/" element={<HomePageView />} />
       <Route path="/student" element={<ReviewPage />} />
       <Route path="/student/tasks/:taskId" element={<TaskDetailPage />} />
       <Route path="/aigc" element={<AigcDetectionPage />} />

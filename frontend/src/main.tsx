@@ -5,6 +5,7 @@ import App from './App';
 import { PortalAuthProvider } from './contexts/PortalAuthContext';
 import './index.css';
 import './portal-fixes.css';
+import './home.css';
 import './aigc.css';
 import './aigc-actions.css';
 import 'katex/dist/katex.min.css';
