@@ -137,14 +137,14 @@ def complete_json(
         ),
     )
     finish_reason = response.raw.get("finish_reason")
-    if finish_reason == "length":
-        raise ValueError(
-            "模型输出因达到 max_tokens 上限被截断，"
-            "请增大该 Agent 的 max_tokens 配置后重试"
-        )
     try:
         data = json.loads(extract_json_object(response.content))
     except json.JSONDecodeError as exc:
+        if finish_reason == "length":
+            raise ValueError(
+                "模型输出因达到 max_tokens 上限被截断，"
+                "请增大该 Agent 的 max_tokens 配置后重试"
+            ) from exc
         preview = response.content[:200]
         raise ValueError(f"模型返回内容不是合法 JSON（开头片段：{preview}）") from exc
     if not isinstance(data, dict):

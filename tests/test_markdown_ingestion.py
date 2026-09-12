@@ -74,3 +74,28 @@ def test_markdown_parser_prefers_cover_title_field() -> None:
     )
 
     assert result.title == "真正的论文标题"
+    assert result.chapters[0].chapter_name == "第一章 绪论"
+
+
+def test_markdown_parser_splits_numbered_chapters() -> None:
+    result = MarkdownPaperParser().parse(
+        """# 题目
+\n## 1. 绪论\n绪论正文。\n\n## 1.1. 研究背景\n背景文字不应单独成章。\n\n## 2. 相关工作\n相关工作正文。\n\n## 5. 结论与展望\n结论正文。\n\n## 参考文献\n[1] Example, 2026.\n"""
+    )
+
+    assert [chapter.chapter_name for chapter in result.chapters] == [
+        "1. 绪论",
+        "2. 相关工作",
+        "5. 结论与展望",
+        "参考文献",
+    ]
+    assert [chapter.stage for chapter in result.chapters] == [
+        "引言/绪论",
+        "相关工作",
+        "结论展望",
+        "参考文献",
+    ]
+    assert all(chapter.reviewable for chapter in result.chapters[:-1])
+    assert result.chapters[-1].reviewable is False
+    assert "研究背景" in result.chapters[0].content
+    assert "subsection" not in result.chapters[0].content

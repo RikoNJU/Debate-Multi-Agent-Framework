@@ -10,6 +10,8 @@ from ..schemas import ChapterInput, DebateReviewInput, PaperType
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _CHAPTER = re.compile(r"^第\s*[一二三四五六七八九十百0-9]+\s*章")
+_NUMBERED_CHAPTER = re.compile(r"^\d+\s*[\.、．](?!\d)\s*\S")
+_CN_NUMBERED_CHAPTER = re.compile(r"^[一二三四五六七八九十百]+\s*[、．]\s*\S")
 _KEYWORDS = re.compile(r"^(?:关键词|关键字|keywords?)\s*[：:]\s*(.+)$", re.I)
 _NON_REVIEWABLE = (
     "摘要",
@@ -144,14 +146,26 @@ class MarkdownPaperParser:
                 return match.group(1).strip()[:120]
         return None
 
+    @staticmethod
+    def _is_chapter_heading(title: str) -> bool:
+        if _CHAPTER.match(title):
+            return True
+        lowered = title.lower()
+        if lowered in {"摘要", "abstract", "参考文献", "references", "致谢"}:
+            return True
+        if _NUMBERED_CHAPTER.match(title):
+            return True
+        if _CN_NUMBERED_CHAPTER.match(title):
+            return True
+        return False
+
     def _chapters(
         self, sections: list[MarkdownSection], full_text: str
     ) -> list[ChapterInput]:
         chapter_starts = [
             index
             for index, section in enumerate(sections)
-            if _CHAPTER.match(section.title)
-            or section.title.lower() in {"摘要", "abstract", "参考文献", "references", "致谢"}
+            if self._is_chapter_heading(section.title)
         ]
         if not chapter_starts:
             return [

@@ -1,0 +1,73 @@
+# Qwen3-8B QLoRA Fine-Tuning Configuration V1
+# 学术写作与结构规范专家微调
+
+base_model:
+  name: "models/Qwen3-8B/Qwen/Qwen3-8B"
+  trust_remote_code: true
+
+quantization:
+  load_in_4bit: true
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_use_double_quant: true
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+  bias: "none"
+  task_type: "CAUSAL_LM"
+
+training:
+  output_dir: "outputs/global_quality_qwen3_8b_v1"
+  num_train_epochs: 3
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 1.0e-4
+  warmup_ratio: 0.05
+  lr_scheduler_type: "cosine"
+  weight_decay: 0.01
+  max_seq_length: 4096
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs:
+    use_reentrant: false
+  fp16: false
+  bf16: true
+  logging_steps: 10
+  save_steps: 100
+  eval_steps: 100
+  save_total_limit: 3
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+  dataloader_num_workers: 2
+  remove_unused_columns: false
+  report_to: "none"
+  seed: 42
+
+data:
+  train_file: "data/splits/train.jsonl"
+  eval_file: "data/splits/eval.jsonl"
+  system_prompt: "你是中文学术写作与结构规范评审专家。只依据提供文本和结构证据判断。证据不足时不得强行提出问题。严格输出指定 JSON。"
+
+issue_categories:
+  - academic_expression
+  - ambiguity
+  - redundancy
+  - logical_jump
+  - section_role
+  - abstract_completeness
+  - terminology_consistency
+  - evidence_conclusion_mismatch
+
+severity_levels:
+  - trivial
+  - minor
+  - major
+  - critical

@@ -39,4 +39,6 @@ finetuning/outputs/*
 !finetuning/outputs/.gitkeep
 finetuning/evaluation/results.json
 finetuning/evaluation/blind_review.csv
+finetuning/models/*
+!finetuning/models/.gitkeep
 

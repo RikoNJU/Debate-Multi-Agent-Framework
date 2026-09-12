@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ReviewFinding",
+  "description": "学术写作与结构规范审查发现",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["valid", "parse_error", "insufficient_evidence"],
+      "description": "审查结果状态"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "academic_expression",
+              "ambiguity",
+              "redundancy",
+              "logical_jump",
+              "section_role",
+              "abstract_completeness",
+              "terminology_consistency",
+              "evidence_conclusion_mismatch"
+            ],
+            "description": "问题类别"
+          },
+          "evidence_quote": {
+            "type": "string",
+            "description": "原文证据引用"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["trivial", "minor", "major", "critical"],
+            "description": "严重程度"
+          },
+          "rationale": {
+            "type": "string",
+            "description": "问题解释"
+          },
+          "suggestion": {
+            "type": "string",
+            "description": "修改建议"
+          }
+        },
+        "required": ["category", "evidence_quote", "severity", "rationale", "suggestion"]
+      }
+    }
+  },
+  "required": ["status"]
+}

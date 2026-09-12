@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from importlib.resources import files
 
@@ -16,6 +17,8 @@ from ..schemas import (
     WorkloadItem,
 )
 from .json_client import complete_json
+
+logger = logging.getLogger(__name__)
 
 STEP5_RULE_VERSION = "legacy_step5_v2"
 _PROMPTS = {
@@ -155,16 +158,21 @@ class RealLegacyWorkloadEvaluator(DeterministicLegacyWorkloadEvaluator):
             ],
             "agent_review": synthesis.global_review.model_dump(mode="json"),
         }
-        data = complete_json(
-            self.model_client,
-            system_prompt="你是论文评审流程的 Step 5 工作量与结构评估员。客观格式事实必须服从 deterministic_format_baseline，解析质量低只能要求人工核对，不能作为论文扣分依据。",
-            user_prompt=prompt,
-            payload=payload,
-            schema=CompatibleWorkloadEvaluation.model_json_schema(),
-            temperature=self.temperature,
-        )
-        result = CompatibleWorkloadEvaluation.model_validate(data)
-        # Objective format checks are deterministic; the model owns only the holistic workload prose.
+        try:
+            data = complete_json(
+                self.model_client,
+                system_prompt="你是论文评审流程的 Step 5 工作量与结构评估员。客观格式事实必须服从 deterministic_format_baseline，解析质量低只能要求人工核对，不能作为论文扣分依据。",
+                user_prompt=prompt,
+                payload=payload,
+                schema=CompatibleWorkloadEvaluation.model_json_schema(),
+                temperature=self.temperature,
+            )
+            result = CompatibleWorkloadEvaluation.model_validate(data)
+        except Exception as exc:
+            # 本地工作量模型的输出可能退化/截断；格式事实本就以确定性基线为准，
+            # 模型只拥有叙述性评语，失败时回退基线，不拖垮整篇评审。
+            logger.warning("Step5 工作量模型调用失败，回退到确定性基线：%s", exc)
+            result = baseline
         result.structure_evaluation = baseline.structure_evaluation
         result.summary = baseline.summary
         return result
