@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 /**
  * 首页轮播图，顺序即播放顺序。
  * 文件位于 frontend/public/assets/，这里的路径对应 /assets/hero-N.jpg。
- * hero-1.jpg ... hero-6.jpg 由 1.jpg-6.jpg 压缩而来（原图保留，未压缩）。
+ * hero-N.jpg 由未压缩原图 1-6（本地 frontend/_source-images/，不纳入版本控制）压缩而来。
  */
 const SLIDES = [
   '/assets/hero-1.jpg',

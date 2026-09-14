@@ -24,6 +24,8 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+# 首页轮播原图：本地留档用于重新压缩，不参与构建、不纳入版本控制
+frontend/_source-images/
 dist/
 .vite/
 coverage/
