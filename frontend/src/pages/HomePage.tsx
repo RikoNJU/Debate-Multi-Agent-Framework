@@ -1,6 +1,8 @@
 import { motion } from 'framer-motion';
 import { GraduationCap, ShieldCheck, Users } from 'lucide-react';
 
+import HomeCarousel from '../components/HomeCarousel';
+
 const values = [
   {
     title: '为学生',
@@ -35,6 +37,15 @@ export default function HomePage() {
               <i /><span /><i />
             </div>
             <p>基于多智能体辩论的本科毕业论文智能评审系统</p>
+          </motion.div>
+
+          <motion.div
+            className="hero-carousel-slot"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.8, delay: 0.15 }}
+          >
+            <HomeCarousel />
           </motion.div>
         </section>
 
