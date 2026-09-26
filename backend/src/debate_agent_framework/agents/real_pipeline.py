@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from importlib.resources import files
 
@@ -19,6 +20,12 @@ from .json_client import complete_json
 from .legacy_scoring import calculate_legacy_score
 from .legacy_summary import build_summary_advice
 from .chapter_rubric import rubric_anchor_scores, stabilize_semantic_scores
+from ..services.score_calibration import (
+    apply_score_calibration,
+    load_score_calibration,
+)
+
+logger = logging.getLogger(__name__)
 
 
 SCORE_DIMENSIONS = {
@@ -170,6 +177,18 @@ class RealOriginalPipelineAdapter:
                     "相对锚点提供最多约 1 分的微调。"
                 ),
             ]
+        calibrated_scores, calibration_note = apply_score_calibration(
+            score.scores, load_score_calibration()
+        )
+        if calibration_note is not None:
+            score.scores = calibrated_scores
+            score.calibration_notes = [*score.calibration_notes, calibration_note]
+            logger.info(
+                "评分校准已应用 raw=%s -> corrected=%s (%s)",
+                {k: round(v, 1) for k, v in model_raw_scores.items()},
+                {k: round(v, 1) for k, v in calibrated_scores.items()},
+                calibration_note,
+            )
         calculation = calculate_legacy_score(
             semantic_scores=score.scores,
             structure=synthesis.workload_evaluation.structure_evaluation,
@@ -190,7 +209,9 @@ class RealOriginalPipelineAdapter:
     def _system_prompt() -> str:
         return (
             "你是论文评审系统的综合评分员（Step 7）。"
-            "只能根据输入中的评审事实评分，不能把模板分数或历史案例当作论文事实。"
+            "必须依据当前论文的评审事实评分，不得凭空编造；"
+            "检索到的历史评审记录是真实有效的教师评审结果，可在事实维度相近时"
+            "作为重要尺度参照并向其收敛，但不得脱离当前论文事实照搬分数。"
             "fatal/major 问题必须在相关维度显著扣分；证据不足的结论不得导致确定性重扣。"
             "输出必须严格符合 JSON Schema，scores 覆盖字符串键 '1' 到 '12'，每项 0-100。"
             "不要输出 legacy_raw_scores 和 legacy_level_scores，这两个字段由系统计算。"
@@ -209,6 +230,7 @@ class RealOriginalPipelineAdapter:
             "先判断各项属于优秀、良好、一般或较差，再在档位内给出具体分数："
             "优秀 90-100，良好 80-90，一般 60-80，较差低于 60。"
             "不得让大部分分数相同，并避免输出 75、80、85 这三个定级边界分数。"
-            "historical_score_cases 只用于尺度校准，不得照抄分数。"
+            "historical_score_cases 是真实有效的历史评审记录，优先用于尺度校准，"
+            "在事实维度相近时可用其作为参照向真实分收敛，但不得照抄具体分数。"
             "同时输出 overall_evaluation、calibration_notes 和 confidence。"
         )

@@ -577,7 +577,7 @@
     0 16px 30px -12px rgba(22, 34, 60, .18);
 }
 
-/* 底部品牌栏（偏灰，左侧睿文智评品牌） */
+/* 底部品牌栏（偏灰，左侧衡文云审品牌） */
 .app-footer {
   flex: 0 0 auto;
   min-height: var(--app-footer-h);
@@ -657,7 +657,7 @@
 
 .hero {
   display: flex;
-  align-items: flex-start; /* 轮播与「睿文智评」大字顶部对齐 */
+align-items: flex-start; /* 轮播与「衡文云审」大字顶部对齐 */
   justify-content: space-between;
   gap: 40px;
   padding: 28px 0 72px;
@@ -665,7 +665,7 @@
 
 .hero-copy {
   flex: 0 1 auto;
-  min-width: 420px; /* 保证「睿文智评」大字在桌面端始终单行 */
+min-width: 420px; /* 保证「衡文云审」大字在桌面端始终单行 */
 }
 
 .hero-copy h1 {
@@ -722,7 +722,7 @@
   flex: 1 1 0; /* 吃掉左侧文字块之外的全部剩余宽度 */
   min-width: 300px;
   max-width: 560px;
-  align-self: flex-start; /* 上边界与「睿文智评」大字对齐 */
+align-self: flex-start; /* 上边界与「衡文云审」大字对齐 */
   /* 右边界与下方核心价值模块对齐（同为 .home-main 内容区右沿） */
 }
 

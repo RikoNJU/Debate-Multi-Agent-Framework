@@ -9,7 +9,7 @@ export default function Navbar() {
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white shadow-lg">
             <Sparkles size={18} />
           </span>
-          <span>睿文智评</span>
+          <span>衡文云审</span>
         </Link>
         <div className="hidden items-center gap-6 text-sm font-medium text-slate-600 md:flex">
           <a href="#review" className="transition hover:text-blue-600">开始评审</a>

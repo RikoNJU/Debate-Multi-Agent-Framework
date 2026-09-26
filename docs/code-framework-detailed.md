@@ -2,7 +2,7 @@
 
 ## 1. 框架定位
 
-本项目是论文评审任务的 Evidence-Grounded Debate Multi-Agent 后端框架。它面向原睿文智评流程中的核心评审阶段，在保持原 Step 4/5 输出兼容的前提下，引入多个专业 Agent 的独立判断、定向争议讨论和最终裁决。
+本项目是论文评审任务的 Evidence-Grounded Debate Multi-Agent 后端框架。它面向原衡文云审流程中的核心评审阶段，在保持原 Step 4/5 输出兼容的前提下，引入多个专业 Agent 的独立判断、定向争议讨论和最终裁决。
 
 核心目标是：
 

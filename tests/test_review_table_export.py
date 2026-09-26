@@ -106,7 +106,7 @@ def test_render_review_table_layout() -> None:
     assert "总体评价（给出百分制总评成绩" in tex
     assert "论文修改建议:" in tex
     # 水印页脚
-    assert "睿文智评AI预审评估系统通过大语言模型生成" in tex
+    assert "衡文云审AI预审评估系统通过大语言模型生成" in tex
     # 学生信息与勾选占位符
     assert "\\newcommand{\\studentid}{201300020}" in tex
     assert "\\newcommand{\\studentname}{吴智超}" in tex

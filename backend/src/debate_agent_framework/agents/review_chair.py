@@ -6,7 +6,9 @@ Review Chair 是 Debate 工作流中的主 Agent，负责把多个 Specialist �
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -17,11 +19,13 @@ from ..schemas import (
     DebatePlan,
     DebateResponse,
     DimensionEvaluation,
+    FindingSeverity,
     GlobalReview,
     IndependentReview,
     ResolvedFinding,
     ReviewContext,
     ReviewEvidence,
+    SpecialistRole,
 )
 from .compat import assemble_review_synthesis
 from .json_client import complete_json, review_context_payload
@@ -30,6 +34,63 @@ from ..ports import ReviewChair
 # 综合裁决需要为每个章节输出评估与证据锚定，是全流程最长的输出；
 # 思考模型的思考 token 也计入输出上限，默认值需留足余量。
 DEFAULT_CHAIR_MAX_TOKENS = 16384
+
+# 每篇论文最多进入 Debate 的议题数。
+DEBATE_MAX_ISSUES = 3
+
+# 0 议题冷启动时强制开辩论的议题数。
+COLD_START_MAX_ISSUES = 2
+
+logger = logging.getLogger(__name__)
+
+_SEVERITY_RANK = {
+    FindingSeverity.FATAL: 3,
+    FindingSeverity.MAJOR: 2,
+    FindingSeverity.MINOR: 1,
+    FindingSeverity.INFO: 0,
+}
+_STOP_TOKENS = {
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with",
+    "is", "are", "was", "were", "be", "been", "it", "this", "that", "论文",
+    "问题", "存在", "本文", "其", "中", "与", "及", "有", "等", "以及",
+}
+
+
+def _claim_tokens(text: str) -> set[str]:
+    tokens = {
+        token
+        for token in re.split(r"[^0-9A-Za-z\u4e00-\u9fff]+", text.lower())
+        if len(token) >= 2 and token not in _STOP_TOKENS
+    }
+    return tokens
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _finding_match_score(
+    left: Any, right: Any, left_role: SpecialistRole, right_role: SpecialistRole
+) -> float:
+    """跨专家初审判定的匹配度：章节重叠最强，其次维度一致，再其次措辞重叠。"""
+
+    chapter_overlap = len(
+        set(left.affected_chapter_ids) & set(right.affected_chapter_ids)
+    )
+    dimension_match = 1.0 if left.dimension == right.dimension else 0.0
+    wording_overlap = _jaccard(
+        _claim_tokens(left.claim), _claim_tokens(right.claim)
+    )
+    return 2.0 * chapter_overlap + 1.0 * dimension_match + 0.5 * wording_overlap
+
+
+def _wrap(text: str, limit: int = 60) -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip(",;：。，；") + "…"
 
 
 class DebateReviewChairAgent(ReviewChair):
@@ -77,14 +138,30 @@ class DebateReviewChairAgent(ReviewChair):
             system_prompt=self._system_prompt(context),
             user_prompt=(
                 "请识别独立评审中的关键争议、遗漏和证据缺口，输出 DebatePlan JSON。"
-                "每个 issue 的 participating_roles 必须是至少两个不同角色的列表；"
-                "每个 question 的 target_role 必须属于其所属 issue 的"
-                "participating_roles。没有必要争议时，issues 和 questions 可以为空。"
+                "最多输出 3 个议题（issue）；若识别出更多争议，按争议优先级保留"
+                "最重要的前 3 个，其余丢弃。每个 issue 的 participating_roles "
+                "必须是至少两个不同角色的列表；每个 question 的 target_role "
+                "必须属于其所属 issue 的 participating_roles。"
+                "没有必要争议时，issues 和 questions 可以为空。"
             ),
             payload=payload,
             schema=DebatePlan.model_json_schema(),
         )
-        return self._validate_plan(data, reviews)
+        plan = self._validate_plan(data, reviews)
+        if not plan.issues:
+            logger.warning(
+                "Chair 未产出任何争议议题，触发冷启动兜底："
+                "用独立初审分歧最大的 %d 个点强制开启 Debate",
+                COLD_START_MAX_ISSUES,
+            )
+            return self._cold_start_fallback(reviews)
+        if plan.issues and not plan.questions:
+            logger.warning(
+                "Chair 产出了 %d 个议题但没有问题，为每个议题补一个定向问题",
+                len(plan.issues),
+            )
+            return self._backfill_questions(plan)
+        return plan
 
     def synthesize(
         self,
@@ -219,6 +296,8 @@ class DebateReviewChairAgent(ReviewChair):
             for issue in issues
             if len(set(issue["participating_roles"])) >= 2
         ]
+        valid_issues.sort(key=lambda issue: issue.get("priority", 5))
+        valid_issues = valid_issues[:DEBATE_MAX_ISSUES]
         valid_issue_ids = {issue["issue_id"] for issue in valid_issues}
         questions = [
             question
@@ -226,6 +305,214 @@ class DebateReviewChairAgent(ReviewChair):
             if question["issue_id"] in valid_issue_ids
         ]
         return {"issues": valid_issues, "questions": questions}
+
+    @classmethod
+    def _cold_start_fallback(
+        cls,
+        reviews: Sequence[IndependentReview],
+        max_issues: int = COLD_START_MAX_ISSUES,
+    ) -> DebatePlan:
+        """0 议题时的确定性兜底：用独立初审中分歧最大的几个点强制开辩论。
+
+        跨专家按 章节重叠 > 维度一致 > 措辞重叠 匹配同一处判断，
+        分歧分 = 严重度差 + 证据有无差 + 双方置信度，取最高的 max_issues 条；
+        若第三个专家也命中该点，加入参与角色并让单人一方回应。
+        """
+
+        reviews_by_role = {review.role: review for review in reviews}
+        roles = [
+            review.role
+            for review in reviews
+            if review.role in {SpecialistRole.SCIENTIFIC_SOUNDNESS,
+                               SpecialistRole.EMPIRICAL_EVIDENCE,
+                               SpecialistRole.GLOBAL_QUALITY}
+        ]
+        candidates: list[dict[str, Any]] = []
+        used: set[str] = set()
+
+        for i in range(len(reviews)):
+            for j in range(i + 1, len(reviews)):
+                left, right = reviews[i], reviews[j]
+                for finding_a in left.findings:
+                    for finding_b in right.findings:
+                        match_score = _finding_match_score(
+                            finding_a, finding_b, left.role, right.role
+                        )
+                        if match_score <= 0.5:
+                            continue
+                        severity_gap = abs(
+                            _SEVERITY_RANK[finding_a.severity]
+                            - _SEVERITY_RANK[finding_b.severity]
+                        )
+                        evidence_gap = (
+                            bool(finding_a.evidence) != bool(finding_b.evidence)
+                        )
+                        conflict_score = (
+                            severity_gap * 2.0
+                            + (1.0 if evidence_gap else 0.0)
+                            + max(finding_a.confidence, finding_b.confidence)
+                        )
+                        candidates.append(
+                            {
+                                "left": finding_a,
+                                "left_role": left.role,
+                                "right": finding_b,
+                                "right_role": right.role,
+                                "match_score": match_score,
+                                "conflict_score": conflict_score,
+                                "evidence_gap": evidence_gap,
+                                "evidence_missing_role": (
+                                    left.role if not finding_a.evidence
+                                    else right.role if not finding_b.evidence
+                                    else None
+                                ),
+                            }
+                        )
+
+        candidates.sort(
+            key=lambda item: (
+                item["conflict_score"], item["match_score"]
+            ),
+            reverse=True,
+        )
+
+        issues: list[dict[str, Any]] = []
+        questions: list[dict[str, Any]] = []
+        issue_seq = 1
+        for candidate in candidates:
+            left, right = candidate["left"], candidate["right"]
+            left_key, right_key = left.finding_id, right.finding_id
+            if left_key in used or right_key in used:
+                continue
+            used.update((left_key, right_key))
+            if len(issues) >= max_issues:
+                break
+
+            participating = [
+                candidate["left_role"],
+                candidate["right_role"],
+            ]
+            participating_findings = [left_key, right_key]
+            for review in reviews:
+                if review.role in participating:
+                    continue
+                for finding in review.findings:
+                    if _finding_match_score(
+                        finding, left, review.role, candidate["left_role"]
+                    ) >= 1.0 and _finding_match_score(
+                        finding, right, review.role, candidate["right_role"]
+                    ) >= 1.0:
+                        participating.append(review.role)
+                        participating_findings.append(finding.finding_id)
+                        used.add(finding.finding_id)
+                        break
+
+            title = _wrap(
+                f"{left.dimension}：「{_wrap(left.claim, 50)}」的判断分歧", 70
+            )
+            description = (
+                f"{candidate['left_role'].value} 判定为 {left.severity.value}，"
+                f"{candidate['right_role'].value} 判定为 {right.severity.value}"
+            )
+            if candidate["evidence_gap"]:
+                description += "，且双方证据锚定不一致"
+            issue_id = f"coldstart-{issue_seq}-{left_key[-8:]}-{right_key[-8:]}"
+            issues.append(
+                {
+                    "issue_id": issue_id,
+                    "title": title,
+                    "description": description,
+                    "participating_roles": participating,
+                    "conflicting_finding_ids": participating_findings,
+                    "evidence_gap": (
+                        "一方有原文证据、另一方缺少证据锚定"
+                        if candidate["evidence_gap"]
+                        else ""
+                    ),
+                    "priority": 2,
+                }
+            )
+
+            left_name = candidate["left_role"].value
+            right_name = candidate["right_role"].value
+            respondent = next(
+                (
+                    role
+                    for role in (
+                        candidate["evidence_missing_role"],
+                        candidate["left_role"],
+                    )
+                    if role in participating
+                ),
+                candidate["left_role"],
+            )
+            if respondent == candidate["left_role"]:
+                this_finding, other_finding = left, right
+                this_name, other_name = left_name, right_name
+            else:
+                this_finding, other_finding = right, left
+                this_name, other_name = right_name, left_name
+            questions.append(
+                {
+                    "question_id": f"coldstart-q{issue_seq}-{respondent.value}",
+                    "issue_id": issue_id,
+                    "target_role": respondent,
+                    "prompt": (
+                        f"你判定该项为 {this_finding.severity.value}，而"
+                        f"{other_name} 判定为 {other_finding.severity.value}。"
+                        f"请基于原文证据澄清：{this_finding.claim}"
+                    ),
+                    "challenged_finding_ids": participating_findings,
+                    "requires_external_evidence": bool(
+                        candidate["evidence_gap"]
+                    ),
+                    "evidence_query": (
+                        this_finding.claim
+                        if candidate["evidence_gap"]
+                        else None
+                    ),
+                }
+            )
+            issue_seq += 1
+
+        plan = {"issues": issues, "questions": questions}
+        logger.info(
+            "冷启动兜底生成 %d 个议题、%d 个问题（分歧排序）",
+            len(issues), len(questions),
+        )
+        return DebatePlan.model_validate(plan)
+
+    @classmethod
+    def _backfill_questions(
+        cls,
+        plan: DebatePlan,
+    ) -> DebatePlan:
+        """议题存在但问题为空时，为每个议题补一个确定性定向问题。"""
+
+        issues: list[dict[str, Any]] = []
+        questions: list[dict[str, Any]] = []
+        for issue in plan.issues:
+            target = issue.participating_roles[0]
+            questions.append(
+                {
+                    "question_id": f"backfill-{issue.issue_id}-{target.value}",
+                    "issue_id": issue.issue_id,
+                    "target_role": target,
+                    "prompt": (
+                        f"请基于原文证据重新确认你对该争议「{_wrap(issue.title, 80)}」"
+                        "的立场并说明依据。"
+                    ),
+                    "challenged_finding_ids": list(
+                        issue.conflicting_finding_ids
+                    ),
+                    "requires_external_evidence": False,
+                    "evidence_query": None,
+                }
+            )
+            issues.append(issue.model_dump(mode="json"))
+        return DebatePlan.model_validate(
+            {"issues": issues, "questions": questions}
+        )
 
     @classmethod
     def _repair_global_review(cls, data: dict[str, Any]) -> dict[str, Any]:

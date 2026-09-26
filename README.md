@@ -38,7 +38,7 @@ backend/src/debate_agent_framework/
 - `services/` 管理任务生命周期；
 - `routers/` 提供 API 入口。
 
-这种结构可以让后续开发者在不重写整体流程的前提下，逐步替换真实 LLM、Evidence RAG、历史评分 RAG 和原睿文智评 Step 6/7 适配器。
+这种结构可以让后续开发者在不重写整体流程的前提下，逐步替换真实 LLM、Evidence RAG、历史评分 RAG 和原衡文云审 Step 6/7 适配器。
 
 ## 项目结构
 

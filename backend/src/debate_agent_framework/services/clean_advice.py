@@ -44,7 +44,7 @@ QUERY_INSTRUCTION = (
 
 
 class CleanAdviceRetriever:
-    """Dense Top5 + BM25 Top5 -> weighted RRF Top3 -> dedicated reranker."""
+    """Dense Top8 + BM25 Top8 -> weighted RRF Top5 -> dedicated reranker."""
 
     def __init__(
         self,
@@ -58,12 +58,12 @@ class CleanAdviceRetriever:
         rerank_endpoint: str = "",
         rerank_model: str = "Qwen/Qwen3-Reranker-0.6B",
         api_key: str = "",
-        dense_top_k: int = 5,
-        bm25_top_k: int = 5,
-        rrf_top_k: int = 3,
+        dense_top_k: int = 8,
+        bm25_top_k: int = 8,
+        rrf_top_k: int = 5,
         rrf_k: int = 60,
         rerank_threshold: float = 6.0,
-        max_advice_per_finding: int = 2,
+        max_advice_per_finding: int = 4,
         timeout_seconds: float = 120.0,
         max_concurrency: int = 2,
         mode: str = "v2",

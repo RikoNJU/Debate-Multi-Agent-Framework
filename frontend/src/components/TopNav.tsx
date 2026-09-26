@@ -7,10 +7,10 @@ export default function TopNav() {
     <header className="topbar">
       <div className="topbar-brand">
         <div className="brand-mark">
-          <img src="/assets/rwzp-logo.jpg" alt="睿文智评标志" />
+          <img src="/assets/rwzp-logo.png" alt="衡文云审标志" />
         </div>
         <div className="topbar-brand-text">
-          <strong>睿文智评</strong>
+          <strong>衡文云审</strong>
         </div>
       </div>
       <nav className="topbar-nav" aria-label="主导航">

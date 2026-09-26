@@ -1001,8 +1001,8 @@ class DebateWorkflow:
         
         规则：
         - 按 finding_id 匹配 SummaryAdviceItem 与 FindingAdviceItem
-        - 每条 item 最多绑定 2 条历史建议
-        - 全文总量保持 ≤ 15 条
+        - 每条 item 最多绑定 4 条历史建议
+        - 全文总量保持 ≤ 5 个条目
         - 不增添新的未确认问题
         """
         if not finding_advice:
@@ -1018,7 +1018,7 @@ class DebateWorkflow:
             sources: list[FindingAdviceItem] = []
             for finding_id in item.finding_ids:
                 for candidate in advice_by_finding.get(finding_id, []):
-                    if len(sources) >= 2:
+                    if len(sources) >= 4:
                         break
                     sources.append(candidate)
             if not sources:

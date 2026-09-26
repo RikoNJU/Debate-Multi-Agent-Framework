@@ -10,16 +10,51 @@ from backend.env import ChatMessage, ModelCallOptions, ModelClient
 from ..schemas import ReviewContext
 
 
+def _segment_excerpt(text: str, budget: int) -> str:
+    """对单段正文做首尾均衡摘录，保留下结论密集的开头与结尾。
+
+    长章节的核心结论、公式与实验结果通常落在正文中部偏后，仅保留开头
+    会让模型误判“文本缺失”。当文本超过预算时，取前 60%、后 40% 并在
+    中间留出省略标记，使首尾内容始终可追溯。
+    """
+
+    if not text or len(text) <= budget:
+        return text
+    if budget <= 0:
+        return ""
+    head_cut = int(budget * 0.6)
+    tail_cut = budget - head_cut
+    return text[:head_cut] + "\n……(中段内容省略，详见对应章节)……\n" + text[-tail_cut:]
+
+
+def _coverage_excerpt(chunks: list[str], budget: int) -> str:
+    """把总预算按各章正文长度比例分配到相邻章节，再逐章首尾摘录。
+
+    避免大段落（如方法+实验）合包后只截取开头，导致后置章节在
+    评审上下文中完全不可见。
+    """
+
+    total = sum(len(chunk) for chunk in chunks)
+    if total <= budget:
+        return "\n\n".join(chunks)
+    parts: list[str] = []
+    for chunk in chunks:
+        share = max(int(budget * len(chunk) / total), 1)
+        parts.append(_segment_excerpt(chunk, share))
+    return "\n\n".join(parts)
+
+
 def review_context_payload(context: ReviewContext) -> dict[str, Any]:
     """序列化评审上下文，避免正文同时出现在 chapters 和内容载体中。
 
     真实 LLM 需要看到章节正文才能形成可锚定的引文，这里给每个章节附带
-    前 ``CHAPTER_EXCERPT_CHARS`` 字符的正文摘录，并把内容包截断到
-    ``PACKET_EXCERPT_CHARS`` 字符，控制总输入在模型上下文窗口内。
+    ``CHAPTER_EXCERPT_CHARS`` 字符的首尾均衡摘录，并把内容包按章节权重
+    分配 ``PACKET_EXCERPT_CHARS`` 预算，控制总输入在模型上下文窗口内，
+    同时保证方法与实验章节的中后段内容可见。
     """
 
-    chapter_excerpt_chars = 800
-    packet_excerpt_chars = 2500
+    chapter_excerpt_chars = 2400
+    packet_excerpt_chars = 8000
 
     payload = context.model_dump(mode="json")
     if context.review_profile:
@@ -35,17 +70,27 @@ def review_context_payload(context: ReviewContext) -> dict[str, Any]:
             "stage": chapter.stage,
             "section_titles": chapter.section_titles,
             "reviewable": chapter.reviewable,
-            "content_excerpt": chapter.content[:chapter_excerpt_chars],
+            "content_excerpt": _segment_excerpt(
+                chapter.content, chapter_excerpt_chars
+            ),
             "content_chars": len(chapter.content),
             "metadata": chapter.metadata,
         }
         for chapter in context.chapters
     ]
     if context.content_packets:
+        chapters_by_id = {chapter.chapter_id: chapter for chapter in context.chapters}
         payload["content_packets"] = [
             {
                 **packet.model_dump(mode="json"),
-                "content": packet.content[:packet_excerpt_chars],
+                "content": _coverage_excerpt(
+                    [
+                        chapters_by_id[chapter_id].content
+                        for chapter_id in packet.chapter_ids
+                        if chapter_id in chapters_by_id
+                    ],
+                    packet_excerpt_chars,
+                ),
             }
             for packet in context.content_packets
         ]

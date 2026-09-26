@@ -16,6 +16,39 @@ const ROLE_LABELS: Record<string, string> = {
   global_quality: '全局质量专家',
 };
 
+const SPECIALIST_STAGES = [
+  'specialist_scientific_soundness',
+  'specialist_empirical_evidence',
+  'specialist_global_quality',
+];
+
+function groupSpecialistStages(events: any[]) {
+  if (!events?.length) return events ?? [];
+  const specialists = events.filter((event) => SPECIALIST_STAGES.includes(event.stage));
+  if (!specialists.length) return events;
+
+  const done = specialists.filter((event) => event.status === 'succeeded').length;
+  const failed = specialists.filter((event) => event.status === 'failed').length;
+  const firstIdx = events.findIndex((event) => SPECIALIST_STAGES.includes(event.stage));
+  const rest = events.filter((event) => !SPECIALIST_STAGES.includes(event.stage));
+
+  const status = failed === 3 ? 'failed' : done + failed < 3 ? 'running' : 'succeeded';
+  const progress = Math.round(
+    specialists.reduce((sum, event) => sum + (event.progress_percent ?? 0), 0) /
+      specialists.length,
+  );
+
+  rest.splice(firstIdx, 0, {
+    stage: 'specialist_parallel',
+    label: '三位专家并行独立初审',
+    status,
+    progress_percent: progress,
+    ready: done,
+    total: specialists.length,
+  });
+  return rest;
+}
+
 const POSITION_LABELS: Record<string, string> = {
   revise: '修正立场',
   maintain: '维持立场',
@@ -285,7 +318,7 @@ export default function TaskDetailPage() {
         upsertTaskRecord(taskId, payload);
         const status = payload?.status;
         if (status === 'queued' || status === 'running') {
-          timerRef.current = setTimeout(loadSnapshot, 5000);
+          timerRef.current = setTimeout(loadSnapshot, 3000);
         } else {
           setLoading(false);
         }
@@ -376,7 +409,7 @@ export default function TaskDetailPage() {
     <div className="report-page">
       <header className="report-bar">
         <Link to="/student"><ChevronLeft />返回任务列表</Link>
-        <div className="report-brand"><span>南京大学</span> 睿文智评</div>
+        <div className="report-brand"><span>南京大学</span> 衡文云审</div>
         <span>评审报告</span>
       </header>
 
@@ -477,9 +510,9 @@ export default function TaskDetailPage() {
                 <div className="workflow-steps">
                   <div className="workflow-step-summary">
                     <b>多智能体 Debate 工作流</b>
-                    <span>共 {stageEvents.length} 个步骤 · 评审已进行 {elapsed}</span>
+<span>共 {groupSpecialistStages(stageEvents as any[]).length} 个步骤 · 评审已进行 {elapsed}</span>
                   </div>
-                  {stageEvents.map((event: any, index: number) => {
+                  {groupSpecialistStages(stageEvents as any[]).map((event: any, index: number) => {
                     const detail = stageDetail(event.stage, result);
                     return (
                       <div className={`workflow-step ${event.status}`} key={event.stage || index}>
@@ -495,12 +528,17 @@ export default function TaskDetailPage() {
                             </span>
                           </div>
                           <code>{event.stage}</code>
-                          {detail && (
+{event.stage === 'specialist_parallel' ? (
+                            <p className="workflow-step-detail">
+                              <b>已就绪 {event.ready}/{event.total}</b>
+                              <span>三位专家同一时刻并行发起，响应先后完成后逐一就绪</span>
+                            </p>
+                          ) : (detail && (
                             <p className="workflow-step-detail">
                               <b>{detail.title}</b>
                               {detail.body && <span>{detail.body}</span>}
                             </p>
-                          )}
+                          ))}
                         </div>
                       </div>
                     );

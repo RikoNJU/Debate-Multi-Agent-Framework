@@ -32,7 +32,7 @@ export default function HomePage() {
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.8 }}
           >
-            <h1>睿文智评</h1>
+            <h1>衡文云审</h1>
             <div className="hero-flourish" aria-hidden="true">
               <i /><span /><i />
             </div>

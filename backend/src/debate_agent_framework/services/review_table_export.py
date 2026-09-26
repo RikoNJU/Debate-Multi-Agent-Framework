@@ -2,7 +2,7 @@
 
 复刻 docs/18维评审表模版.pdf 的版式：包含学号/姓名/论文题目信息行、
 18 个评议项目（四档勾选）、总体评价百分制与等级、按章节修改建议，
-底部落款为“睿文智评 AI 预审评估系统生成”。
+底部落款为“衡文云审 AI 预审评估系统生成”。
 """
 
 from __future__ import annotations
@@ -190,7 +190,7 @@ _DOCUMENT_TEMPLATE = r"""\documentclass[UTF8]{article}
             \centering
             \textcolor{watermark}{%
                 \fontsize{12}{12}\selectfont%
-                本报告由睿文智评AI预审评估系统通过大语言模型生成，需人工复核后使用，不能直接作为最终评价\\%
+                本报告由衡文云审AI预审评估系统通过大语言模型生成，需人工复核后使用，不能直接作为最终评价\\%
                 生成时间为 \today\ \currenttime，用户名为 \username %
             }%
         }%
@@ -459,15 +459,22 @@ def compile_review_table_pdf(
     env["TECTONIC_KEEP_LOGS"] = "1"
 
     pdf_path = output / f"{stem}.pdf"
+    timeout = int(os.getenv("DEBATE_REVIEW_TABLE_TIMEOUT", "900"))
     command = [executable, "-X", "compile", "--outdir", str(output), str(tex_path)]
-    completed = subprocess.run(
-        command,
-        cwd=str(output),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(output),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"LaTeX 编译超时（{timeout} 秒），首次编译可能需要下载宏包，请稍后重试；"
+            "若反复超时可设置 DEBATE_REVIEW_TABLE_TIMEOUT"
+        ) from exc
     if not pdf_path.is_file():
         detail = (completed.stderr or completed.stdout or "").strip()[-2000:]
         raise RuntimeError(f"LaTeX 编译失败，无法生成评审表 PDF：{detail}")

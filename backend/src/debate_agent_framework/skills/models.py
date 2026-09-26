@@ -93,7 +93,7 @@ class RetrievalTopK(SkillModel):
     dense: int = Field(default=5, ge=1, le=20)
     bm25: int = Field(default=5, ge=1, le=20)
     rrf: int = Field(default=3, ge=1, le=20)
-    max_per_finding: int = Field(default=2, ge=1, le=2)
+    max_per_finding: int = Field(default=2, ge=1, le=4)
 
     @model_validator(mode="after")
     def fusion_cannot_expand_candidates(self) -> "RetrievalTopK":

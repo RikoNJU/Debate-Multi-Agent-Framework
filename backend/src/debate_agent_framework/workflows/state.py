@@ -60,8 +60,8 @@ class DebateWorkflowConfig:
     max_concurrency: int = 3
     minimum_independent_reviews: int = 2
     evidence_limit: int = 8
-    historical_advice_limit_per_chapter: int = 5
-    historical_case_limit: int = 5
+    historical_advice_limit_per_chapter: int = 8
+    historical_case_limit: int = 8
     review_attempts: int = 2
 
     @classmethod
